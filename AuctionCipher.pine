@@ -1,3 +1,4 @@
+//@version=6
 // ============================================================================
 // AUCTION CIPHER  v3.0
 // ----------------------------------------------------------------------------
@@ -42,9 +43,16 @@
 //   delta divergence is a trade. That hierarchy is the whole point.
 // ============================================================================
 
-//@version=6
 indicator("Auction Cipher", shorttitle="AUCTION CIPHER", overlay=false,
      max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=500)
+
+// Official TradingView library — provides requestVolumeDelta(), which is a more
+// faithful buy/sell split than classifying whole lower-timeframe bars by hand.
+// This is what both QuantAlgo's Volume Bubbles and the original Volume DNA use.
+//
+// The import has to come before every other statement in the script. It used to
+// sit BELOW the type declaration, which is a compile error.
+import TradingView/ta/12 as taLib
 
 // One trade's three drawings held together. Three parallel arrays indexed by
 // hand can drift apart; a single object cannot. Not reachable in the current
@@ -53,11 +61,6 @@ type TradeDraw
     box   tgtBox
     box   stopBox
     label info
-
-// Official TradingView library — provides requestVolumeDelta(), which is a more
-// faithful buy/sell split than classifying whole lower-timeframe bars by hand.
-// This is what both QuantAlgo's Volume Bubbles and the original Volume DNA use.
-import TradingView/ta/12 as taLib
 
 // ============================================================================
 // 1. INPUTS
@@ -618,11 +621,18 @@ else
     else if close < open
         sellVol := nz(volume)
 
-float totVol   = buyVol + sellVol
+// The denominator has to be the bar's TOTAL traded volume. Summing only the
+// intrabars that closed up or down silently drops every flat intrabar, so the
+// ratio came out too large — and when the official delta was in use the two
+// halves came from different sources entirely, which could put the ratio past
+// 100%. Bar volume is exact whenever the feed provides it.
+float totVol   = nz(volume) > 0 ? nz(volume) : buyVol + sellVol
 float fbDelta  = buyVol - sellVol
 float barDelta = na(dLast) ? fbDelta : dLast
 bool  deltaOfficial = not na(dLast)
-float deltaRatio = totVol > 0 ? barDelta / totVol : 0.0
+// clamped: a ratio outside -100%..+100% is not meaningful and would distort
+// the money flow plot it feeds
+float deltaRatio = totVol > 0 ? math.max(-1.0, math.min(1.0, barDelta / totVol)) : 0.0
 
 // ============================================================================
 // 4. PERIOD BOUNDARY
@@ -632,7 +642,7 @@ bool inPeriod = true
 if periodMode == "RTH Session (futures)"
     inPeriod := inRTH
 
-int utcDayIdx = math.floor(time / 86400000)
+int utcDayIdx = int(math.floor(time / 86400000.0))
 bool isNewPeriod = false
 if periodMode == "RTH Session (futures)"
     isNewPeriod := inRTH and not inRTH[1]
@@ -646,6 +656,24 @@ else if periodMode == "Weekly"
     isNewPeriod := timeframe.change("W")
 else
     isNewPeriod := timeframe.change("D")
+
+// ---------------------------------------------------------------------------
+// LIVE-MARKET SAFETY: everything that PERSISTS happens at bar close.
+//
+// Pine re-executes the whole script on every tick of the unconfirmed bar.
+// Plain variables are rolled back to their last committed value before each
+// re-run, so counters look after themselves — but objects pushed into arrays
+// and drawings created with line.new / box.new / label.new are NOT reliably
+// rolled back. On a live chart that meant one forming bar could push hundreds
+// of duplicate samples into the volume profile, stack a fresh naked-POC line
+// on every tick, and write the same trade into the statistics ledger over and
+// over. Historical bars are unaffected because they are always confirmed,
+// which is exactly why this never showed up on a reloaded chart and only ever
+// went wrong in real time.
+//
+// Every block that appends to an array or creates a drawing is gated on this.
+// Plots, markers and the dashboard stay live — they hold no state.
+bool barClosed = barstate.isconfirmed
 
 // Declared here, not in the CVD section, because the VWAP anchor needs them too
 // and it is evaluated earlier in the script.
@@ -697,7 +725,7 @@ var array<line> lvnLines  = array.new<line>()
 // ============================================================================
 // 6. PERIOD ROLLOVER
 // ============================================================================
-if isNewPeriod and aucOn
+if isNewPeriod and aucOn and barClosed
     [fPoc, fVah, fVal, fHi, fLo, fOk, fBins] = f_profile(curH, curL, curV, profRows, vaPct)
     if fOk and firstPeriodDone
         priorPoc := fPoc
@@ -752,7 +780,7 @@ if isNewPeriod and aucOn
 // ============================================================================
 // 7. ACCUMULATION
 // ============================================================================
-if inPeriod and aucOn
+if inPeriod and aucOn and barClosed
     if ltfOk
         for i = 0 to lH.size() - 1
             float v = lV.get(i)
@@ -864,7 +892,7 @@ if barstate.islast and aucOn
 // ============================================================================
 // 11. NAKED POC MAINTENANCE
 // ============================================================================
-if showNpoc and aucOn
+if showNpoc and aucOn and barClosed
     if npocPrice.size() > 0
         for i = npocPrice.size() - 1 to 0
             float p = npocPrice.get(i)
@@ -1119,8 +1147,15 @@ if dnaGlow and dnaAny
     glowCol := color.new(dnaCol, 55)
 
 // Ghost glow: a halo drawn just outside the body, additive to your candles.
-plotcandle(dnaGlow and dnaAny ? bodyMax + glowExp : na, dnaGlow and dnaAny ? bodyMax : na,
-     dnaGlow and dnaAny ? bodyMin : na, dnaGlow and dnaAny ? bodyMin - glowExp : na,
+// GEOMETRY BUG: this was passing open = bodyMax + glowExp with high = bodyMax,
+// and low = bodyMin with close = bodyMin - glowExp. open above high and close
+// below low is not a candle TradingView can draw, so the halo never appeared.
+// The halo is a block spanning the body plus the expansion on both sides, so
+// open/high are the top of it and low/close the bottom.
+float glowTop = bodyMax + glowExp
+float glowBot = bodyMin - glowExp
+plotcandle(dnaGlow and dnaAny ? glowTop : na, dnaGlow and dnaAny ? glowTop : na,
+     dnaGlow and dnaAny ? glowBot : na, dnaGlow and dnaAny ? glowBot : na,
      title="DNA Ghost Glow", color=glowCol, wickcolor=glowCol, bordercolor=glowCol,
      force_overlay=true)
 
@@ -1129,14 +1164,14 @@ plotcandle(dnaGlow and dnaAny ? bodyMax + glowExp : na, dnaGlow and dnaAny ? bod
 // carries the same information additively for the same price.
 
 // Absorption cloud — a zone projected forward from where absorption happened.
-if dnaCloud and dnaAbsorb
+if dnaCloud and dnaAbsorb and barClosed
     f_pushAbsCloud(box.new(bar_index, bodyMax + (high - low) * 0.1, bar_index + dnaCloudEx, bodyMin - (high - low) * 0.1,
          bgcolor=color.new(cAbs, 85), border_color=color.new(cAbs, 60), border_width=0,
          text="ABS  " + f_volShort(volume), text_color=color.new(cAbs, 20),
          text_size=size.tiny, text_halign=text.align_right, force_overlay=true))
 
 // DNA circles, sized and shaded by how extreme the volume z-score is.
-if dnaDots and dnaAny
+if dnaDots and dnaAny and barClosed
     string dSize = size.tiny
     int dTransp = 60
     if volZ >= 4.0
@@ -1320,7 +1355,7 @@ plotshape((qSmall or qMed) and not qBig ? bubY : na, "Bubble Small/Medium", shap
 plotshape(qBig ? bubY : na, "Bubble Big", shape.circle,
      location.absolute, bubCol, size=size.normal, force_overlay=true)
 
-if bubAny and bubLabels
+if bubAny and bubLabels and barClosed
     string fv = f_volShort(volume)
     string fd = (barDelta >= 0 ? "+" : "-") + f_volShort(absDelta)
     string bTxt = fv
@@ -1374,7 +1409,7 @@ else if htfMode == "Weekly"
 else if htfMode == "Monthly"
     htfNew := timeframe.change("M")
 
-if htfOn and htfNew
+if htfOn and htfNew and barClosed
     [gPoc, gVah, gVal, gHi, gLo, gOk, gBins] = f_profile(hH, hL, hV, profRows, vaPct)
     if gOk and htfFirstDone
         htfPoc := gPoc
@@ -1385,7 +1420,7 @@ if htfOn and htfNew
     hL.clear()
     hV.clear()
 
-if htfOn
+if htfOn and barClosed
     hH.push(high)
     hL.push(low)
     hV.push(nz(volume))
@@ -1571,8 +1606,12 @@ if barstate.islast
                 f_fibLine(base + dir * rng * 1.47,  cFibTgt, "1.47",  x1, x2, true)
                 f_fibLine(base + dir * rng * 1.55,  cFibTgt, "1.55",  x1, x2, true)
                 f_fibLine(base + dir * rng * 2.56,  cFibTgt, "2.56",  x1, x2, true)
+                // 2.60 and -0.23 are named in the input tooltip but were never
+                // drawn, so the documented set and the actual set disagreed.
+                f_fibLine(base + dir * rng * 2.60,  cFibTgt, "2.60",  x1, x2, true)
                 f_fibLine(base + dir * rng * 2.64,  cFibTgt, "2.64",  x1, x2, true)
                 f_fibLine(base + dir * rng * -0.20, cFibTgt, "-0.20", x1, x2, true)
+                f_fibLine(base + dir * rng * -0.23, cFibTgt, "-0.23", x1, x2, true)
                 f_fibLine(base + dir * rng * -0.29, cFibTgt, "-0.29", x1, x2, true)
 
 
@@ -1920,7 +1959,7 @@ f_pushDivLine(line ln) =>
     while divLineArr.size() > divMaxLines
         line.delete(divLineArr.shift())
 
-if divLines
+if divLines and barClosed
     if wtBullDiv
         f_pushDivLine(line.new(wtPLI, wtPLV, bar_index - divLbR, wt2[divLbR], color=C_UP, width=2))
     if wtBearDiv
@@ -1972,8 +2011,12 @@ var array<label> strLabels = array.new<label>()
 float pvHi = ta.pivothigh(high, strLen, strLen)
 float pvLo = ta.pivotlow(low, strLen, strLen)
 
-var float sHi = na, var int sHiIdx = na, var float sHiPrev = na
-var float sLo = na, var int sLoIdx = na, var float sLoPrev = na
+var float sHi = na
+var int   sHiIdx = na
+var float sHiPrev = na
+var float sLo = na
+var int   sLoIdx = na
+var float sLoPrev = na
 var int   trendDir = 0
 
 // Two helpers rather than one taking na — Pine cannot infer a parameter type
@@ -1988,7 +2031,7 @@ f_pushStrLabel(label lb) =>
     while strLabels.size() > strMaxDraw * 2
         label.delete(strLabels.shift())
 
-if strOn and not na(pvHi)
+if strOn and not na(pvHi) and barClosed
     sHiPrev := sHi
     sHi := pvHi
     sHiIdx := bar_index - strLen
@@ -1998,7 +2041,7 @@ if strOn and not na(pvHi)
              style=label.style_label_down, color=color.new(cSwing, 92),
              textcolor=cSwing, size=size.tiny, force_overlay=true))
 
-if strOn and not na(pvLo)
+if strOn and not na(pvLo) and barClosed
     sLoPrev := sLo
     sLo := pvLo
     sLoIdx := bar_index - strLen
@@ -2013,7 +2056,7 @@ bool bosDn = false
 bool chochUp = false
 bool chochDn = false
 
-if strOn
+if strOn and barClosed
     if not na(sHi) and close > sHi
         if trendDir < 0
             chochUp := true
@@ -2088,7 +2131,7 @@ f_clearBalBars() =>
     balBars.clear()
 
 // ---- open a new balance area
-if balOn and balContract and not balActive
+if balOn and balContract and not balActive and barClosed
     balStart := bar_index
     balHi := high
     balLo := low
@@ -2159,7 +2202,7 @@ if balOn and balActive and balArmed
     if close < balLo
         balBreakDn := true
 
-if balBreakUp or balBreakDn
+if (balBreakUp or balBreakDn) and barClosed
     if not na(balBody)
         box.set_border_style(balBody, line.style_dashed)
         box.set_border_color(balBody, color.new(cBalBox, 70))
@@ -2198,7 +2241,7 @@ var array<float> gapBot = array.new<float>()
 var array<box>   gapBox = array.new<box>()
 
 bool cmeNewDay = not na(cmeO) and cmeO != cmeO[1]
-if cmeOn and cmeNewDay and not na(cmeC[1])
+if cmeOn and cmeNewDay and not na(cmeC[1]) and barClosed
     float gT = math.max(cmeO, cmeC[1])
     float gB = math.min(cmeO, cmeC[1])
     if (gT - gB) / close * 100 >= cmeMin
@@ -2215,7 +2258,7 @@ if cmeOn and cmeNewDay and not na(cmeC[1])
 
 // a gap is closed once price has traded through it
 var int gapFilled = 0
-if gapTop.size() > 0
+if gapTop.size() > 0 and barClosed
     for i = gapTop.size() - 1 to 0
         if low <= gapTop.get(i) and high >= gapBot.get(i)
             box.delete(gapBox.get(i))
@@ -2240,9 +2283,9 @@ f_sessTrack(bool active, bool activePrev, float hiIn, float loIn, color col, str
     var float sHiV = na
     var float sLoV = na
     var box   sBx = na
-    if active and not activePrev
-        sHiV := high
-        sLoV := low
+    if active and not activePrev and barClosed
+        sHiV := hiIn
+        sLoV := loIn
         sBx := box.new(bar_index, high, bar_index, low, bgcolor=col,
              border_color=color(na), force_overlay=true,
              text=sessLbl ? nm : "", text_color=color.new(chart.fg_color, 45),
@@ -2251,8 +2294,8 @@ f_sessTrack(bool active, bool activePrev, float hiIn, float loIn, color col, str
         while sessBoxes.size() > sessKeep * 3
             box.delete(sessBoxes.shift())
     if active and not na(sBx)
-        sHiV := math.max(sHiV, high)
-        sLoV := math.min(sLoV, low)
+        sHiV := math.max(sHiV, hiIn)
+        sLoV := math.min(sLoV, loIn)
         box.set_top(sBx, sHiV)
         box.set_bottom(sBx, sLoV)
         box.set_right(sBx, bar_index)
@@ -2305,6 +2348,11 @@ f_pickUp(float e, float risk) =>
     // and therefore whether a signal passed the minimum-R filter — differed
     // between live and reload. Only every-bar levels are used.
     f_pushCand(c, priorVah)
+    // The plain-English read tells you to rotate back to the POC, but the POC
+    // was not in the target list, so the trade the script recommends was not
+    // the trade it measured. Prior POC exists on every bar, so unlike the
+    // developing one it is safe to use here.
+    f_pushCand(c, priorPoc)
     f_pushCand(c, npocUp)
     f_pushCand(c, priorHi)
     f_pushCand(c, vwapU1)
@@ -2332,6 +2380,7 @@ f_pickUp(float e, float risk) =>
 f_pickDn(float e, float risk) =>
     array<float> c = array.new<float>()
     f_pushCand(c, priorVal)
+    f_pushCand(c, priorPoc)
     f_pushCand(c, npocDn)
     f_pushCand(c, priorLo)
     f_pushCand(c, vwapL1)
@@ -2573,7 +2622,7 @@ var int sigLoss = 0
 var int sigOpen = 0
 var int sigExpired = 0
 
-if chartBuy and not na(rkTgtL)
+if chartBuy and not na(rkTgtL) and barClosed
     opEntry.push(rkEntry)
     opStop.push(rkStopL)
     opTgt.push(rkTgtL)
@@ -2581,7 +2630,7 @@ if chartBuy and not na(rkTgtL)
     opBar.push(bar_index)
     if riskOn
         f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
-if chartSell and not na(rkTgtS)
+if chartSell and not na(rkTgtS) and barClosed
     opEntry.push(rkEntry)
     opStop.push(rkStopS)
     opTgt.push(rkTgtS)
@@ -2590,7 +2639,7 @@ if chartSell and not na(rkTgtS)
     if riskOn
         f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
 
-if opEntry.size() > 0
+if opEntry.size() > 0 and barClosed
     for i = opEntry.size() - 1 to 0
         int d = opDir.get(i)
         float st = opStop.get(i)
@@ -2695,7 +2744,10 @@ if not na(balBrkLvl)
         balBrkLvl := na
 
 f_pct(int hit, int tot) =>
-    tot > 0 ? str.tostring(math.round(hit / tot * 100)) + "%  (" + str.tostring(tot) + ")" : "—"
+    // INT DIVISION BUG: hit and tot are both int, so hit / tot truncated to 0
+    // or 1 BEFORE the multiply. Every percentage in this table could therefore
+    // only ever read 0% or 100%. Multiplying first keeps it in floating point.
+    tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "—"
 
 var table stat = table.new(f_tablePos(statPos), 2, 9, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
@@ -2720,6 +2772,7 @@ if statOn and barstate.islast
     f_pair2(5, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
     f_pair2(6, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
     f_pair2(7, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
+    f_pair2(8, "Signals still open", str.tostring(sigOpen), C_NE)
 
 // THE ONLY MARKER THAT MEANS "TRADE". A labelled box, not a triangle, so it can
 // never be mistaken for the DNA or momentum annotations around it.
@@ -2731,15 +2784,15 @@ var array<float> tpLvl = array.new<float>()
 var array<int>   tpDir = array.new<int>()
 var array<int>   tpBar = array.new<int>()
 bool tpHit = false
-if chartBuy and not na(rkTgtL)
+if chartBuy and not na(rkTgtL) and barClosed
     tpLvl.push(rkTgtL)
     tpDir.push(1)
     tpBar.push(bar_index)
-if chartSell and not na(rkTgtS)
+if chartSell and not na(rkTgtS) and barClosed
     tpLvl.push(rkTgtS)
     tpDir.push(-1)
     tpBar.push(bar_index)
-if tpLvl.size() > 0
+if tpLvl.size() > 0 and barClosed
     for i = tpLvl.size() - 1 to 0
         float t = tpLvl.get(i)
         int d = tpDir.get(i)
@@ -3019,7 +3072,7 @@ plot(dotSellBig ? wt2 : na, "Sell Dot BIG (divergence)", color=cSellDot, style=p
 // Yellow for divergence, as in the original — the one marker that should catch
 // your eye in the pane.
 plotshape(wtBullDiv or wtBearDiv ? wt2[divLbR] : na, "WT Divergence", shape.circle, location.absolute,
-     color=wtBullDiv ? #ffea00 : #ffea00, size=size.tiny, offset=-divLbR)
+     color=#ffea00, size=size.tiny, offset=-divLbR)
 plotshape(cvBullDiv or cvBearDiv ? cvdNorm[divLbR] : na, "CVD Absorption", shape.diamond, location.absolute,
      color=cvBullDiv ? C_GLD : #ff7043, size=size.tiny, offset=-divLbR)
 
@@ -3068,15 +3121,25 @@ if showTable and barstate.islast
     else if periodMode == "Weekly"
         modeTag := "Week"
 
+    // BROKEN CHAIN: the "if not useLtf" started a SECOND if/else, so on a 1m
+    // chart the tag read "chart delta (no LTF)" even when the source was MFI or
+    // Chaikin — neither of which uses lower-timeframe data at all. And the MFI
+    // and Chaikin branches were unreachable whenever useLtf was false. One
+    // chain, keyed on the source first, then qualified by data availability.
     string srcTag = "OG (no vol)"
-    if mfSource == "Volume Delta (intrabar)"
-        srcTag := deltaOfficial ? deltaTf + " delta*" : (ltfPresent ? ltfEff + " delta" : "chart delta")
-    if not useLtf
-        srcTag := "chart delta (no LTF)"
-    else if mfSource == "Money Flow Index"
+    if mfSource == "Money Flow Index"
         srcTag := "MFI"
     else if mfSource == "Chaikin Money Flow"
         srcTag := "CMF"
+    else if mfSource == "Volume Delta (intrabar)"
+        if not useLtf
+            srcTag := "chart delta (no LTF)"
+        else if deltaOfficial
+            srcTag := deltaTf + " delta*"
+        else if ltfPresent
+            srcTag := ltfEff + " delta"
+        else
+            srcTag := "chart delta"
 
     color regCol = C_NE
     if regime == "IMBALANCE"
@@ -3134,14 +3197,19 @@ if showTable and barstate.islast
     table.cell(dash, 0, 0, "AUCTION CIPHER", text_color=cTxt, text_size=size.small, text_halign=text.align_left)
     table.cell(dash, 1, 0, modeTag, text_color=color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_right)
 
-    f_pair(1, 0, "Regime",   regime, regCol)
+    // The gate uses regimeLive (available on every bar); the row used to show
+    // only `regime` (last bar only). When they disagree the dashboard was
+    // saying BALANCE while the context gate was blocking exactly the fade that
+    // implies. Both are shown so a blocked signal is explainable.
+    string regTxt = regime + (regime != regimeLive ? "  (live " + regimeLive + ")" : "")
+    f_pair(1, 0, "Regime",   regTxt, regCol)
     f_pair(1, 2, "Wave",     wt1 > wt2 ? "Bullish" : "Bearish", wt1 > wt2 ? C_UP : C_DN)
     f_pair(2, 0, "Day type", dayType, dayType == "Trend day" ? C_WN : C_NE)
     f_pair(2, 2, "Zone",     zone, zoneCol)
     f_pair(3, 0, "Open",     openType, C_NE)
     f_pair(3, 2, "WT2",      str.tostring(wt2, "#.#"), C_NE)
     f_pair(4, 0, "Position", posVsValue, posCol)
-    f_pair(4, 2, "Flow",     str.tostring(mfRaw, "#.##"), mfBull ? C_UP : C_DN)
+    f_pair(4, 2, "Flow",     str.tostring(mfRaw, "#.##") + "  " + srcTag, mfBull ? C_UP : C_DN)
     f_pair(5, 0, "Vs prior", vaRelation, relCol)
     f_pair(5, 2, "Delta",    str.tostring(deltaRatio * 100, "#.#") + "%", deltaRatio > 0 ? C_UP : C_DN)
     f_pair(6, 0, "POC",      devOk ? str.tostring(devPoc, format.mintick) : "—", cPoc)
@@ -3177,7 +3245,7 @@ if showTable and barstate.islast
     else if str.contains(htfPos, "below")
         htfCol := C_DN
     f_pair(15, 0, "HTF value", htfPos, htfCol)
-    f_pair(15, 2, htfMode + " POC", na(htfDevPoc) ? "—" : str.tostring(htfDevPoc, format.mintick), cHtfPoc)
+    f_pair(15, 2, (htfOn ? htfMode : "HTF") + " POC", na(htfDevPoc) ? "—" : str.tostring(htfDevPoc, format.mintick), cHtfPoc)
 
     // Which gates are currently open, so a silent chart is explainable
     string gBuy = (ctxBuy ? "C" : "·") + (atLowEdge ? "L" : "·") + (trigBuy ? "T" : "·") + (proofBuy ? "P" : "·")
