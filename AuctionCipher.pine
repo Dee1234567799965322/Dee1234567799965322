@@ -245,7 +245,9 @@ string G_CME = "20 · CME GAP"
 bool   cmeOn_in   = input.bool(true, "Show CME Gaps", group=G_CME,
      tooltip="CME Bitcoin futures close for the weekend; spot and perps do not. The range price travelled while CME was shut is genuinely UNTRADED on the futures book — a single print in auction terms, and the cleanest example of one you will find.\n\nIf the symbol does not resolve it is ignored rather than breaking the script.")
 string cmeSym  = input.string("CME:BTC1!", "CME Symbol", group=G_CME)
-float  cmeMin  = input.float(0.1, "Minimum Gap (%)", minval=0.01, maxval=5.0, group=G_CME)
+bool   cmeWeekOnly = input.bool(true, "Weekend Gaps Only", group=G_CME,
+     tooltip="THE fix for a gap count in the hundreds. The detector fires on every CME daily open gap, and BTC gaps the daily open constantly — those are not what anyone means by 'the CME gap'.\n\nWith this ON only the Friday-close to Sunday-open gap counts, which is the one that is genuinely untraded on the futures book.")
+float  cmeMin  = input.float(0.5, "Minimum Gap (%)", minval=0.01, maxval=5.0, group=G_CME)
 int    cmeKeep = input.int(6, "Max Open Gaps", minval=1, maxval=20, group=G_CME)
 color  cCmeGap = input.color(color.new(#9c27b0, 82), "Gap Color", group=G_CME)
 
@@ -312,6 +314,10 @@ bool   oiOn_in      = input.bool(true, "Enable Open Interest", group=G_OI,
      tooltip="OI is the count of contracts still open. Combined with price direction it tells you WHO is doing the moving:\n\nPrice up + OI up      new longs opening — real buying, but risk is building\nPrice up + OI down    shorts covering — a squeeze, not demand; tends to stall\nPrice down + OI up    new shorts opening — real selling\nPrice down + OI down  longs closing or being liquidated — a flush\n\nA squeeze into resistance and genuine buying into resistance look identical on price. They are opposite trades. This is the only thing that separates them.")
 bool   liqOn_in     = input.bool(true, "Mark Liquidation Cascades", group=G_OI,
      tooltip="A wide-range bar where open interest COLLAPSES is forced closing, not fresh conviction. These flushes tend to overshoot and mean-revert, which is why they so often print the excess tail at the extreme.")
+bool   oiProofOn = input.bool(true, "Count OI as Signal Proof", group=G_OI,
+     tooltip="Adds open interest to the PROOF gate.\n\nInto support, price falling on FALLING open interest is longs being closed or liquidated — a flush, not fresh supply. That is what you want to be buying into.\n\nInto resistance, price rising on FALLING open interest is shorts covering — a squeeze, not demand. That is what you want to be selling into.")
+bool   oiVetoOn  = input.bool(true, "Veto Signals Against Real Positioning", group=G_OI,
+     tooltip="The more important half. Price rising on RISING open interest is new longs opening — genuine demand — and fading it is how you get run over. Price falling on rising OI is new shorts opening, genuine supply, and catching it is how you get run over the other way.\n\nWith this ON, a sell signal into real buying and a buy signal into real selling are both suppressed. A squeeze and genuine demand look identical on price; this is the only thing that separates them.")
 float  liqOiZ    = input.float(1.5, "Liquidation OI Drop (std dev)", minval=0.5, maxval=5.0, group=G_OI)
 float  liqSprZ   = input.float(1.2, "Liquidation Spread (std dev)", minval=0.3, maxval=5.0, group=G_OI)
 string fundSym   = input.string("", "Funding Symbol (optional)", group=G_OI,
@@ -2233,15 +2239,20 @@ if (balBreakUp or balBreakDn) and barClosed
 // range price covers while CME is closed is untraded ON THE FUTURES BOOK — a
 // genuine single print, and the cleanest real-world example of one.
 // ============================================================================
-float cmeO = request.security(cmeSym, "D", open,  ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
-float cmeC = request.security(cmeSym, "D", close, ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
+// dayofweek comes along in the same request so the weekend gap can be told
+// apart from an ordinary daily open gap — one request, not two.
+[cmeO, cmeC, cmeDow] = request.security(cmeSym, "D", [open, close, dayofweek],
+     ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
 
 var array<float> gapTop = array.new<float>()
 var array<float> gapBot = array.new<float>()
 var array<box>   gapBox = array.new<box>()
 
 bool cmeNewDay = not na(cmeO) and cmeO != cmeO[1]
-if cmeOn and cmeNewDay and not na(cmeC[1]) and barClosed
+// The CME daily bar that opens Sunday evening is labelled Monday, so the gap
+// spans the weekend exactly when the PREVIOUS completed CME day was a Friday.
+bool cmeWeekendGap = not na(cmeDow) and cmeDow[1] == dayofweek.friday
+if cmeOn and cmeNewDay and not na(cmeC[1]) and barClosed and (not cmeWeekOnly or cmeWeekendGap)
     float gT = math.max(cmeO, cmeC[1])
     float gB = math.min(cmeO, cmeC[1])
     if (gT - gB) / close * 100 >= cmeMin
@@ -2418,6 +2429,97 @@ bool rkOkL = not na(rkRL) and rkRL >= riskMinR
 bool rkOkS = not na(rkRS) and rkRS >= riskMinR
 
 // ============================================================================
+// 19d. OPEN INTEREST & FUNDING
+// ----------------------------------------------------------------------------
+// The last thing this system could not see, and for perpetuals it is the most
+// important. Price alone cannot distinguish a short squeeze from genuine
+// buying — both go up. Open interest can:
+//
+//   price up   + OI up     new longs opening. Real demand, risk building.
+//   price up   + OI down   shorts covering. A squeeze. Tends to stall.
+//   price down + OI up     new shorts opening. Real supply.
+//   price down + OI down   longs closing or liquidated. A flush.
+//
+// ignore_invalid_symbol keeps this safe on instruments with no OI feed — it
+// returns na instead of killing the script.
+// ============================================================================
+string oiTicker = syminfo.prefix + ":" + syminfo.ticker + "_OI"
+float oiClose = request.security(oiTicker, timeframe.period, close, ignore_invalid_symbol=true)
+
+string fSymEff = fundSym == "" ? syminfo.tickerid : fundSym
+float fundVal = request.security(fSymEff, timeframe.period, close, ignore_invalid_symbol=true)
+bool fundOk = fundSym != "" and not na(fundVal)
+
+bool oiOk = oiOn and not na(oiClose)
+float oiChg = oiOk ? oiClose - nz(oiClose[1], oiClose) : 0.0
+float oiChgMean = ta.sma(oiChg, 50)
+float oiChgSd = ta.stdev(oiChg, 50)
+float oiChgZ = oiChgSd > 0 ? (oiChg - oiChgMean) / oiChgSd : 0.0
+
+float priceChg = close - close[1]
+
+string oiState = "—"
+color  oiCol = C_NE
+if oiOk
+    if oiChg > 0 and priceChg > 0
+        oiState := "Longs opening"
+        oiCol := cOiUp
+    else if oiChg > 0 and priceChg < 0
+        oiState := "Shorts opening"
+        oiCol := cOiDn
+    else if oiChg < 0 and priceChg > 0
+        oiState := "Shorts covering"
+        oiCol := C_WN
+    else if oiChg < 0 and priceChg < 0
+        oiState := "Longs closing"
+        oiCol := C_WN
+
+// A wide bar on collapsing OI is forced closing, not conviction. These
+// overshoot, which is why they so often print the excess tail at the extreme.
+bool liqCascade = false
+if liqOn and oiOk
+    if oiChgZ < -liqOiZ and spreadZ > liqSprZ
+        liqCascade := true
+
+
+// OI histogram plot removed. It was off by default but a declared plot costs a
+// slot whether or not it draws, and it was the clutter behind the money flow
+// waves. The OI reading you need is the dashboard row.
+
+plotshape(liqCascade ? high : na, "Liquidation Cascade", shape.xcross, location.abovebar,
+     color=cLiq, size=size.small, force_overlay=true)
+
+// ---------------------------------------------------------------------------
+// OPEN INTEREST AS EVIDENCE  —  measured over the APPROACH, not one bar
+// ---------------------------------------------------------------------------
+// The single-bar reading above is what the dashboard shows. It is the wrong
+// thing to gate a signal with: a buy signal fires on a REJECTION bar, which
+// usually closes green after wicking into support, so a one-bar read would
+// call that "shorts covering" and hand the evidence to the sell side.
+//
+// What matters is how price and open interest behaved on the way INTO the
+// level. That is measured over the same window the trigger and the location
+// already use, so all three gates agree on what "recently" means.
+//
+//   price down + OI down   longs flushed out. Buy proof.
+//   price up   + OI down   shorts squeezed out. Sell proof.
+//   price up   + OI up     new longs. REAL demand — do not fade it.
+//   price down + OI up     new shorts. REAL supply — do not catch it.
+float oiChgW    = oiOk ? oiClose - nz(oiClose[csigWindow], oiClose) : 0.0
+float priceChgW = close - close[csigWindow]
+
+bool oiFlushDn   = oiOk and oiChgW < 0 and priceChgW < 0
+bool oiSqueezeUp = oiOk and oiChgW < 0 and priceChgW > 0
+bool oiRealBid   = oiOk and oiChgW > 0 and priceChgW > 0
+bool oiRealOffer = oiOk and oiChgW > 0 and priceChgW < 0
+
+// A cascade is a single-bar event, so it is read from that bar's own direction.
+bool oiProofBuy  = oiProofOn and (oiFlushDn   or (liqCascade and close <  open))
+bool oiProofSell = oiProofOn and (oiSqueezeUp or (liqCascade and close >= open))
+bool oiVetoBuy   = oiVetoOn  and oiRealOffer
+bool oiVetoSell  = oiVetoOn  and oiRealBid
+
+// ============================================================================
 // 19c. CHART SIGNALS  —  all four layers must agree
 // ----------------------------------------------------------------------------
 // The pane's A/B/C grades are momentum only: a WaveTrend cross with money flow
@@ -2528,8 +2630,8 @@ bool mfTurnDn = ta.crossunder(mfRaw, 0)
 // supports selling; it cannot support both.
 bool absorbUp = dnaAbsorb and close >= open
 bool absorbDn = dnaAbsorb and close <  open
-bool proofBuy  = cvBullDiv or wtBullDiv or absorbUp or mfTurnUp
-bool proofSell = cvBearDiv or wtBearDiv or absorbDn or mfTurnDn
+bool proofBuy  = cvBullDiv or wtBullDiv or absorbUp or mfTurnUp or oiProofBuy
+bool proofSell = cvBearDiv or wtBearDiv or absorbDn or mfTurnDn or oiProofSell
 
 // ---- CONTEXT
 bool ctxBuy  = true
@@ -2561,6 +2663,15 @@ bool sigConflict = rawBuySig and rawSellSig
 if sigConflict
     rawBuySig := false
     rawSellSig := false
+// OPEN INTEREST VETO. A squeeze into resistance and genuine buying into
+// resistance are the same picture on price and opposite trades. When OI is
+// RISING with price the bid is real positioning, not short covering, and
+// selling it is standing in front of it. Same logic inverted for buys.
+if oiVetoBuy
+    rawBuySig := false
+if oiVetoSell
+    rawSellSig := false
+
 if riskOn and riskMinR > 0
     // a setup whose target is nearer than the stop is not a setup
     if not rkOkL
@@ -2616,11 +2727,19 @@ var array<float> opStop  = array.new<float>()
 var array<float> opTgt   = array.new<float>()
 var array<int>   opDir   = array.new<int>()
 var array<int>   opBar   = array.new<int>()
+// The table could say how OFTEN the target was hit but never what that was
+// worth. A 33% hit rate is excellent at 4R and a slow death at 1.5R, and
+// nothing here could tell the two apart. These carry the R of every trade.
+var array<float> opRisk  = array.new<float>()
+var array<float> opRPlan = array.new<float>()
 
 var int sigWin = 0
 var int sigLoss = 0
 var int sigOpen = 0
 var int sigExpired = 0
+var float sumRealR = 0.0
+var float sumPlanR = 0.0
+var int   nClosed  = 0
 
 if chartBuy and not na(rkTgtL) and barClosed
     opEntry.push(rkEntry)
@@ -2628,6 +2747,8 @@ if chartBuy and not na(rkTgtL) and barClosed
     opTgt.push(rkTgtL)
     opDir.push(1)
     opBar.push(bar_index)
+    opRisk.push(rkRiskL)
+    opRPlan.push(rkRL)
     if riskOn
         f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
 if chartSell and not na(rkTgtS) and barClosed
@@ -2636,6 +2757,8 @@ if chartSell and not na(rkTgtS) and barClosed
     opTgt.push(rkTgtS)
     opDir.push(-1)
     opBar.push(bar_index)
+    opRisk.push(rkRiskS)
+    opRPlan.push(rkRS)
     if riskOn
         f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
 
@@ -2644,20 +2767,31 @@ if opEntry.size() > 0 and barClosed
         int d = opDir.get(i)
         float st = opStop.get(i)
         float tg = opTgt.get(i)
+        float en = opEntry.get(i)
+        float rk = opRisk.get(i)
         bool done = false
+        // realised R: a stop is exactly -1R by construction, a target is the R
+        // that was drawn on the chart when the trade was taken, and an expiry
+        // is marked to market. Every closed trade contributes, so the average
+        // is the real one and not a survivor's.
+        float realR = 0.0
         if d == 1
             if low <= st
                 sigLoss += 1
+                realR := -1.0
                 done := true
             else if high >= tg
                 sigWin += 1
+                realR := opRPlan.get(i)
                 done := true
         else
             if high >= st
                 sigLoss += 1
+                realR := -1.0
                 done := true
             else if low <= tg
                 sigWin += 1
+                realR := opRPlan.get(i)
                 done := true
         // MEASUREMENT ERROR FOUND: a trade that reached neither target nor stop
         // within the horizon used to be deleted silently. It disappeared from
@@ -2666,6 +2800,7 @@ if opEntry.size() > 0 and barClosed
         // are now counted and shown.
         if not done and bar_index - opBar.get(i) > statHorizon
             sigExpired += 1
+            realR := rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
             done := true
         if done
             // remove the drawings with the trade — this is the cleanup that was
@@ -2676,12 +2811,23 @@ if opEntry.size() > 0 and barClosed
                 box.delete(td.stopBox)
                 label.delete(td.info)
                 opDraw.remove(i)
+            sumRealR += realR
+            sumPlanR += nz(opRPlan.get(i))
+            nClosed  += 1
             opEntry.remove(i)
             opStop.remove(i)
             opTgt.remove(i)
             opDir.remove(i)
             opBar.remove(i)
+            opRisk.remove(i)
+            opRPlan.remove(i)
 sigOpen := opEntry.size()
+
+// Expectancy is the number that decides whether any of this is worth trading.
+// Positive means the edge pays; negative means a higher hit rate would still
+// be losing money, which is exactly the case a raw win percentage hides.
+float expectR = nClosed > 0 ? sumRealR / nClosed : na
+float avgPlanR = nClosed > 0 ? sumPlanR / nClosed : na
 
 // ---- does a POOR extreme really get revisited?
 var int poorHiTotal = 0
@@ -2749,7 +2895,7 @@ f_pct(int hit, int tot) =>
     // only ever read 0% or 100%. Multiplying first keeps it in floating point.
     tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "—"
 
-var table stat = table.new(f_tablePos(statPos), 2, 9, bgcolor=cTblBg,
+var table stat = table.new(f_tablePos(statPos), 2, 12, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -2768,11 +2914,16 @@ if statOn and barstate.islast
     f_pair2(1, "Hit target (resolved)", f_pct(sigWin, sigTot), sigTot < 20 ? C_NE : (sigWin * 2 > sigTot ? C_UP : C_DN))
     f_pair2(2, "Hit target (all)", f_pct(sigWin, sigAll), sigAll < 20 ? C_NE : C_WN)
     f_pair2(3, "Win/Loss/Expired", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" + str.tostring(sigExpired), C_NE)
-    f_pair2(4, "Poor high revisited", f_pct(poorHiHit, poorHiTotal), poorHiTotal < 20 ? C_NE : C_WN)
-    f_pair2(5, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
-    f_pair2(6, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
-    f_pair2(7, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
-    f_pair2(8, "Signals still open", str.tostring(sigOpen), C_NE)
+    // THE row. Under 20 closed trades it is grey, because it means nothing yet.
+    color expCol = nClosed < 20 ? C_NE : (nz(expectR) > 0 ? C_UP : C_DN)
+    f_pair2(4, "Expectancy  R/trade", na(expectR) ? "—" : str.tostring(expectR, "#.##") + "R", expCol)
+    f_pair2(5, "Total R", na(expectR) ? "—" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
+    f_pair2(6, "Avg R targeted", na(avgPlanR) ? "—" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
+    f_pair2(7, "Poor high revisited", f_pct(poorHiHit, poorHiTotal), poorHiTotal < 20 ? C_NE : C_WN)
+    f_pair2(8, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
+    f_pair2(9, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
+    f_pair2(10, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
+    f_pair2(11, "Signals still open", str.tostring(sigOpen), C_NE)
 
 // THE ONLY MARKER THAT MEANS "TRADE". A labelled box, not a triangle, so it can
 // never be mistaken for the DNA or momentum annotations around it.
@@ -2891,67 +3042,6 @@ if guideOn and barstate.islast
          xloc=xloc.bar_index, style=label.style_label_left,
          color=color.new(#131722, 12), textcolor=headCol, size=f_lblSize(),
          force_overlay=true)
-
-// ============================================================================
-// 19d. OPEN INTEREST & FUNDING
-// ----------------------------------------------------------------------------
-// The last thing this system could not see, and for perpetuals it is the most
-// important. Price alone cannot distinguish a short squeeze from genuine
-// buying — both go up. Open interest can:
-//
-//   price up   + OI up     new longs opening. Real demand, risk building.
-//   price up   + OI down   shorts covering. A squeeze. Tends to stall.
-//   price down + OI up     new shorts opening. Real supply.
-//   price down + OI down   longs closing or liquidated. A flush.
-//
-// ignore_invalid_symbol keeps this safe on instruments with no OI feed — it
-// returns na instead of killing the script.
-// ============================================================================
-string oiTicker = syminfo.prefix + ":" + syminfo.ticker + "_OI"
-float oiClose = request.security(oiTicker, timeframe.period, close, ignore_invalid_symbol=true)
-
-string fSymEff = fundSym == "" ? syminfo.tickerid : fundSym
-float fundVal = request.security(fSymEff, timeframe.period, close, ignore_invalid_symbol=true)
-bool fundOk = fundSym != "" and not na(fundVal)
-
-bool oiOk = oiOn and not na(oiClose)
-float oiChg = oiOk ? oiClose - nz(oiClose[1], oiClose) : 0.0
-float oiChgMean = ta.sma(oiChg, 50)
-float oiChgSd = ta.stdev(oiChg, 50)
-float oiChgZ = oiChgSd > 0 ? (oiChg - oiChgMean) / oiChgSd : 0.0
-
-float priceChg = close - close[1]
-
-string oiState = "—"
-color  oiCol = C_NE
-if oiOk
-    if oiChg > 0 and priceChg > 0
-        oiState := "Longs opening"
-        oiCol := cOiUp
-    else if oiChg > 0 and priceChg < 0
-        oiState := "Shorts opening"
-        oiCol := cOiDn
-    else if oiChg < 0 and priceChg > 0
-        oiState := "Shorts covering"
-        oiCol := C_WN
-    else if oiChg < 0 and priceChg < 0
-        oiState := "Longs closing"
-        oiCol := C_WN
-
-// A wide bar on collapsing OI is forced closing, not conviction. These
-// overshoot, which is why they so often print the excess tail at the extreme.
-bool liqCascade = false
-if liqOn and oiOk
-    if oiChgZ < -liqOiZ and spreadZ > liqSprZ
-        liqCascade := true
-
-
-// OI histogram plot removed. It was off by default but a declared plot costs a
-// slot whether or not it draws, and it was the clutter behind the money flow
-// waves. The OI reading you need is the dashboard row.
-
-plotshape(liqCascade ? high : na, "Liquidation Cascade", shape.xcross, location.abovebar,
-     color=cLiq, size=size.small, force_overlay=true)
 
 // ============================================================================
 // 20. PANE PLOTS — drawn back to front in the order you described
@@ -3248,8 +3338,12 @@ if showTable and barstate.islast
     f_pair(15, 2, (htfOn ? htfMode : "HTF") + " POC", na(htfDevPoc) ? "—" : str.tostring(htfDevPoc, format.mintick), cHtfPoc)
 
     // Which gates are currently open, so a silent chart is explainable
-    string gBuy = (ctxBuy ? "C" : "·") + (atLowEdge ? "L" : "·") + (trigBuy ? "T" : "·") + (proofBuy ? "P" : "·")
-    string gSell = (ctxSell ? "C" : "·") + (atHighEdge ? "L" : "·") + (trigSell ? "T" : "·") + (proofSell ? "P" : "·")
+    // C context · L location · T trigger · P proof, then the OI verdict:
+    // OK = open interest backs this side, NO = open interest vetoes it.
+    string gBuy = (ctxBuy ? "C" : "·") + (atLowEdge ? "L" : "·") + (trigBuy ? "T" : "·") + (proofBuy ? "P" : "·") +
+         (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "")
+    string gSell = (ctxSell ? "C" : "·") + (atHighEdge ? "L" : "·") + (trigSell ? "T" : "·") + (proofSell ? "P" : "·") +
+         (oiVetoSell ? " NO" : oiProofSell ? " OK" : "")
     f_pair(16, 0, "Buy gates", gBuy + "  " + str.tostring(gatesBuy) + "/" + str.tostring(needGates),
          gatesBuy >= needGates ? C_UP : C_NE)
     // ACTION — the single authoritative line. Everything else on both surfaces
