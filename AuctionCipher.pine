@@ -353,6 +353,10 @@ int   csigCool   = input.int(20, "Cooldown (bars between signals)", minval=1, ma
 int   csigWindow = input.int(3, "Trigger Window (bars)", minval=1, maxval=10, group=G_CSIG,
      tooltip="How many bars the cross and the location touch may be apart and still count as the same event.")
 float csigTol    = input.float(0.12, "Location Tolerance (%)", minval=0.01, maxval=2.0, group=G_CSIG)
+bool  csigOneTrade = input.bool(true, "One Trade At A Time", group=G_CSIG,
+     tooltip="Nothing used to stop a BUY firing while a SELL was still open, so the chart could show you a long and a short at once with their stop and target boxes overlapping — two contradictory instructions, which is worse than none.\n\nWith this ON no new signal is drawn while a trade is still live.")
+bool  csigFlip     = input.bool(true, "Opposite Signal Closes Open Trade", group=G_CSIG,
+     tooltip="If a long is open and the sell side fully qualifies, the reason you were long is gone. The trade is closed at market and counted at whatever R it actually made, instead of being left to drift to its stop.\n\nIt does NOT immediately reverse — you go flat and wait for the next clean signal.")
 bool  csigStrict = input.bool(true, "Require Regime Agreement", group=G_CSIG,
      tooltip="ON — no counter-trend buys while value is migrating down, and vice versa. This is the filter that stops you fading a trend day.")
 color cBuySig    = input.color(#00e676, "Buy Color", group=G_CSIG)
@@ -2429,6 +2433,43 @@ bool rkOkL = not na(rkRL) and rkRL >= riskMinR
 bool rkOkS = not na(rkRS) and rkRS >= riskMinR
 
 // ============================================================================
+// 19h2. THE TRADE LEDGER
+// ----------------------------------------------------------------------------
+// Declared here rather than beside the statistics that consume it, because the
+// signal gate below has to know whether a trade is ALREADY OPEN before it is
+// allowed to draw another one. Pine resolves strictly top to bottom.
+// ============================================================================
+var array<float> opEntry = array.new<float>()
+var array<float> opStop  = array.new<float>()
+var array<float> opTgt   = array.new<float>()
+var array<int>   opDir   = array.new<int>()
+var array<int>   opBar   = array.new<int>()
+// The table could say how OFTEN the target was hit but never what that was
+// worth. A 33% hit rate is excellent at 4R and a slow death at 1.5R, and
+// nothing here could tell the two apart. These carry the R of every trade.
+var array<float> opRisk  = array.new<float>()
+var array<float> opRPlan = array.new<float>()
+
+var int sigWin = 0
+var int sigLoss = 0
+var int sigOpen = 0
+var int sigExpired = 0
+var float sumRealR = 0.0
+var float sumPlanR = 0.0
+var int   nClosed  = 0
+var int sigFlat = 0
+
+// What is live right now, as of the close of the previous bar.
+bool anyLongOpen  = false
+bool anyShortOpen = false
+if opDir.size() > 0
+    for i = 0 to opDir.size() - 1
+        if opDir.get(i) == 1
+            anyLongOpen := true
+        else
+            anyShortOpen := true
+
+// ============================================================================
 // 19d. OPEN INTEREST & FUNDING
 // ----------------------------------------------------------------------------
 // The last thing this system could not see, and for perpetuals it is the most
@@ -2617,8 +2658,24 @@ bool atHighEdge = ta.barssince(rejHighNow) <= csigWindow
 // ---- TRIGGER
 bool crossUpOk = csigZoneOnly ? (wtCrossUp and wt2 <= wtOS1) : wtCrossUp
 bool crossDnOk = csigZoneOnly ? (wtCrossDn and wt2 >= wtOB1) : wtCrossDn
-bool trigBuy  = ta.barssince(crossUpOk) <= csigWindow
-bool trigSell = ta.barssince(crossDnOk) <= csigWindow
+// ---------------------------------------------------------------------------
+// THE GATES HAVE TO AGREE ON WHAT "RECENTLY" MEANS
+// ---------------------------------------------------------------------------
+// A divergence is only KNOWN divLbR bars after the pivot that formed it — that
+// delay is unavoidable, it is what makes the divergence non-repainting. With
+// the defaults that is 5 bars, against a 3-bar trigger window. So by the time
+// the divergence confirmed, the WaveTrend cross that belongs to the same event
+// had already fallen outside the window, and the two could essentially never
+// coincide. That is why a divergence plainly visible on the oscillator kept
+// producing no signal.
+//
+// Momentum evidence therefore gets the alignment window: the trigger window
+// plus the pivot lag it has to wait for. LOCATION deliberately stays on the
+// tight window — price still has to be AT the level now, not eight bars ago.
+int alignWin = csigWindow + divLbR
+
+bool trigBuy  = ta.barssince(crossUpOk) <= alignWin
+bool trigSell = ta.barssince(crossDnOk) <= alignWin
 
 // ---- PROOF: an event, never a state
 bool mfTurnUp = ta.crossover(mfRaw, 0)
@@ -2630,8 +2687,14 @@ bool mfTurnDn = ta.crossunder(mfRaw, 0)
 // supports selling; it cannot support both.
 bool absorbUp = dnaAbsorb and close >= open
 bool absorbDn = dnaAbsorb and close <  open
-bool proofBuy  = cvBullDiv or wtBullDiv or absorbUp or mfTurnUp or oiProofBuy
-bool proofSell = cvBearDiv or wtBearDiv or absorbDn or mfTurnDn or oiProofSell
+// PROOF WAS INSTANTANEOUS. Location and trigger each stayed valid for a window
+// of bars; proof counted only on the exact bar it fired. Three gates that
+// persist and one that does not can only line up by luck, which is the whole
+// of the "there is a divergence but no signal" complaint.
+bool proofBuyNow  = cvBullDiv or wtBullDiv or absorbUp or mfTurnUp or oiProofBuy
+bool proofSellNow = cvBearDiv or wtBearDiv or absorbDn or mfTurnDn or oiProofSell
+bool proofBuy  = ta.barssince(proofBuyNow)  <= alignWin
+bool proofSell = ta.barssince(proofSellNow) <= alignWin
 
 // ---- CONTEXT
 bool ctxBuy  = true
@@ -2679,6 +2742,29 @@ if riskOn and riskMinR > 0
     if not rkOkS
         rawSellSig := false
 
+// ---------------------------------------------------------------------------
+// ONE TRADE AT A TIME
+// ---------------------------------------------------------------------------
+// Nothing previously stopped a BUY firing while a SELL was still running. The
+// two sets of stop and target boxes then sat on top of each other and the
+// chart was telling you to be long and short at the same time. Same-bar
+// conflicts were already suppressed; this is the case where they overlap in
+// TIME rather than on one candle, which is the one you kept hitting.
+//
+// wantBuy / wantSell are captured BEFORE the suppression, because a fully
+// qualified opposite signal is what invalidates an open trade even when it is
+// not itself allowed to open a new one.
+bool wantBuy  = rawBuySig
+bool wantSell = rawSellSig
+
+bool flipLong  = csigFlip and anyLongOpen  and wantSell
+bool flipShort = csigFlip and anyShortOpen and wantBuy
+bool closeOnReversal = flipLong or flipShort
+
+if csigOneTrade and (anyLongOpen or anyShortOpen)
+    rawBuySig := false
+    rawSellSig := false
+
 var int lastBuyBar = -9999
 var int lastSellBar = -9999
 bool chartBuy = false
@@ -2722,24 +2808,34 @@ f_drawTrade(bool isLong, float e, float st, float tg, float rr) =>
 // numbers mean nothing at all, and a confident-looking 71% from 7 events is
 // worse than no number.
 // ============================================================================
-var array<float> opEntry = array.new<float>()
-var array<float> opStop  = array.new<float>()
-var array<float> opTgt   = array.new<float>()
-var array<int>   opDir   = array.new<int>()
-var array<int>   opBar   = array.new<int>()
-// The table could say how OFTEN the target was hit but never what that was
-// worth. A 33% hit rate is excellent at 4R and a slow death at 1.5R, and
-// nothing here could tell the two apart. These carry the R of every trade.
-var array<float> opRisk  = array.new<float>()
-var array<float> opRPlan = array.new<float>()
 
-var int sigWin = 0
-var int sigLoss = 0
-var int sigOpen = 0
-var int sigExpired = 0
-var float sumRealR = 0.0
-var float sumPlanR = 0.0
-var int   nClosed  = 0
+// ---- a fully qualified opposite signal invalidates the open thesis. Close it
+// at market and book whatever R it actually made, rather than leaving it to
+// drift to a stop the setup no longer supports.
+if closeOnReversal and barClosed and opEntry.size() > 0
+    for i = opEntry.size() - 1 to 0
+        int d = opDir.get(i)
+        bool invalid = (d == 1 and wantSell) or (d == -1 and wantBuy)
+        if invalid
+            float rk = opRisk.get(i)
+            float en = opEntry.get(i)
+            sumRealR += rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
+            sumPlanR += nz(opRPlan.get(i))
+            nClosed  += 1
+            sigFlat  += 1
+            if riskOn and opDraw.size() > i
+                TradeDraw tdf = opDraw.get(i)
+                box.delete(tdf.tgtBox)
+                box.delete(tdf.stopBox)
+                label.delete(tdf.info)
+                opDraw.remove(i)
+            opEntry.remove(i)
+            opStop.remove(i)
+            opTgt.remove(i)
+            opDir.remove(i)
+            opBar.remove(i)
+            opRisk.remove(i)
+            opRPlan.remove(i)
 
 if chartBuy and not na(rkTgtL) and barClosed
     opEntry.push(rkEntry)
@@ -2910,10 +3006,11 @@ if statOn and barstate.islast
     table.cell(stat, 1, 0, str.tostring(statHorizon) + "b", text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
 
     int sigTot = sigWin + sigLoss
-    int sigAll = sigWin + sigLoss + sigExpired
+    int sigAll = sigWin + sigLoss + sigExpired + sigFlat
     f_pair2(1, "Hit target (resolved)", f_pct(sigWin, sigTot), sigTot < 20 ? C_NE : (sigWin * 2 > sigTot ? C_UP : C_DN))
     f_pair2(2, "Hit target (all)", f_pct(sigWin, sigAll), sigAll < 20 ? C_NE : C_WN)
-    f_pair2(3, "Win/Loss/Expired", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" + str.tostring(sigExpired), C_NE)
+    f_pair2(3, "Win/Loss/Exp/Flat", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" +
+         str.tostring(sigExpired) + "/" + str.tostring(sigFlat), C_NE)
     // THE row. Under 20 closed trades it is grey, because it means nothing yet.
     color expCol = nClosed < 20 ? C_NE : (nz(expectR) > 0 ? C_UP : C_DN)
     f_pair2(4, "Expectancy  R/trade", na(expectR) ? "—" : str.tostring(expectR, "#.##") + "R", expCol)
