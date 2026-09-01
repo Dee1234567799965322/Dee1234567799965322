@@ -1,0 +1,3284 @@
+// ============================================================================
+// AUCTION CIPHER  v3.0
+// ----------------------------------------------------------------------------
+// ONE indicator. Two layers.
+//
+//   PRICE CHART  — auction context: volume profile, value area, naked POCs,
+//                  initial balance, low volume nodes, excess/poor extremes.
+//                  Drawn onto the main chart using Pine v6 force_overlay.
+//
+//   LOWER PANE   — Market Cipher B style oscillator, with REAL money flow.
+//
+// This exists as one script because a free TradingView account allows two
+// indicators per chart, and you should not have to spend both on this.
+//
+// ----------------------------------------------------------------------------
+// PANE LAYER ORDER (back to front, as requested)
+//   1. Momentum waves        WaveTrend 1 and 2, area fill
+//   2. Money flow            in front of the waves
+//   3. VWAP wave             wt1 minus wt2
+//   4. RSI                   hidden by default
+//   5. Stoch RSI             hidden by default
+//   6. CVD                   in front of everything
+//   7. Cross dots, divergence dots and divergence LINES on top
+//
+// ----------------------------------------------------------------------------
+// THE MONEY FLOW POINT
+//   Market Cipher B's money flow uses no volume. The original is:
+//       sma( ((close - open) / (high - low)) * 150, 60 ) - 2.5
+//   A smoothed candle body ratio. Volume never enters it.
+//
+//   Four sources are offered here, including the original so you can switch
+//   between them on the same chart and see where they disagree.
+//
+// ----------------------------------------------------------------------------
+// HONEST LIMITS
+//   Pine has no order book access. "Delta" is inferred from lower-timeframe bar
+//   direction, not true bid/ask. At 1-minute granularity it is a good proxy and
+//   nothing sold as a TradingView footprint is better.
+//
+//   The oscillator says WHEN. The auction layer says IF and WHERE. A cross in
+//   the middle of balance is noise. The same cross at a value area edge with
+//   delta divergence is a trade. That hierarchy is the whole point.
+// ============================================================================
+
+//@version=6
+indicator("Auction Cipher", shorttitle="AUCTION CIPHER", overlay=false,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=500)
+
+// One trade's three drawings held together. Three parallel arrays indexed by
+// hand can drift apart; a single object cannot. Not reachable in the current
+// flow, but this removes the whole class of bug rather than guarding it.
+type TradeDraw
+    box   tgtBox
+    box   stopBox
+    label info
+
+// Official TradingView library — provides requestVolumeDelta(), which is a more
+// faithful buy/sell split than classifying whole lower-timeframe bars by hand.
+// This is what both QuantAlgo's Volume Bubbles and the original Volume DNA use.
+import TradingView/ta/12 as taLib
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_PER = "1 · PERIOD"
+string periodMode = input.string("24h UTC (crypto)", "Period Mode",
+     options=["24h UTC (crypto)", "RTH Session (futures)", "Chart Daily", "Weekly"], group=G_PER,
+     tooltip="24h UTC — new period at 00:00 UTC. Use for BTC perps.\nRTH Session — CME futures. Gold RTH is 0820-1330 New York.\nChart Daily — the symbol's own daily boundary.\nWeekly — composite weekly profile.")
+string rthSess   = input.session("0820-1330", "RTH Session", group=G_PER)
+string rthTz     = input.string("America/New_York", "Session Timezone", group=G_PER,
+     options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Tokyo", "UTC"])
+int    ibMinutes = input.int(60, "Initial Balance (minutes)", minval=5, maxval=480, group=G_PER)
+
+string G_AUC = "2 · AUCTION LAYER (price chart)"
+bool  aucOn_in      = input.bool(true,  "Enable Auction Layer", group=G_AUC)
+int   profRows   = input.int(100, "Profile Rows", minval=8, maxval=180, group=G_AUC,
+     tooltip="TradingView FRVP defaults to 250. Higher = finer POC, slower script.")
+float vaPct      = input.float(70.0, "Value Area %", minval=50.0, maxval=95.0, group=G_AUC) / 100.0
+bool  showHist_in   = input.bool(true,  "Profile Histogram", group=G_AUC)
+int   histWidth  = input.int(50, "Histogram Width (bars)", minval=10, maxval=200, group=G_AUC)
+bool  showPrior_in  = input.bool(true,  "Prior POC / VAH / VAL", group=G_AUC)
+bool  showPrHL_in   = input.bool(false, "Prior High / Low", group=G_AUC)
+bool  showIB_in     = input.bool(true,  "Initial Balance", group=G_AUC)
+bool  showNpoc_in   = input.bool(true,  "Naked (untested) POCs", group=G_AUC,
+     tooltip="A POC from a prior period price has not traded back through. The measurable version of an 'unmitigated' level — deleted the moment price touches it.")
+int   maxNpoc    = input.int(12, "Max Naked POCs", minval=1, maxval=40, group=G_AUC)
+float npocMaxDist= input.float(15.0, "Ignore nPOC Beyond (%)", minval=1.0, maxval=100.0, group=G_AUC)
+bool  showLvn_in    = input.bool(true,  "Low Volume Nodes", group=G_AUC,
+     tooltip="Thin shelves inside the profile. The rigorous version of an 'imbalance' or 'fair value gap' — derived from where trade did NOT happen.")
+float lvnThresh  = input.float(20.0, "LVN Threshold (% of POC)", minval=2.0, maxval=60.0, group=G_AUC)
+int   maxLvn     = input.int(6, "Max LVNs", minval=1, maxval=25, group=G_AUC)
+float excThresh  = input.float(15.0, "Excess Threshold (% of POC)", minval=2.0, maxval=50.0, group=G_AUC)
+float excBand    = input.float(5.0, "Extreme Band (% of range)", minval=1.0, maxval=25.0, group=G_AUC,
+     tooltip="How much of the range counts as 'the extreme'.\n\nThis previously tested ONE bin. At 24 rows that bin was 4% of the range; at the current default of 100 rows it is 1% — thin enough that it almost always looked empty, so nearly every high and low was reported as EXCESS. Measuring a fixed 5% band instead makes the reading independent of row count.")
+float poorMult   = input.float(2.5,  "Poor Multiplier", minval=1.2, maxval=6.0, group=G_AUC)
+
+string G_AC = "2b · AUCTION COLORS"
+color cHist  = input.color(color.new(#5b8dd9, 82), "Histogram", group=G_AC)
+color cPoc   = input.color(#ffb300, "POC", group=G_AC)
+color cVa    = input.color(#26c6da, "VAH / VAL", group=G_AC)
+color cPrior = input.color(#9e9e9e, "Prior Value", group=G_AC)
+color cPrHL  = input.color(color.new(#9e9e9e, 50), "Prior High/Low", group=G_AC)
+color cNpoc  = input.color(#ec407a, "Naked POC", group=G_AC)
+color cLvn   = input.color(color.new(#ab47bc, 30), "LVN", group=G_AC)
+color cIB    = input.color(#66bb6a, "Initial Balance", group=G_AC)
+
+string G_WT = "3 · MOMENTUM WAVES (WaveTrend)"
+int   wtChannel = input.int(9,  "Channel Length", minval=2, group=G_WT)
+int   wtAverage = input.int(12, "Average Length", minval=2, group=G_WT)
+int   wtMALen   = input.int(3,  "Signal Length",  minval=1, group=G_WT)
+float wtOB1 = input.float(53.0,  "Overbought 1", group=G_WT)
+float wtOB2 = input.float(60.0,  "Overbought 2", group=G_WT)
+float wtOS1 = input.float(-53.0, "Oversold 1",   group=G_WT)
+float wtOS2 = input.float(-60.0, "Oversold 2",   group=G_WT)
+
+string G_MF = "4 · MONEY FLOW"
+string mfSource = input.string("Volume Delta (intrabar)", "Source",
+     options=["Volume Delta (intrabar)", "Money Flow Index", "Chaikin Money Flow", "OG Market Cipher (no volume)"],
+     group=G_MF,
+     tooltip="Volume Delta — signed volume from lower-timeframe bars. Most informative.\nMoney Flow Index — Wilder's real MFI.\nChaikin — close position in range, volume weighted.\nOG Market Cipher — the original formula, which contains no volume. Included for comparison.")
+bool  mfShow    = input.bool(true, "Show Money Flow", group=G_MF)
+int   mfLength  = input.int(60, "Length", minval=2, group=G_MF)
+int   mfSmooth  = input.int(3,  "Smoothing", minval=1, group=G_MF)
+bool  mfAutoNorm= input.bool(true, "Auto-normalise Height", group=G_MF,
+     tooltip="Scales whichever source you pick to a comparable height, so switching sources does not require re-tuning.")
+float mfScale   = input.float(1.0, "Height", minval=0.1, maxval=10.0, group=G_MF)
+float ogMult    = input.float(150.0, "OG Multiplier", group=G_MF)
+float ogPosY    = input.float(2.5,   "OG Y Offset",   group=G_MF)
+
+string G_DNA = "11 · VOLUME DNA (effort vs result)"
+bool  dnaOn_in      = input.bool(true, "Enable Volume DNA", group=G_DNA,
+     tooltip="Wyckoff effort vs result, read from two z-scores: volume against its own average, and bar spread against its own average.\n\nABSORPTION   high volume, narrow spread — someone is soaking up everything thrown at them. The most valuable of the four.\nEFFORT       high volume, wide spread — participation and follow-through agree.\nEXHAUSTION   low volume, wide spread — the move is running on empty. This is what excess looks like as it forms.\nSTAGNATION   low volume, narrow spread — nobody home.")
+int   dnaVolLen  = input.int(20, "Volume Lookback", minval=5, group=G_DNA)
+int   dnaSprLen  = input.int(20, "Spread Lookback", minval=5, group=G_DNA)
+float dnaVolTh   = input.float(1.5, "Volume Std Dev Threshold", minval=0.5, maxval=5.0, group=G_DNA)
+float dnaSprTh   = input.float(1.0, "Spread Std Dev Threshold", minval=0.2, maxval=5.0, group=G_DNA)
+bool  dnaAbsOn   = input.bool(true,  "Mark Absorption", group=G_DNA)
+bool  dnaEffOn   = input.bool(true,  "Mark Effort", group=G_DNA)
+bool  dnaExhOn   = input.bool(true,  "Mark Exhaustion", group=G_DNA)
+bool  dnaStgOn   = input.bool(false, "Mark Stagnation", group=G_DNA)
+bool  dnaAtEdge  = input.bool(false, "Only Mark at Value Area Edges", group=G_DNA,
+     tooltip="Absorption in the middle of value is ordinary two-way trade. Absorption at VAH or VAL is someone defending a level. This filter keeps only the second kind.")
+color cAbs   = input.color(#ff7b00, "Absorption Color", group=G_DNA)
+color cEffB  = input.color(#00e5ff, "Effort Bullish Color", group=G_DNA)
+color cEffS  = input.color(#e91e63, "Effort Bearish Color", group=G_DNA)
+color cExh   = input.color(#ffd54f, "Exhaustion Color", group=G_DNA)
+color cStg   = input.color(color.new(#787b86, 40), "Stagnation Color", group=G_DNA)
+
+
+string G_DNAV = "11b · VOLUME DNA — VISUALS"
+bool  dnaGlow_in    = input.bool(true,  "Ghost Glow Candles", group=G_DNAV,
+     tooltip="Draws a soft halo around the candle body in the DNA colour. Additive, so your normal candles stay untouched.")
+bool  dnaCloud_in   = input.bool(true,  "Absorption Clouds", group=G_DNAV)
+int   dnaCloudEx = input.int(10, "Cloud Extension (bars)", minval=1, maxval=60, group=G_DNAV)
+bool  dnaDots_in    = input.bool(false, "DNA Circles with Volume", group=G_DNAV,
+     tooltip="A circle at the bar midpoint, sized and shaded by the volume z-score, with the volume printed inside.")
+bool  dnaTape_in    = input.bool(false, "Barcode Heatmap Tape", group=G_DNAV,
+     tooltip="A vertical strip on the right showing the DNA state of the last N bars. A real-time tape of institutional activity.")
+int   dnaTapeRow = input.int(20, "Tape Rows", minval=5, maxval=40, group=G_DNAV)
+string tapePos   = input.string("Middle Right", "Tape Position",
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_DNAV,
+     tooltip="Keep this away from the dashboard position or the two will overlap on the price chart.")
+
+string G_BUB = "12 · VOLUME BUBBLES"
+bool   bubOn_in      = input.bool(false, "Enable Volume Bubbles", group=G_BUB,
+     tooltip="Percentile-based volume clusters. Concept from Volume Bubbles [QuantAlgo], CC BY-NC-SA 4.0 — reimplemented, not copied.\n\nOff by default because it stacks a lot of objects on the chart alongside everything else.")
+string bubDetect  = input.string("Volume OR Delta", "Detection Method",
+     options=["Volume Only", "Delta Only", "Volume + Delta", "Volume OR Delta"], group=G_BUB)
+string bubClass   = input.string("Both", "Buy/Sell Classification",
+     options=["Candle Direction", "Delta Direction", "Both"], group=G_BUB)
+float  bubSmallP  = input.float(75, "Small Percentile",  minval=50, maxval=99.9, step=1, group=G_BUB)
+float  bubMedP    = input.float(90, "Medium Percentile", minval=50, maxval=99.9, step=1, group=G_BUB)
+float  bubBigP    = input.float(97, "Big Percentile",    minval=50, maxval=99.9, step=1, group=G_BUB)
+string bubConsen  = input.string("Majority (2 of 3)", "Consensus Mode",
+     options=["Any Window", "Majority (2 of 3)", "All Windows (strictest)"], group=G_BUB)
+int    bubShortW  = input.int(20,  "Short Window",  minval=5, group=G_BUB)
+int    bubMidW    = input.int(50,  "Medium Window", minval=5, group=G_BUB)
+int    bubLongW   = input.int(100, "Long Window",   minval=5, group=G_BUB)
+bool   bubSmallOn = input.bool(true, "Show Small",  group=G_BUB)
+bool   bubMedOn   = input.bool(true, "Show Medium", group=G_BUB)
+bool   bubBigOn   = input.bool(true, "Show Big",    group=G_BUB)
+bool   bubLabels  = input.bool(true, "Show Numbers in Bubbles", group=G_BUB)
+string bubText    = input.string("Volume", "Bubble Text",
+     options=["Volume", "Delta", "Ratio", "Vol + Delta", "Vol + Ratio"], group=G_BUB)
+color  bubBuyCol  = input.color(color.new(#00ffaa, 40), "Buy Color",   group=G_BUB)
+color  bubSellCol = input.color(color.new(#ff0000, 20), "Sell Color",  group=G_BUB)
+color  bubMixCol  = input.color(color.new(#ffd600, 30), "Mixed Color", group=G_BUB)
+
+
+
+string G_PRESET = "★ START HERE  —  CHART PRESET"
+string preset = input.string("Standard", "Chart Preset",
+     options=["Clean", "Standard", "Everything", "Custom (use the groups below)"], group=G_PRESET,
+     tooltip="CLEAN — value area, POC, naked POCs, VWAP, labels and the plain-English read. Nothing else. This is what you want when you are actually trading.\n\nSTANDARD — Clean plus the profile histogram, initial balance, low volume nodes, DNA glow and absorption clouds, golden pockets.\n\nEVERYTHING — every layer, including volume bubbles, the barcode tape, DNA circles and target fibs. For studying, not for trading.\n\nCUSTOM — the individual toggles in the groups below take over.")
+
+string G_LBL = "0 · LABELS  (read the chart without the menu)"
+bool   lblOn     = input.bool(true, "Name Every Line", group=G_LBL,
+     tooltip="Writes what each line IS next to it — VAH, VAL, POC, IB High, nPOC, LVN, VWAP. You should never have to open settings to know what you are looking at.")
+string lblStyle  = input.string("Name + Price", "Label Content",
+     options=["Name Only", "Name + Price", "Price Only"], group=G_LBL)
+string lblSizeIn = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal"], group=G_LBL)
+int    lblOffset = input.int(3, "Label Offset (bars right)", minval=0, maxval=40, group=G_LBL)
+int    guideGap  = input.int(28, "Read Offset (bars right of labels)", minval=0, maxval=120, group=G_LBL,
+     tooltip="Pushes the plain-English read clear of the level labels so the two do not overlap.")
+bool   guideOn   = input.bool(true, "Show Plain-English Read", group=G_LBL,
+     tooltip="One line at the top of price telling you what the auction is doing and which playbook that selects. No jargon to decode.")
+
+string G_VWAP = "13 · VWAP"
+bool   vwapOn_in    = input.bool(true, "Show VWAP", group=G_VWAP,
+     tooltip="VWAP is the volume-weighted mean price. It belongs here: it is the same question the POC answers, asked continuously instead of once per period. When VWAP and POC sit apart, value is still migrating.")
+string vwapAnchor= input.string("Auction Period", "Anchor",
+     options=["Auction Period", "Daily", "Weekly", "Session"], group=G_VWAP,
+     tooltip="Auction Period keeps VWAP on exactly the same clock as the volume profile, so VWAP and POC are always comparable.")
+bool   vwapBands_in = input.bool(true, "Show Std Dev Bands", group=G_VWAP)
+float  vwapMult1 = input.float(1.0, "Band 1 (std dev)", minval=0.1, maxval=5.0, group=G_VWAP)
+float  vwapMult2 = input.float(2.0, "Band 2 (std dev)", minval=0.1, maxval=5.0, group=G_VWAP)
+color  cVwap     = input.color(#ff9800, "VWAP Color", group=G_VWAP)
+color  cVwapBand = input.color(color.new(#ff9800, 70), "Band Color", group=G_VWAP)
+
+string G_FIB = "14 · FIB LEVELS"
+bool  gpOn_in      = input.bool(true, "Golden Pockets (retracement)", group=G_FIB,
+     tooltip="0.5 / 0.618 / 0.786 / 0.886 measured from the most recent confirmed swing. Drawn as lines, so they cost no plot slots.")
+int   gpLookback= input.int(50, "Swing Lookback", minval=10, maxval=200, group=G_FIB)
+int   gpPivotLen= input.int(15, "Pivot Strength", minval=3, maxval=50, group=G_FIB)
+int   gpExtend  = input.int(20, "Extend Right (bars)", minval=0, maxval=200, group=G_FIB)
+bool  fibTgtOn_in  = input.bool(false, "Custom Target Fibs (extension)", group=G_FIB,
+     tooltip="Your original extension set: 1.47, 1.55, 2.56, 2.60, 2.64 above and -0.20, -0.23, -0.29 below. These are projection targets, not entries.")
+color cGp618    = input.color(#ffd54f, "0.618 Color", group=G_FIB)
+color cGp5      = input.color(#ff00ff, "0.5 Color", group=G_FIB)
+color cGp786    = input.color(#00aaff, "0.786 Color", group=G_FIB)
+color cGp886    = input.color(color.new(#ffffff, 30), "0.886 Color", group=G_FIB)
+float fibMaxDist= input.float(25.0, "Hide Fibs Beyond (% from price)", minval=1.0, maxval=200.0, group=G_FIB,
+     tooltip="A 2.64 extension of a big swing can land far off the chart or below zero, forcing the price scale to include it. Levels further than this are not drawn.")
+color cFibTgt   = input.color(color.new(#ffffff, 55), "Target Fib Color", group=G_FIB)
+
+
+
+
+
+
+string G_CME = "20 · CME GAP"
+bool   cmeOn_in   = input.bool(true, "Show CME Gaps", group=G_CME,
+     tooltip="CME Bitcoin futures close for the weekend; spot and perps do not. The range price travelled while CME was shut is genuinely UNTRADED on the futures book — a single print in auction terms, and the cleanest example of one you will find.\n\nIf the symbol does not resolve it is ignored rather than breaking the script.")
+string cmeSym  = input.string("CME:BTC1!", "CME Symbol", group=G_CME)
+float  cmeMin  = input.float(0.1, "Minimum Gap (%)", minval=0.01, maxval=5.0, group=G_CME)
+int    cmeKeep = input.int(6, "Max Open Gaps", minval=1, maxval=20, group=G_CME)
+color  cCmeGap = input.color(color.new(#9c27b0, 82), "Gap Color", group=G_CME)
+
+string G_RISK = "21 · RISK LAYER"
+bool  riskOn_in    = input.bool(true, "Draw Stop / Target / R", group=G_RISK,
+     tooltip="The only layer that decides whether you keep money. Stops here are STRUCTURAL, not an ATR multiple: a long off value fails if the low that produced it is taken out, so the stop sits below that low. The target is the next real level the auction has to visit — the opposite value edge or the nearest untested POC.\n\nR is drawn before you act, not worked out afterwards.")
+float riskBuf   = input.float(0.3, "Stop Buffer (x ATR)", minval=0.05, maxval=2.0, group=G_RISK)
+int   riskSwing = input.int(5, "Stop Swing Lookback", minval=2, maxval=30, group=G_RISK)
+float riskMinStop = input.float(0.6, "Minimum Stop Distance (x ATR)", minval=0.1, maxval=3.0, group=G_RISK,
+     tooltip="Floor on how close the stop may sit. Without it, a tight recent low produced an enormous R that passed the minimum-R filter automatically — rewarding the stops most likely to be taken out.")
+float riskMinR  = input.float(1.5, "Minimum R to Show Signal", minval=0.0, maxval=10.0, group=G_RISK,
+     tooltip="Signals whose target is closer than this multiple of the risk are not drawn. A 0.6R setup is a losing trade taken slowly — better never to see it.")
+int   riskExtend= input.int(25, "Box Extend (bars)", minval=5, maxval=200, group=G_RISK)
+color cRiskStop = input.color(color.new(#ef5350, 78), "Stop Zone", group=G_RISK)
+color cRiskTgt  = input.color(color.new(#26a69a, 78), "Target Zone", group=G_RISK)
+
+string G_SESS = "22 · SESSION RANGES"
+bool   sessOn_in   = input.bool(true, "Show Session Ranges", group=G_SESS,
+     tooltip="Crypto has no exchange sessions, but it absolutely has session behaviour. The Asia range in particular is a real reference — London and New York routinely open by taking one side of it.\n\nThis is the auction-legitimate version of ICT killzones: measured ranges rather than arbitrary windows.")
+string sess1    = input.session("0000-0800", "Asia", group=G_SESS)
+string sess2    = input.session("0800-1600", "London", group=G_SESS)
+string sess3    = input.session("1300-2100", "New York", group=G_SESS)
+string sessTz   = input.string("UTC", "Session Timezone", options=["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"], group=G_SESS)
+int    sessKeep = input.int(3, "Days To Keep", minval=1, maxval=10, group=G_SESS)
+bool   sessLbl  = input.bool(true, "Label Sessions", group=G_SESS)
+color  cSess1   = input.color(color.new(#ffa726, 88), "Asia", group=G_SESS)
+color  cSess2   = input.color(color.new(#42a5f5, 88), "London", group=G_SESS)
+color  cSess3   = input.color(color.new(#66bb6a, 88), "New York", group=G_SESS)
+
+string G_STAT = "23 · STATISTICS"
+bool   statOn_in   = input.bool(true, "Show Statistics Table", group=G_STAT,
+     tooltip="Everything this indicator asserts — poor highs get revisited, excess holds, balance breaks follow through — is a CLAIM until it is counted on your instrument. This counts them.\n\nTreat a low sample size as no answer at all. Under about 20 occurrences the percentages mean nothing.")
+int    statHorizon = input.int(50, "Outcome Horizon (bars)", minval=5, maxval=500, group=G_STAT,
+     tooltip="How long a claim gets to come true before it is marked as failed.")
+string statPos  = input.string("Bottom Left", "Table Position",
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_STAT)
+
+string G_BAL = "19 · BALANCE AREAS  (auto-detected)"
+bool  balOn_in      = input.bool(true, "Detect Balance Areas", group=G_BAL,
+     tooltip="Every other profile in this script is anchored to a CLOCK — the UTC day, the week. Real auctions ignore calendars. Balance forms and breaks when it wants to.\n\nThis finds balance by its signature instead: volatility contracting. When ADX falls through its threshold the market has stopped trending and started rotating, so a box opens, builds, and gets its own volume profile. The POC and edges of THAT box are the levels that matter for the break.\n\nConcept from Low Volatility Profiles [BigBeluga], CC BY-NC-SA 4.0 — reimplemented, not copied.")
+int   balAdxLen  = input.int(14, "ADX Length", minval=2, maxval=100, group=G_BAL)
+int   balAdxTh   = input.int(30, "ADX Threshold", minval=5, maxval=80, group=G_BAL,
+     tooltip="ADX falling through this is the contraction signal. Higher = only deep contractions qualify.")
+int   balBuild   = input.int(20, "Build Length (bars)", minval=5, maxval=120, group=G_BAL,
+     tooltip="How long the box expands before it is profiled and armed for a break.")
+int   balBins    = input.int(20, "Balance Profile Bins", minval=5, maxval=40, group=G_BAL)
+bool  balProfile = input.bool(true, "Draw Balance Profile", group=G_BAL)
+bool  balUseLoc  = input.bool(true, "Use Balance Edges as Signal Location", group=G_BAL,
+     tooltip="Feeds the box edges and its POC into the chart-signal location test, so a rejection off a real balance edge counts the same as one off the value area.")
+color cBalBox    = input.color(color.new(#787b86, 40), "Box Border", group=G_BAL)
+color cBalFill   = input.color(color.new(#2196f3, 90), "Box Fill", group=G_BAL)
+color cBalPoc    = input.color(#ff9800, "Balance POC", group=G_BAL)
+color cBalLo     = input.color(color.new(#2196f3, 30), "Low Volume Shade", group=G_BAL)
+
+string G_HTF = "18 · HIGHER TIMEFRAME VALUE"
+string htfMode = input.string("Weekly", "HTF Value Area",
+     options=["Off", "Daily", "Weekly", "Monthly"], group=G_HTF,
+     tooltip="A second, slower volume profile running alongside the main one. Your period profile answers 'where is value today'. This answers 'where is value this week', which is what decides whether today's balance is itself sitting high or low in a bigger auction.\n\nBuilt from chart bars rather than intrabar data — a week of 15m bars is already 672 points, far more than a profile needs, and it keeps the script fast.")
+color cHtfPoc  = input.color(#ffee58, "HTF POC", group=G_HTF)
+color cHtfVa   = input.color(color.new(#ef5350, 25), "HTF VAH / VAL", group=G_HTF)
+
+string G_OI = "17 · OPEN INTEREST & FUNDING  (perps)"
+bool   oiOn_in      = input.bool(true, "Enable Open Interest", group=G_OI,
+     tooltip="OI is the count of contracts still open. Combined with price direction it tells you WHO is doing the moving:\n\nPrice up + OI up      new longs opening — real buying, but risk is building\nPrice up + OI down    shorts covering — a squeeze, not demand; tends to stall\nPrice down + OI up    new shorts opening — real selling\nPrice down + OI down  longs closing or being liquidated — a flush\n\nA squeeze into resistance and genuine buying into resistance look identical on price. They are opposite trades. This is the only thing that separates them.")
+bool   liqOn_in     = input.bool(true, "Mark Liquidation Cascades", group=G_OI,
+     tooltip="A wide-range bar where open interest COLLAPSES is forced closing, not fresh conviction. These flushes tend to overshoot and mean-revert, which is why they so often print the excess tail at the extreme.")
+float  liqOiZ    = input.float(1.5, "Liquidation OI Drop (std dev)", minval=0.5, maxval=5.0, group=G_OI)
+float  liqSprZ   = input.float(1.2, "Liquidation Spread (std dev)", minval=0.3, maxval=5.0, group=G_OI)
+string fundSym   = input.string("", "Funding Symbol (optional)", group=G_OI,
+     tooltip="Leave blank unless you know the funding ticker for your venue. If the symbol does not resolve, it is ignored rather than breaking the script.")
+color  cOiUp     = input.color(#26a69a, "OI Rising Color", group=G_OI)
+color  cOiDn     = input.color(#ef5350, "OI Falling Color", group=G_OI)
+color  cLiq      = input.color(#ffea00, "Liquidation Color", group=G_OI)
+
+string G_STR = "15 · MARKET STRUCTURE"
+bool  strOn_in      = input.bool(true, "Show Structure (BOS / CHoCH)", group=G_STR,
+     tooltip="Swing labels and structure breaks. This is the ONE part of SMC that is not already covered by the auction layer — everything else it offers you already measure better.\n\nBOS  = break in the SAME direction as the trend. Continuation.\nCHoCH = break AGAINST the trend. The first warning of a turn.")
+int   strLen     = input.int(10, "Swing Strength", minval=2, maxval=50, group=G_STR)
+bool  strSwings  = input.bool(true, "Label Swings (HH / HL / LH / LL)", group=G_STR)
+int   strMaxDraw = input.int(12, "Max Structure Marks", minval=2, maxval=40, group=G_STR)
+color cBos       = input.color(#26a69a, "BOS Color", group=G_STR)
+color cChoch     = input.color(#ff9800, "CHoCH Color", group=G_STR)
+color cSwing     = input.color(color.new(#b2b5be, 25), "Swing Label Color", group=G_STR)
+
+string G_CSIG = "16 · CHART SIGNALS  (location-gated)"
+bool  csigOn_in     = input.bool(true, "Show Buy / Sell on Price Chart", group=G_CSIG,
+     tooltip="These are NOT the pane's A/B/C grades. A pane signal only needs momentum. A chart signal needs all four layers to agree:\n\n1 CONTEXT  — regime permits the direction\n2 LOCATION — price at a value area edge or an untested POC\n3 TRIGGER  — WaveTrend cross in the extreme zone\n4 PROOF    — real money flow, absorption, or a delta divergence\n\nYou will see far fewer of these. That is the point.")
+string csigSens  = input.string("Strict (all 4)", "Sensitivity",
+     options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)"], group=G_CSIG,
+     tooltip="How many of the four gates must pass. Location and trigger are always required — sensitivity only relaxes context and proof.\n\nIf you are seeing no signals at all, this is the dial to turn first.")
+bool  csigZoneOnly = input.bool(false, "Cross Must Be In Extreme Zone", group=G_CSIG,
+     tooltip="ON is the purist reading, but on ranging days WaveTrend may never reach +/-53 and you will see nothing for days. OFF accepts any cross that clears the other gates.")
+bool  csigNeedBody = input.bool(false, "Rejection Must Close In Direction", group=G_CSIG,
+     tooltip="ON also demands an up candle for a buy. That discards most higher-timeframe rejections, where the bar often closes red after a deep wick into the level. Closing back above the level is already the rejection.")
+bool  csigVwap   = input.bool(true, "Count VWAP Bands as Location", group=G_CSIG,
+     tooltip="Adds the VWAP standard deviation bands to the list of valid locations. These exist on every bar, unlike the developing value area.")
+int   csigCool   = input.int(20, "Cooldown (bars between signals)", minval=1, maxval=200, group=G_CSIG,
+     tooltip="Minimum bars before the same side can signal again. Six was far too short — one genuine swing re-fired over and over.")
+int   csigWindow = input.int(3, "Trigger Window (bars)", minval=1, maxval=10, group=G_CSIG,
+     tooltip="How many bars the cross and the location touch may be apart and still count as the same event.")
+float csigTol    = input.float(0.12, "Location Tolerance (%)", minval=0.01, maxval=2.0, group=G_CSIG)
+bool  csigStrict = input.bool(true, "Require Regime Agreement", group=G_CSIG,
+     tooltip="ON — no counter-trend buys while value is migrating down, and vice versa. This is the filter that stops you fading a trend day.")
+color cBuySig    = input.color(#00e676, "Buy Color", group=G_CSIG)
+color cSellSig   = input.color(#ff1744, "Sell Color", group=G_CSIG)
+
+string G_VIS = "MARKET CIPHER B: VISUALS (LOWER PANE)"
+color cFastWave = input.color(color.new(#4a4e57, 12), "Fast Wave", group=G_VIS,
+     tooltip="WaveTrend 1 — the faster of the two momentum waves.")
+color cSlowWave = input.color(color.new(#22262f, 5), "Slow Wave", group=G_VIS,
+     tooltip="WaveTrend 2 — the signal line the fast wave crosses.")
+color cVwapUp   = input.color(color.new(#00c8f0, 30), "VWAP Wave Up", group=G_VIS,
+     tooltip="Cyan in the original, one colour for both directions. It is a magnitude reading, not a direction reading — direction is already carried by the green/red money flow underneath it.")
+color cVwapDn   = input.color(color.new(#00c8f0, 30), "VWAP Wave Down", group=G_VIS)
+color cMfiBull  = input.color(color.new(#2eb872, 15), "MFI Bullish Ribbon", group=G_VIS)
+color cMfiBear  = input.color(color.new(#e8384f, 15), "MFI Bearish Ribbon", group=G_VIS)
+color cBuyDot   = input.color(#ffe100, "Buy Dot", group=G_VIS)
+color cSellDot  = input.color(#ffffff, "Sell Dot", group=G_VIS)
+color cObOs     = input.color(color.new(#787b86, 80), "Overbought/Oversold (+60/-60)", group=G_VIS)
+color cZeroLine = input.color(color.new(#ffffff, 50), "Zero Line Color", group=G_VIS)
+bool  ribbonOn  = input.bool(true, "Show Trend Ribbon", group=G_VIS,
+     tooltip="The red/green strip along the bottom of the pane. Green when market structure is bullish, red when bearish.")
+float ribbonTop = input.float(-95.0,  "Ribbon Top", group=G_VIS)
+float ribbonBot = input.float(-105.0, "Ribbon Bottom", group=G_VIS)
+color cRibbonUp = input.color(color.new(#00c853, 25), "Ribbon Bullish", group=G_VIS)
+color cRibbonDn = input.color(color.new(#d50000, 25), "Ribbon Bearish", group=G_VIS)
+color cCvdUp    = input.color(#00ff80, "CVD Rising", group=G_VIS)
+color cCvdDn    = input.color(#ff4040, "CVD Falling", group=G_VIS)
+string dotsFilter = input.string("None (show all)", "MCB Dots Filter",
+     options=["None (show all)", "Extreme Waves (< -20 / > +20)", "Money Flow Direction", "Extreme Waves + Money Flow"],
+     group=G_VIS,
+     tooltip="Filters the cross dots.\nNone — every WaveTrend cross.\nOB/OS only — crosses in the extreme zones.\nMoney flow agreement — crosses where real money flow points the same way.\nGrade A only — cross + zone + flow + divergence.")
+float cvdLineScale = input.float(60.0, "CVD Line Scale", minval=5.0, maxval=200.0, group=G_VIS,
+     tooltip="The CVD line is normalised to span roughly plus and minus this value, so it sits sensibly against the waves.")
+
+string G_VW = "5 · VWAP WAVE"
+bool showVwap = input.bool(true, "Show VWAP Wave (wt1 − wt2)", group=G_VW)
+float vwScale = input.float(1.0, "VWAP Height", minval=0.1, maxval=10.0, group=G_VW)
+
+string G_HID = "6 · HIDDEN LINES"
+bool showRsi   = input.bool(false, "Show RSI", group=G_HID)
+int  rsiLen    = input.int(14, "RSI Length", minval=2, group=G_HID)
+
+string G_CVD = "7 · CVD"
+bool   cvdShow  = input.bool(true, "Show CVD Line", group=G_CVD)
+string cvdReset = input.string("Daily", "Anchor", options=["Daily", "Weekly", "Session", "None (rolling)"], group=G_CVD)
+int    cvdRoll  = input.int(200, "Rolling Length", minval=10, group=G_CVD)
+
+string G_DIV = "8 · DIVERGENCES"
+bool divWt      = input.bool(true,  "WaveTrend Divergences", group=G_DIV)
+bool divCvd     = input.bool(true,  "CVD Divergences (absorption)", group=G_DIV,
+     tooltip="Price lower low while CVD makes a higher low: sellers pressing and not being paid. OG Market Cipher cannot see this.")
+bool divLines   = input.bool(true,  "Draw Divergence Lines", group=G_DIV)
+int  divMaxLines= input.int(20, "Max Divergence Lines Kept", minval=2, maxval=100, group=G_DIV,
+     tooltip="Divergence lines used to accumulate without limit. Pine deletes the OLDEST drawing when the 500-object cap fills, so old divergence lines were evicting your value area and naked POC lines.")
+bool divHidden  = input.bool(false, "Include Hidden Divergences", group=G_DIV)
+int  divLbL     = input.int(5, "Pivot Left Bars",  minval=1, maxval=50, group=G_DIV)
+int  divLbR     = input.int(5, "Pivot Right Bars", minval=1, maxval=50, group=G_DIV,
+     tooltip="A pivot is only confirmed this many bars after it forms, so markers appear this many bars back. A delay, not a repaint.")
+int  divRangeMax= input.int(60, "Max Bars Between Pivots", minval=5, maxval=200, group=G_DIV)
+int  divRangeMin= input.int(5,  "Min Bars Between Pivots", minval=1, group=G_DIV)
+
+// The pane's own graded markers were removed so it can never contradict the
+// chart. buyA / sellA remain as ALERT conditions only.
+
+string G_TBL = "10 · DASHBOARD"
+bool   showTable = input.bool(true, "Show Dashboard", group=G_TBL)
+string tblPos    = input.string("Top Right", "Position",
+     options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_TBL)
+color  cTblBg    = input.color(color.new(#131722, 10), "Background", group=G_TBL)
+color  cTxt      = input.color(#d1d4dc, "Text", group=G_TBL)
+
+color C_UP  = #26a69a
+color C_DN  = #ef5350
+color C_NE  = #b2b5be
+color C_WN  = #ffa726
+color C_GLD = #ffd54f
+
+
+// ============================================================================
+// 1b. PRESET RESOLUTION
+// ----------------------------------------------------------------------------
+// Every visual toggle resolves through the preset unless Custom is selected.
+// The point is that one dropdown should decide how busy the chart is, instead
+// of you hunting through fourteen groups to quieten it down.
+// ============================================================================
+bool P_STD   = preset == "Standard"
+bool P_ALL   = preset == "Everything"
+bool P_CUST  = preset == "Custom (use the groups below)"
+bool P_SPLUS = P_STD or P_ALL
+
+bool showHist  = P_CUST ? showHist_in  : P_SPLUS
+bool showPrior = P_CUST ? showPrior_in : true
+bool showPrHL  = P_CUST ? showPrHL_in  : P_ALL
+bool showIB    = P_CUST ? showIB_in    : P_SPLUS
+bool showNpoc  = P_CUST ? showNpoc_in  : true
+bool showLvn   = P_CUST ? showLvn_in   : P_SPLUS
+bool dnaGlow   = P_CUST ? dnaGlow_in   : P_SPLUS
+bool dnaCloud  = P_CUST ? dnaCloud_in  : P_SPLUS
+bool dnaDots   = P_CUST ? dnaDots_in   : P_ALL
+bool dnaTape   = P_CUST ? dnaTape_in   : P_ALL
+bool bubOn     = P_CUST ? bubOn_in     : P_ALL
+bool gpOn      = P_CUST ? gpOn_in      : P_SPLUS
+bool fibTgtOn  = P_CUST ? fibTgtOn_in  : P_ALL
+bool vwapOn    = P_CUST ? vwapOn_in    : true
+bool vwapBands = P_CUST ? vwapBands_in : P_SPLUS
+
+// These eleven were added after the preset system was written and never wired
+// into it, so "Clean" was still drawing structure, balance boxes, sessions,
+// CME gaps, OI and risk boxes. Clean is now actually clean.
+bool aucOn  = P_CUST ? aucOn_in  : true
+bool dnaOn  = P_CUST ? dnaOn_in  : P_SPLUS
+bool csigOn = P_CUST ? csigOn_in : true
+bool riskOn = P_CUST ? riskOn_in : true
+bool strOn  = P_CUST ? strOn_in  : P_SPLUS
+bool balOn  = P_CUST ? balOn_in  : P_SPLUS
+bool oiOn   = P_CUST ? oiOn_in   : P_SPLUS
+bool liqOn  = P_CUST ? liqOn_in  : P_SPLUS
+bool cmeOn  = P_CUST ? cmeOn_in  : true
+bool sessOn = P_CUST ? sessOn_in : P_ALL
+bool statOn = P_CUST ? statOn_in : P_SPLUS
+
+// ============================================================================
+// 2. HELPERS
+// ============================================================================
+f_tablePos(string s) =>
+    switch s
+        "Top Right"    => position.top_right
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.middle_right
+
+// Returns [poc, vah, val, rangeHigh, rangeLow, ok, bins]
+f_profile(array<float> hs, array<float> ls, array<float> vs, int rows, float pct) =>
+    float poc = na
+    float vah = na
+    float val = na
+    float hi  = na
+    float lo  = na
+    bool  ok  = false
+    array<float> bins = array.new<float>(rows, 0.0)
+
+    int n = hs.size()
+    if n > 0
+        hi := hs.max()
+        lo := ls.min()
+        float rng = hi - lo
+        if rng > 0
+            float step = rng / rows
+            for i = 0 to n - 1
+                float bv = vs.get(i)
+                if bv > 0
+                    int lvlLo = math.max(0, math.min(rows - 1, int((ls.get(i) - lo) / step)))
+                    int lvlHi = math.max(0, math.min(rows - 1, int((hs.get(i) - lo) / step)))
+                    float slice = bv / (lvlHi - lvlLo + 1)
+                    for lvl = lvlLo to lvlHi
+                        bins.set(lvl, bins.get(lvl) + slice)
+
+            float total = bins.sum()
+            if total > 0
+                int pocIdx = bins.indexof(bins.max())
+                if pocIdx < 0
+                    pocIdx := int(rows / 2)
+                float target = total * pct
+                float acc = bins.get(pocIdx)
+                int up = pocIdx + 1
+                int dn = pocIdx - 1
+                while acc < target and (up <= rows - 1 or dn >= 0)
+                    float vUp = -1.0
+                    float vDn = -1.0
+                    if up <= rows - 1
+                        vUp := bins.get(up)
+                    if dn >= 0
+                        vDn := bins.get(dn)
+                    if vUp < 0 and vDn < 0
+                        break
+                    if vUp >= vDn
+                        acc += vUp
+                        up += 1
+                    else
+                        acc += vDn
+                        dn -= 1
+                poc := lo + (pocIdx + 0.5) * step
+                vah := lo + math.min(rows, up) * step
+                val := lo + math.max(0, dn + 1) * step
+                ok := true
+
+    [poc, vah, val, hi, lo, ok, bins]
+
+// ============================================================================
+// 3. ONE LOWER-TIMEFRAME REQUEST, USED BY BOTH LAYERS
+// ----------------------------------------------------------------------------
+// The profile needs high/low/volume. The delta needs close/open/volume. Doing
+// it in a single call is cheaper than the two separate scripts were.
+// ============================================================================
+int chartSec = timeframe.in_seconds(timeframe.period)
+
+// The requested timeframe must be STRICTLY lower than the chart's, or both
+// request.security_lower_tf and requestVolumeDelta throw.
+//
+// Below 2 minutes the only lower timeframes are second-based (1S, 5S), and
+// SECONDS DATA REQUIRES A PAID TRADINGVIEW PLAN. On a free account a 1m chart
+// therefore has no usable lower timeframe at all, which is why 1m failed while
+// 3m worked. The calls are skipped entirely there rather than asking for data
+// that cannot be served.
+//
+// Nothing important is lost. On 1m the chart bars are themselves 1-minute
+// resolution, so the profile and the delta simply read them directly.
+bool useLtf = chartSec > 60
+
+string ltfEff = "1"
+if chartSec >= 86400
+    ltfEff := "60"
+else if chartSec >= 3600
+    ltfEff := "5"
+else
+    ltfEff := "1"
+
+string deltaTf = ltfEff
+
+// Intrabar data only earns its cost from 5m upward. On 3m the chart bars
+// already give 480 price/volume points per UTC day, more than a 100-row
+// profile needs, and pulling finer data risks a timeout.
+bool intrabarUseful = chartSec >= 300
+
+array<float> lH = na
+array<float> lL = na
+array<float> lC = na
+array<float> lO = na
+array<float> lV = na
+float dLast = na
+
+if useLtf
+    [rH, rL, rC, rO, rV] = request.security_lower_tf(syminfo.tickerid, ltfEff, [high, low, close, open, volume], ignore_invalid_symbol=true)
+    lH := rH
+    lL := rL
+    lC := rC
+    lO := rO
+    lV := rV
+    [_dOpen, _dMax, _dMin, rDelta] = taLib.requestVolumeDelta(deltaTf)
+    dLast := rDelta
+
+bool ltfPresent = false
+if useLtf
+    if not na(lH)
+        if lH.size() > 0
+            ltfPresent := true
+
+bool ltfOk = false
+if intrabarUseful and ltfPresent
+    ltfOk := true
+
+// ---- signed volume, two ways
+// Primary: TradingView's official requestVolumeDelta. It splits volume inside
+// each intrabar rather than judging a whole bar by its direction, which is what
+// the original Volume Bubbles and Volume DNA scripts both rely on.
+// Fallback: classify the lower-timeframe bars we already fetched for the
+// profile, used only when the library returns nothing (deep history).
+float buyVol  = 0.0
+float sellVol = 0.0
+if ltfPresent
+    for i = 0 to lC.size() - 1
+        float v = lV.get(i)
+        if not na(v)
+            if lC.get(i) > lO.get(i)
+                buyVol += v
+            else if lC.get(i) < lO.get(i)
+                sellVol += v
+else
+    if close > open
+        buyVol := nz(volume)
+    else if close < open
+        sellVol := nz(volume)
+
+float totVol   = buyVol + sellVol
+float fbDelta  = buyVol - sellVol
+float barDelta = na(dLast) ? fbDelta : dLast
+bool  deltaOfficial = not na(dLast)
+float deltaRatio = totVol > 0 ? barDelta / totVol : 0.0
+
+// ============================================================================
+// 4. PERIOD BOUNDARY
+// ============================================================================
+bool inRTH = not na(time(timeframe.period, rthSess, rthTz))
+bool inPeriod = true
+if periodMode == "RTH Session (futures)"
+    inPeriod := inRTH
+
+int utcDayIdx = math.floor(time / 86400000)
+bool isNewPeriod = false
+if periodMode == "RTH Session (futures)"
+    isNewPeriod := inRTH and not inRTH[1]
+else if periodMode == "24h UTC (crypto)"
+    // Epoch milliseconds are already UTC, so integer-dividing by one day gives
+    // an exact day index that cannot be missed by a gap. The previous version
+    // tested hour==0, which fails if a whole hour is absent and the first bar
+    // of the day prints at 01:xx.
+    isNewPeriod := utcDayIdx != utcDayIdx[1]
+else if periodMode == "Weekly"
+    isNewPeriod := timeframe.change("W")
+else
+    isNewPeriod := timeframe.change("D")
+
+// Declared here, not in the CVD section, because the VWAP anchor needs them too
+// and it is evaluated earlier in the script.
+bool chgD = timeframe.change("D")
+bool chgW = timeframe.change("W")
+bool chgS = session.isfirstbar_regular
+
+// ============================================================================
+// 5. AUCTION STATE
+// ============================================================================
+var array<float> curH = array.new<float>()
+var array<float> curL = array.new<float>()
+var array<float> curV = array.new<float>()
+
+var float priorPoc = na
+var float priorVah = na
+var float priorVal = na
+var float priorHi  = na
+var float priorLo  = na
+
+var float ibH = na
+var float ibL = na
+var bool  ibLocked = false
+var int   periodStart = na
+var float periodOpen = na
+var bool  firstPeriodDone = false
+
+var array<float> rangeHist = array.new<float>()
+var string priorHighQual = "n/a"
+var string priorLowQual  = "n/a"
+var float  priorHiLvl = na
+var float  priorLoLvl = na
+var array<float> npocPrice = array.new<float>()
+var array<line>  npocLine  = array.new<line>()
+
+var line lnPoc  = na
+var line lnVah  = na
+var line lnVal  = na
+var line lnPPoc = na
+var line lnPVah = na
+var line lnPVal = na
+var line lnPrH  = na
+var line lnPrL  = na
+var line lnIbH  = na
+var line lnIbL  = na
+var array<box>  histBoxes = array.new<box>()
+var array<line> lvnLines  = array.new<line>()
+
+// ============================================================================
+// 6. PERIOD ROLLOVER
+// ============================================================================
+if isNewPeriod and aucOn
+    [fPoc, fVah, fVal, fHi, fLo, fOk, fBins] = f_profile(curH, curL, curV, profRows, vaPct)
+    if fOk and firstPeriodDone
+        priorPoc := fPoc
+        priorVah := fVah
+        priorVal := fVal
+        priorHi  := fHi
+        priorLo  := fLo
+        // classify the COMPLETED period's extremes here. Doing it from the
+        // developing profile meant it only ever ran on the last bar, so the
+        // statistics for poor highs and lows never accumulated at all.
+        float fMax = fBins.max()
+        if fMax > 0
+            // average the outer BAND, not one bin — see the Extreme Band tooltip
+            int fEdge = math.max(1, int(profRows * excBand / 100))
+            float fTopSum = 0.0
+            float fBotSum = 0.0
+            for e = 0 to fEdge - 1
+                fTopSum += fBins.get(profRows - 1 - e)
+                fBotSum += fBins.get(e)
+            float fTopPct = fTopSum / fEdge / fMax * 100
+            float fBotPct = fBotSum / fEdge / fMax * 100
+            priorHighQual := fTopPct < excThresh ? "EXCESS" : fTopPct > excThresh * poorMult ? "POOR" : "Flat"
+            priorLowQual  := fBotPct < excThresh ? "EXCESS" : fBotPct > excThresh * poorMult ? "POOR" : "Flat"
+            priorHiLvl := fHi
+            priorLoLvl := fLo
+        rangeHist.push(fHi - fLo)
+        if rangeHist.size() > 20
+            rangeHist.shift()
+        if showNpoc
+            // x1 and x2 MUST differ. A zero-length line with extend=extend.right
+            // has no defined slope; Pine renders it VERTICALLY and it drags the
+            // price scale with it. This was the mystery red line.
+            int npocX1 = na(time[1]) ? time - 60000 : time[1]
+            line nl = line.new(npocX1, fPoc, time, fPoc, xloc=xloc.bar_time, color=cNpoc,
+                 style=line.style_dotted, width=1, extend=extend.right, force_overlay=true)
+            npocPrice.push(fPoc)
+            npocLine.push(nl)
+            if npocPrice.size() > maxNpoc
+                line.delete(npocLine.shift())
+                npocPrice.shift()
+
+    firstPeriodDone := true
+    curH.clear()
+    curL.clear()
+    curV.clear()
+    ibH := high
+    ibL := low
+    ibLocked := false
+    periodStart := time
+    periodOpen := open
+
+// ============================================================================
+// 7. ACCUMULATION
+// ============================================================================
+if inPeriod and aucOn
+    if ltfOk
+        for i = 0 to lH.size() - 1
+            float v = lV.get(i)
+            if not na(v)
+                if v > 0
+                    curH.push(lH.get(i))
+                    curL.push(lL.get(i))
+                    curV.push(v)
+    else
+        curH.push(high)
+        curL.push(low)
+        curV.push(nz(volume))
+
+    if not ibLocked
+        if not na(periodStart)
+            if time - periodStart < ibMinutes * 60000
+                ibH := na(ibH) ? high : math.max(ibH, high)
+                ibL := na(ibL) ? low : math.min(ibL, low)
+            else
+                ibLocked := true
+
+while curH.size() > 20000
+    curH.shift()
+    curL.shift()
+    curV.shift()
+
+// ============================================================================
+// 8. DEVELOPING PROFILE  (last bar only — the loop is heavy at 250 rows)
+// ============================================================================
+float devPoc = na
+float devVah = na
+float devVal = na
+float devHi  = na
+float devLo  = na
+bool  devOk  = false
+array<float> devBins = array.new<float>(profRows, 0.0)
+
+if barstate.islast and aucOn
+    [dP, dVah, dVal, dHi, dLo, dOk, dBins] = f_profile(curH, curL, curV, profRows, vaPct)
+    devPoc := dP
+    devVah := dVah
+    devVal := dVal
+    devHi  := dHi
+    devLo  := dLo
+    devOk  := dOk
+    devBins := dBins
+
+// ============================================================================
+// 9. EXCESS vs POOR EXTREMES
+// ----------------------------------------------------------------------------
+// EXCESS — thin volume in the outermost bin. Price went there, found nobody and
+//          left. The auction is finished at that price. This is what a genuine
+//          rejection looks like when you can see the volume behind it.
+// POOR   — heavy volume right at the extreme. It stopped without being
+//          rejected, leaving unfinished business. Poor extremes get revisited.
+// ============================================================================
+string highQual = "n/a"
+string lowQual  = "n/a"
+if devOk
+    float mxB = devBins.max()
+    if mxB > 0
+        int dEdge = math.max(1, int(profRows * excBand / 100))
+        float dTopSum = 0.0
+        float dBotSum = 0.0
+        for e = 0 to dEdge - 1
+            dTopSum += devBins.get(profRows - 1 - e)
+            dBotSum += devBins.get(e)
+        float topPct = dTopSum / dEdge / mxB * 100
+        float botPct = dBotSum / dEdge / mxB * 100
+        float poorCut = excThresh * poorMult
+        if topPct < excThresh
+            highQual := "EXCESS"
+        else if topPct > poorCut
+            highQual := "POOR"
+        else
+            highQual := "Flat"
+        if botPct < excThresh
+            lowQual := "EXCESS"
+        else if botPct > poorCut
+            lowQual := "POOR"
+        else
+            lowQual := "Flat"
+
+// ============================================================================
+// 10. LOW VOLUME NODES
+// ============================================================================
+if barstate.islast and aucOn
+    for l in lvnLines
+        line.delete(l)
+    lvnLines.clear()
+    if showLvn and devOk
+        float mxB = devBins.max()
+        if mxB > 0
+            float step = (devHi - devLo) / profRows
+            int anchorT = na(periodStart) ? time : periodStart
+            for lvl = 2 to profRows - 3
+                if lvnLines.size() < maxLvn
+                    if devBins.get(lvl) / mxB * 100 < lvnThresh
+                        bool trough = devBins.get(lvl) <= devBins.get(lvl - 1) and devBins.get(lvl) <= devBins.get(lvl + 1)
+                        bool hvnUp = devBins.get(lvl + 2) / mxB * 100 > lvnThresh * 1.6
+                        bool hvnDn = devBins.get(lvl - 2) / mxB * 100 > lvnThresh * 1.6
+                        if trough and hvnUp and hvnDn
+                            float py = devLo + (lvl + 0.5) * step
+                            int lvnX1 = anchorT >= time ? (na(time[1]) ? time - 60000 : time[1]) : anchorT
+                            lvnLines.push(line.new(lvnX1, py, time, py, xloc=xloc.bar_time,
+                                 color=cLvn, style=line.style_dashed, width=1,
+                                 extend=extend.right, force_overlay=true))
+
+// ============================================================================
+// 11. NAKED POC MAINTENANCE
+// ============================================================================
+if showNpoc and aucOn
+    if npocPrice.size() > 0
+        for i = npocPrice.size() - 1 to 0
+            float p = npocPrice.get(i)
+            if high >= p and low <= p
+                line.delete(npocLine.get(i))
+                npocLine.remove(i)
+                npocPrice.remove(i)
+
+float npocUp = na
+float npocDn = na
+if npocPrice.size() > 0
+    for i = 0 to npocPrice.size() - 1
+        float p = npocPrice.get(i)
+        if math.abs(p - close) / close * 100 <= npocMaxDist
+            if p > close
+                npocUp := na(npocUp) ? p : math.min(npocUp, p)
+            else
+                npocDn := na(npocDn) ? p : math.max(npocDn, p)
+
+// ============================================================================
+// 12. REGIME · VALUE · DAY TYPE · OPEN TYPE
+// ============================================================================
+string posVsValue = "n/a"
+if not na(priorVah) and not na(priorVal)
+    if close > priorVah
+        posVsValue := "ABOVE value"
+    else if close < priorVal
+        posVsValue := "BELOW value"
+    else
+        posVsValue := "INSIDE value"
+
+string vaRelation = "n/a"
+if devOk and not na(priorVah) and not na(priorVal)
+    if devVal > priorVah
+        vaRelation := "Higher value"
+    else if devVah < priorVal
+        vaRelation := "Lower value"
+    else if devVal >= priorVal and devVah <= priorVah
+        vaRelation := "Inside prior"
+    else if devVal <= priorVal and devVah >= priorVah
+        vaRelation := "Wider"
+    else
+        vaRelation := "Overlapping"
+
+float avgRange = na
+if rangeHist.size() > 0
+    avgRange := rangeHist.avg()
+
+// ---------------------------------------------------------------------------
+// LIVE CONTEXT — computed on every bar
+// The displayed regime depends on the developing profile, which for speed is
+// only built on the last bar. That meant the signal's context gate was blank on
+// every historical bar and therefore always open. This version uses only values
+// that exist on every bar: the running period extremes and prior value.
+// ---------------------------------------------------------------------------
+var float runHi = na
+var float runLo = na
+if isNewPeriod
+    runHi := high
+    runLo := low
+else
+    runHi := na(runHi) ? high : math.max(runHi, high)
+    runLo := na(runLo) ? low : math.min(runLo, low)
+
+float runRange = na(runHi) or na(runLo) ? na : runHi - runLo
+
+bool acceptedAbove = false
+bool acceptedBelow = false
+if not na(priorVah)
+    acceptedAbove := close > priorVah and close[1] > priorVah and close[2] > priorVah
+if not na(priorVal)
+    acceptedBelow := close < priorVal and close[1] < priorVal and close[2] < priorVal
+
+string regimeLive = "TRANSITION"
+if not na(avgRange) and avgRange > 0 and not na(runRange)
+    if runRange > avgRange * 1.5 or acceptedAbove or acceptedBelow
+        regimeLive := "IMBALANCE"
+    else if not na(priorVah) and not na(priorVal) and close <= priorVah and close >= priorVal
+        regimeLive := "BALANCE"
+
+bool imbUp = regimeLive == "IMBALANCE" and acceptedAbove
+bool imbDn = regimeLive == "IMBALANCE" and acceptedBelow
+
+// BALANCE means rotate and fade the edges. IMBALANCE means value is migrating
+// and fading the edges is how you get run over.
+string regime = "n/a"
+if devOk and not na(avgRange) and avgRange > 0
+    float rr = (devHi - devLo) / avgRange
+    bool migrated = vaRelation == "Higher value" or vaRelation == "Lower value"
+    if migrated or rr > 1.5
+        regime := "IMBALANCE"
+    else if vaRelation == "Inside prior" or vaRelation == "Overlapping"
+        regime := "BALANCE"
+    else
+        regime := "TRANSITION"
+
+string ibExt = "n/a"
+float rngRatio = na
+string dayType = "n/a"
+if not na(ibH) and not na(ibL) and devOk
+    float ibRange = ibH - ibL
+    bool extUp = devHi > ibH
+    bool extDn = devLo < ibL
+    if extUp and extDn
+        ibExt := "BOTH"
+    else if extUp
+        ibExt := "UP"
+    else if extDn
+        ibExt := "DOWN"
+    else
+        ibExt := "None"
+    if ibRange > 0
+        rngRatio := (devHi - devLo) / ibRange
+        if extUp and extDn
+            dayType := "Neutral"
+        else if rngRatio < 1.15
+            dayType := "Normal"
+        else if rngRatio < 1.8
+            dayType := "Normal var"
+        else
+            dayType := "Trend day"
+
+string openType = "n/a"
+if not na(periodOpen) and not na(ibH) and not na(ibL)
+    if ibH > ibL
+        float ibr = ibH - ibL
+        float upFromOpen = ibH - periodOpen
+        float dnFromOpen = periodOpen - ibL
+        if upFromOpen > ibr * 0.8
+            openType := "Drive UP"
+        else if dnFromOpen > ibr * 0.8
+            openType := "Drive DOWN"
+        else if upFromOpen > ibr * 0.3 and dnFromOpen > ibr * 0.3
+            openType := "Open-Auction"
+        else
+            openType := "Test-Drive"
+
+// ============================================================================
+// 12b. VOLUME DNA — effort vs result
+// ----------------------------------------------------------------------------
+// Wyckoff's effort-versus-result read, expressed as two z-scores. Concept from
+// Volume DNA: Heatmap [BigBeluga], MPL 2.0 — reimplemented here rather than
+// copied, and restored to all four quadrants.
+//
+// The quadrant that matters most to an auction trader is ABSORPTION: heavy
+// volume with a narrow spread means someone is taking everything offered and
+// price is not moving. At a value area edge that is a defended level. In the
+// middle of value it is just ordinary two-way trade, which is what the
+// "only at value area edges" filter is for.
+//
+// EXHAUSTION — light volume with a wide spread — is the one Gemini's rebuild
+// dropped, and it is the live version of what the profile later shows as
+// excess: a move travelling on no participation.
+// ============================================================================
+float volMean = ta.sma(volume, dnaVolLen)
+float volStd  = ta.stdev(volume, dnaVolLen)
+float volZ    = volStd > 0 ? (volume - volMean) / volStd : 0.0
+
+float spread    = high - low
+float sprMean   = ta.sma(spread, dnaSprLen)
+float sprStd    = ta.stdev(spread, dnaSprLen)
+float spreadZ   = sprStd > 0 ? (spread - sprMean) / sprStd : 0.0
+
+bool dHighVol = volZ >= dnaVolTh
+bool dLowVol  = volZ <= -dnaVolTh * 0.3
+bool dWideSpr = spreadZ >= dnaSprTh * 0.5
+bool dNarrow  = spreadZ <= 0.0
+
+bool rawAbsorb = dHighVol and dNarrow
+bool rawEffort = dHighVol and dWideSpr and not rawAbsorb
+bool rawExhaust = dLowVol and dWideSpr
+bool rawStagn   = dLowVol and not dWideSpr and not rawExhaust
+
+// value area edge filter
+bool atEdge = true
+if dnaAtEdge
+    atEdge := false
+    if not na(priorVah) and not na(priorVal)
+        float edgeTol = spread * 1.5
+        atEdge := math.abs(close - priorVah) <= edgeTol or math.abs(close - priorVal) <= edgeTol
+
+bool dnaAbsorb  = dnaOn and dnaAbsOn and rawAbsorb and atEdge
+bool dnaEffortB = dnaOn and dnaEffOn and rawEffort and close >= open and atEdge
+bool dnaEffortS = dnaOn and dnaEffOn and rawEffort and close < open and atEdge
+bool dnaExhaust = dnaOn and dnaExhOn and rawExhaust and atEdge
+bool dnaStagn   = dnaOn and dnaStgOn and rawStagn and atEdge
+
+string dnaState = "—"
+color  dnaCol = C_NE
+if rawAbsorb
+    dnaState := "ABSORPTION"
+    dnaCol := cAbs
+else if rawEffort
+    dnaState := close >= open ? "EFFORT bull" : "EFFORT bear"
+    dnaCol := close >= open ? cEffB : cEffS
+else if rawExhaust
+    dnaState := "EXHAUSTION"
+    dnaCol := cExh
+else if rawStagn
+    dnaState := "Stagnation"
+    dnaCol := cStg
+
+
+// ============================================================================
+// 12c. VOLUME DNA VISUALS  —  glow candles, absorption clouds, circles, tape
+// ----------------------------------------------------------------------------
+// Visual language modelled on Volume DNA: Heatmap [BigBeluga] (MPL 2.0).
+// Reimplemented rather than copied.
+// ============================================================================
+f_volShort(float v) =>
+    string outv = str.tostring(int(v))
+    if v >= 1000000000
+        outv := str.tostring(math.round(v / 1000000000, 1), "#.#") + "B"
+    else if v >= 1000000
+        outv := str.tostring(math.round(v / 1000000, 1), "#.#") + "M"
+    else if v >= 1000
+        outv := str.tostring(math.round(v / 1000, 1), "#.#") + "K"
+    outv
+
+// THREE MORE UNBOUNDED LEAKS FOUND — same class as the divergence lines and the
+// balance boxes. Absorption clouds, DNA circles and bubble labels were each
+// created with no array and no deletion. Pine evicts the OLDEST drawing when
+// the 500-object cap fills, so on a long chart these were silently pushing out
+// the value area, naked POC and IB lines you actually trade off.
+var array<box>   absCloudBx = array.new<box>()
+var array<label> dnaLblArr  = array.new<label>()
+var array<label> bubLblArr  = array.new<label>()
+
+f_pushAbsCloud(box b) =>
+    absCloudBx.push(b)
+    while absCloudBx.size() > 15
+        box.delete(absCloudBx.shift())
+
+f_pushDnaLbl(label l) =>
+    dnaLblArr.push(l)
+    while dnaLblArr.size() > 40
+        label.delete(dnaLblArr.shift())
+
+f_pushBubLbl(label l) =>
+    bubLblArr.push(l)
+    while bubLblArr.size() > 40
+        label.delete(bubLblArr.shift())
+
+bool dnaAny = dnaAbsorb or dnaEffortB or dnaEffortS or dnaExhaust or dnaStagn
+
+float bodyMax = math.max(close, open)
+float bodyMin = math.min(close, open)
+float glowExp = (high - low) * 0.2
+
+color glowCol = color(na)
+if dnaGlow and dnaAny
+    glowCol := color.new(dnaCol, 55)
+
+// Ghost glow: a halo drawn just outside the body, additive to your candles.
+plotcandle(dnaGlow and dnaAny ? bodyMax + glowExp : na, dnaGlow and dnaAny ? bodyMax : na,
+     dnaGlow and dnaAny ? bodyMin : na, dnaGlow and dnaAny ? bodyMin - glowExp : na,
+     title="DNA Ghost Glow", color=glowCol, wickcolor=glowCol, bordercolor=glowCol,
+     force_overlay=true)
+
+// The DNA candle recolour was removed. plotcandle costs FOUR plot slots, it is
+// off by default, and it overrode your chart colours. The ghost glow above
+// carries the same information additively for the same price.
+
+// Absorption cloud — a zone projected forward from where absorption happened.
+if dnaCloud and dnaAbsorb
+    f_pushAbsCloud(box.new(bar_index, bodyMax + (high - low) * 0.1, bar_index + dnaCloudEx, bodyMin - (high - low) * 0.1,
+         bgcolor=color.new(cAbs, 85), border_color=color.new(cAbs, 60), border_width=0,
+         text="ABS  " + f_volShort(volume), text_color=color.new(cAbs, 20),
+         text_size=size.tiny, text_halign=text.align_right, force_overlay=true))
+
+// DNA circles, sized and shaded by how extreme the volume z-score is.
+if dnaDots and dnaAny
+    string dSize = size.tiny
+    int dTransp = 60
+    if volZ >= 4.0
+        dSize := size.large
+        dTransp := 0
+    else if volZ >= 3.0
+        dSize := size.normal
+        dTransp := 15
+    else if volZ >= 2.0
+        dSize := size.small
+        dTransp := 35
+    f_pushDnaLbl(label.new(bar_index, hl2, "", color=color.new(dnaCol, dTransp), textcolor=color(na),
+         style=label.style_circle, size=dSize, force_overlay=true,
+         tooltip=dnaState + "\nVol z: " + str.tostring(volZ, "#.##") + "\nSpread z: " + str.tostring(spreadZ, "#.##") + "\nVolume: " + f_volShort(volume)))
+    f_pushDnaLbl(label.new(bar_index, hl2, f_volShort(volume), color=color.new(color.black, 100),
+         textcolor=chart.fg_color, style=label.style_label_center, size=size.tiny,
+         force_overlay=true))
+
+// ---- barcode heatmap tape
+var array<int>   dnaHist = array.new<int>(dnaTapeRow, 0)
+var array<float> dnaVolHist = array.new<float>(dnaTapeRow, 0.0)
+int dnaCode = 0
+if rawAbsorb
+    dnaCode := 1
+else if rawEffort
+    dnaCode := close >= open ? 2 : 5
+else if rawExhaust
+    dnaCode := 3
+else if rawStagn
+    dnaCode := 4
+
+if barstate.isconfirmed
+    dnaHist.push(dnaCode)
+    dnaVolHist.push(nz(volume))
+    while dnaHist.size() > dnaTapeRow
+        dnaHist.shift()
+        dnaVolHist.shift()
+
+f_dnaCol(int c) =>
+    color outc = color.new(#787b86, 70)
+    if c == 1
+        outc := cAbs
+    else if c == 2
+        outc := cEffB
+    else if c == 5
+        outc := cEffS
+    else if c == 3
+        outc := cExh
+    else if c == 4
+        outc := cStg
+    outc
+
+f_dnaName(int c) =>
+    string outn = "—"
+    if c == 1
+        outn := "ABS"
+    else if c == 2
+        outn := "EFF+"
+    else if c == 5
+        outn := "EFF-"
+    else if c == 3
+        outn := "EXH"
+    else if c == 4
+        outn := "STG"
+    outn
+
+var table tape = table.new(f_tablePos(tapePos), 2, 41, border_width=1,
+     border_color=color.new(#000000, 80), frame_color=color.new(#000000, 60),
+     frame_width=1, force_overlay=true)
+
+if dnaTape and barstate.islast
+    table.cell(tape, 0, 0, "DNA", text_color=color.new(chart.fg_color, 30), text_size=size.tiny,
+         bgcolor=color.new(#1e2735, 20))
+    table.cell(tape, 1, 0, "VOL", text_color=color.new(chart.fg_color, 30), text_size=size.tiny,
+         bgcolor=color.new(#1e2735, 20))
+    int hn = dnaHist.size()
+    for i = 0 to dnaTapeRow - 1
+        int idx = hn - 1 - i
+        int cd = idx >= 0 ? dnaHist.get(idx) : 0
+        float bv = idx >= 0 ? dnaVolHist.get(idx) : 0.0
+        table.cell(tape, 0, i + 1, f_dnaName(cd), text_color=chart.fg_color, text_size=size.tiny,
+             bgcolor=color.new(f_dnaCol(cd), cd == 0 ? 88 : 45))
+        table.cell(tape, 1, i + 1, f_volShort(bv), text_color=color.new(chart.fg_color, 35),
+             text_size=size.tiny, bgcolor=color.new(#1e2735, 55))
+
+// ============================================================================
+// 12d. VOLUME BUBBLES — percentile volume clusters
+// ----------------------------------------------------------------------------
+// Concept from Volume Bubbles [QuantAlgo] (CC BY-NC-SA 4.0), reimplemented.
+// A bar qualifies when its volume (and/or absolute delta) clears a percentile
+// threshold in enough of three lookback windows. Three tiers, three windows,
+// and a consensus vote — the point is that "high volume" should be high
+// relative to short, medium AND long history, not just one of them.
+// ============================================================================
+float absDelta = math.abs(barDelta)
+
+float vSmS = ta.percentile_linear_interpolation(volume, bubShortW, bubSmallP)
+float vSmM = ta.percentile_linear_interpolation(volume, bubMidW,   bubSmallP)
+float vSmL = ta.percentile_linear_interpolation(volume, bubLongW,  bubSmallP)
+float vMdS = ta.percentile_linear_interpolation(volume, bubShortW, bubMedP)
+float vMdM = ta.percentile_linear_interpolation(volume, bubMidW,   bubMedP)
+float vMdL = ta.percentile_linear_interpolation(volume, bubLongW,  bubMedP)
+float vBgS = ta.percentile_linear_interpolation(volume, bubShortW, bubBigP)
+float vBgM = ta.percentile_linear_interpolation(volume, bubMidW,   bubBigP)
+float vBgL = ta.percentile_linear_interpolation(volume, bubLongW,  bubBigP)
+
+float dSmS = ta.percentile_linear_interpolation(absDelta, bubShortW, bubSmallP)
+float dSmM = ta.percentile_linear_interpolation(absDelta, bubMidW,   bubSmallP)
+float dSmL = ta.percentile_linear_interpolation(absDelta, bubLongW,  bubSmallP)
+float dMdS = ta.percentile_linear_interpolation(absDelta, bubShortW, bubMedP)
+float dMdM = ta.percentile_linear_interpolation(absDelta, bubMidW,   bubMedP)
+float dMdL = ta.percentile_linear_interpolation(absDelta, bubLongW,  bubMedP)
+float dBgS = ta.percentile_linear_interpolation(absDelta, bubShortW, bubBigP)
+float dBgM = ta.percentile_linear_interpolation(absDelta, bubMidW,   bubBigP)
+float dBgL = ta.percentile_linear_interpolation(absDelta, bubLongW,  bubBigP)
+
+int needVotes = 2
+if bubConsen == "Any Window"
+    needVotes := 1
+else if bubConsen == "All Windows (strictest)"
+    needVotes := 3
+
+f_votes(bool a, bool b, bool c) =>
+    (a ? 1 : 0) + (b ? 1 : 0) + (c ? 1 : 0)
+
+int vSmall = f_votes(volume >= vSmS, volume >= vSmM, volume >= vSmL)
+int vMed   = f_votes(volume >= vMdS, volume >= vMdM, volume >= vMdL)
+int vBig   = f_votes(volume >= vBgS, volume >= vBgM, volume >= vBgL)
+int dSmall = f_votes(absDelta >= dSmS, absDelta >= dSmM, absDelta >= dSmL)
+int dMed   = f_votes(absDelta >= dMdS, absDelta >= dMdM, absDelta >= dMdL)
+int dBig   = f_votes(absDelta >= dBgS, absDelta >= dBgM, absDelta >= dBgL)
+
+f_qualify(int vv, int dv) =>
+    bool volOk = vv >= needVotes
+    bool delOk = dv >= needVotes
+    bool outq = volOk or delOk
+    if bubDetect == "Volume Only"
+        outq := volOk
+    else if bubDetect == "Delta Only"
+        outq := delOk
+    else if bubDetect == "Volume + Delta"
+        outq := volOk and delOk
+    outq
+
+bool qSmall = bubOn and bubSmallOn and f_qualify(vSmall, dSmall)
+bool qMed   = bubOn and bubMedOn   and f_qualify(vMed,   dMed)
+bool qBig   = bubOn and bubBigOn   and f_qualify(vBig,   dBig)
+
+// Hoisted to global scope: ta.sma must run on every bar, not only on bars where
+// a bubble happens to qualify, or its moving average drifts out of step.
+float bubVolAvg = ta.sma(volume, bubMidW)
+float volRatio  = bubVolAvg > 0 ? volume / bubVolAvg : 0.0
+
+bool candleBuy = close >= open
+bool deltaBuy  = barDelta > 0
+bool bubIsBuy  = candleBuy
+bool bubIsSell = not candleBuy
+bool bubIsMix  = false
+if bubClass == "Delta Direction"
+    bubIsBuy := deltaBuy
+    bubIsSell := not deltaBuy
+else if bubClass == "Both"
+    bubIsBuy  := candleBuy and deltaBuy
+    bubIsSell := not candleBuy and not deltaBuy
+    bubIsMix  := not bubIsBuy and not bubIsSell
+
+color bubCol = bubMixCol
+if bubIsBuy
+    bubCol := bubBuyCol
+else if bubIsSell
+    bubCol := bubSellCol
+
+bool bubAny = qSmall or qMed or qBig
+float bubY = bubAny ? (bubIsSell ? high : low) : na
+
+// Circles sized by tier, exactly as the original stacks them.
+// Small and medium tiers share one plot. The tier is still in the tooltip; the
+// visual distinction that matters is big versus not-big.
+plotshape((qSmall or qMed) and not qBig ? bubY : na, "Bubble Small/Medium", shape.circle,
+     location.absolute, bubCol, size=size.small, force_overlay=true)
+plotshape(qBig ? bubY : na, "Bubble Big", shape.circle,
+     location.absolute, bubCol, size=size.normal, force_overlay=true)
+
+if bubAny and bubLabels
+    string fv = f_volShort(volume)
+    string fd = (barDelta >= 0 ? "+" : "-") + f_volShort(absDelta)
+    string bTxt = fv
+    if bubText == "Delta"
+        bTxt := fd
+    else if bubText == "Ratio"
+        bTxt := str.tostring(volRatio, "#.##") + "x"
+    else if bubText == "Vol + Delta"
+        bTxt := fv + "\n" + fd
+    else if bubText == "Vol + Ratio"
+        bTxt := fv + "\n" + str.tostring(volRatio, "#.##") + "x"
+
+    string tier = qBig ? "BIG" : qMed ? "MEDIUM" : "SMALL"
+    string side = bubIsBuy ? "BUY" : bubIsSell ? "SELL" : "MIXED"
+    f_pushBubLbl(label.new(bar_index, bubY, bTxt, style=label.style_label_center,
+         color=color.new(chart.fg_color, 100), textcolor=chart.fg_color, size=size.small,
+         force_overlay=true,
+         tooltip="── " + tier + " " + side + " ──\nVolume: " + fv + "\nDelta: " + fd +
+              "\nRatio: " + str.tostring(volRatio, "#.##") + "x" +
+              "\nMethod: " + bubDetect + "\nDNA: " + dnaState))
+
+
+
+// ============================================================================
+// 12d2. HIGHER TIMEFRAME VALUE
+// ----------------------------------------------------------------------------
+// A slower profile running beside the main one. The period profile answers
+// "where is value today". This answers "where is value this week" — which is
+// what tells you whether today's balance is itself sitting high or low inside
+// a larger auction. Balance at the top of weekly value is a very different
+// trade from balance at the bottom of it.
+//
+// Deliberately built from CHART bars, not intrabar: a week of 15m bars is 672
+// points already, well past what a profile needs, and it keeps this cheap.
+// ============================================================================
+var array<float> hH = array.new<float>()
+var array<float> hL = array.new<float>()
+var array<float> hV = array.new<float>()
+
+var float htfPoc = na
+var float htfVah = na
+var float htfVal = na
+var bool  htfFirstDone = false
+
+bool htfOn = htfMode != "Off"
+bool htfNew = false
+if htfMode == "Daily"
+    htfNew := chgD
+else if htfMode == "Weekly"
+    htfNew := chgW
+else if htfMode == "Monthly"
+    htfNew := timeframe.change("M")
+
+if htfOn and htfNew
+    [gPoc, gVah, gVal, gHi, gLo, gOk, gBins] = f_profile(hH, hL, hV, profRows, vaPct)
+    if gOk and htfFirstDone
+        htfPoc := gPoc
+        htfVah := gVah
+        htfVal := gVal
+    htfFirstDone := true
+    hH.clear()
+    hL.clear()
+    hV.clear()
+
+if htfOn
+    hH.push(high)
+    hL.push(low)
+    hV.push(nz(volume))
+
+while hH.size() > 6000
+    hH.shift()
+    hL.shift()
+    hV.shift()
+
+// developing HTF value, so the levels are live rather than a week stale
+float htfDevPoc = na
+float htfDevVah = na
+float htfDevVal = na
+if htfOn and barstate.islast
+    [kPoc, kVah, kVal, kHi, kLo, kOk, kBins] = f_profile(hH, hL, hV, profRows, vaPct)
+    if kOk
+        htfDevPoc := kPoc
+        htfDevVah := kVah
+        htfDevVal := kVal
+
+var line lnHPoc = na
+var line lnHVah = na
+var line lnHVal = na
+
+if htfOn and barstate.islast and not na(htfDevPoc)
+    int htL = na(periodStart) ? time : periodStart
+    // same degenerate-line guard as the auction block below
+    if htL >= time
+        htL := na(time[1]) ? time - 60000 : time[1]
+    if na(lnHPoc)
+        lnHPoc := line.new(htL, htfDevPoc, time, htfDevPoc, xloc=xloc.bar_time, color=cHtfPoc, width=2, extend=extend.right, force_overlay=true)
+        lnHVah := line.new(htL, htfDevVah, time, htfDevVah, xloc=xloc.bar_time, color=cHtfVa, width=1, extend=extend.right, force_overlay=true)
+        lnHVal := line.new(htL, htfDevVal, time, htfDevVal, xloc=xloc.bar_time, color=cHtfVa, width=1, extend=extend.right, force_overlay=true)
+    else
+        line.set_xy1(lnHPoc, htL, htfDevPoc)
+        line.set_xy2(lnHPoc, time, htfDevPoc)
+        line.set_xy1(lnHVah, htL, htfDevVah)
+        line.set_xy2(lnHVah, time, htfDevVah)
+        line.set_xy1(lnHVal, htL, htfDevVal)
+        line.set_xy2(lnHVal, time, htfDevVal)
+
+// where does today's value sit inside the bigger auction?
+string htfPos = "n/a"
+if htfOn and not na(htfDevVah) and not na(htfDevVal)
+    if close > htfDevVah
+        htfPos := "above " + htfMode + " value"
+    else if close < htfDevVal
+        htfPos := "below " + htfMode + " value"
+    else
+        htfPos := "inside " + htfMode + " value"
+
+// ============================================================================
+// 12e. VWAP  (anchored, with standard deviation bands)
+// ----------------------------------------------------------------------------
+// VWAP asks the same question the POC does — where was the bulk of trade — but
+// continuously rather than once per period. Anchoring it to the auction period
+// makes VWAP and POC directly comparable: when they diverge, value is still
+// moving; when they converge, the auction has settled.
+// ============================================================================
+bool vwapReset = false
+if vwapAnchor == "Auction Period"
+    vwapReset := isNewPeriod
+else if vwapAnchor == "Daily"
+    vwapReset := chgD
+else if vwapAnchor == "Weekly"
+    vwapReset := chgW
+else
+    vwapReset := chgS
+
+var float vwSumPV  = 0.0
+var float vwSumV   = 0.0
+var float vwSumPV2 = 0.0
+
+float vwSrc = hlc3
+float vwVol = nz(volume)
+if vwapReset
+    vwSumPV  := vwSrc * vwVol
+    vwSumV   := vwVol
+    vwSumPV2 := vwSrc * vwSrc * vwVol
+else
+    vwSumPV  := vwSumPV + vwSrc * vwVol
+    vwSumV   := vwSumV + vwVol
+    vwSumPV2 := vwSumPV2 + vwSrc * vwSrc * vwVol
+
+float vwapVal = vwSumV > 0 ? vwSumPV / vwSumV : na
+float vwapVar = vwSumV > 0 ? vwSumPV2 / vwSumV - vwapVal * vwapVal : 0.0
+float vwapSd  = vwapVar > 0 ? math.sqrt(vwapVar) : 0.0
+
+float vwapU1 = vwapVal + vwapSd * vwapMult1
+float vwapL1 = vwapVal - vwapSd * vwapMult1
+float vwapU2 = vwapVal + vwapSd * vwapMult2
+float vwapL2 = vwapVal - vwapSd * vwapMult2
+
+plot(vwapOn ? vwapVal : na, "VWAP", color=cVwap, linewidth=2, force_overlay=true)
+plot(vwapOn and vwapBands ? vwapU1 : na, "VWAP +1sd", color=cVwapBand, force_overlay=true)
+plot(vwapOn and vwapBands ? vwapL1 : na, "VWAP -1sd", color=cVwapBand, force_overlay=true)
+// The 2-sigma bands were removed. Every force_overlay plot costs TWO of the 64
+// slots (one in the pane, one on the price chart), so these two were worth four
+// — more than the profile histogram — for the least-used levels on the chart.
+// vwapU2 / vwapL2 still exist and still feed the risk layer's target list.
+
+// ============================================================================
+// 12f. FIB LEVELS  —  golden pockets and custom targets
+// ----------------------------------------------------------------------------
+// Drawn with line objects rather than plots, so the whole section costs zero of
+// the 64 plot slots.
+//
+// Worth being clear about what these are: fib levels are geometry, not auction
+// evidence. They carry no volume information at all. Where they earn their
+// place is confluence — a 0.618 that lands on the POC or on a naked POC is
+// worth more than either alone, and a 0.618 sitting in empty space is just a
+// line. Judge them against the profile, not instead of it.
+// ============================================================================
+var array<line>  fibLines  = array.new<line>()
+var array<label> fibLabels = array.new<label>()
+
+float swHi = ta.pivothigh(high, gpPivotLen, gpPivotLen)
+float swLo = ta.pivotlow(low, gpPivotLen, gpPivotLen)
+
+var float lastSwHi = na
+var float lastSwLo = na
+var int   lastSwHiIdx = na
+var int   lastSwLoIdx = na
+
+if not na(swHi)
+    lastSwHi := swHi
+    lastSwHiIdx := bar_index - gpPivotLen
+if not na(swLo)
+    lastSwLo := swLo
+    lastSwLoIdx := bar_index - gpPivotLen
+
+// A 2.64 extension of a large swing can land tens of thousands of points away,
+// or below zero. Drawing it forces the price scale to include it and the chart
+// becomes unusable. Anything at or below zero, or beyond fibMaxDist% of price,
+// is not drawn at all.
+f_fibLine(float y, color c, string txt, int x1, int x2, bool dashed) =>
+    bool sane = false
+    if not na(y)
+        if y > 0
+            if math.abs(y - close) / close * 100 <= fibMaxDist
+                sane := true
+    if sane
+        line ln = line.new(x1, y, x2, y, xloc=xloc.bar_index, color=c, width=1,
+             style=dashed ? line.style_dashed : line.style_solid, force_overlay=true)
+        fibLines.push(ln)
+        fibLabels.push(label.new(x2, y, txt, xloc=xloc.bar_index, style=label.style_label_left,
+             color=color.new(c, 100), textcolor=c, size=size.tiny, force_overlay=true))
+
+if barstate.islast
+    for l in fibLines
+        line.delete(l)
+    fibLines.clear()
+    for lb in fibLabels
+        label.delete(lb)
+    fibLabels.clear()
+
+    if not na(lastSwHi) and not na(lastSwLo)
+        float rng = lastSwHi - lastSwLo
+        if rng > 0
+            int x1 = math.min(nz(lastSwHiIdx, bar_index - gpLookback), nz(lastSwLoIdx, bar_index - gpLookback))
+            int x2 = bar_index + gpExtend
+            // upLegDone = the swing HIGH is the more recent pivot, so the leg
+            // just completed was upward and the pullback comes DOWN from that
+            // high. A 0.618 retracement of a 100->200 leg lands at 138.2, i.e.
+            // high - range*0.618. Verified numerically; the previous variable
+            // name ("downLeg") described the coming pullback, not the leg, and
+            // made the maths look inverted when it was not.
+            bool upLegDone = nz(lastSwHiIdx, 0) > nz(lastSwLoIdx, 0)
+
+            if gpOn
+                float f5   = upLegDone ? lastSwHi - rng * 0.5   : lastSwLo + rng * 0.5
+                float f618 = upLegDone ? lastSwHi - rng * 0.618 : lastSwLo + rng * 0.618
+                float f786 = upLegDone ? lastSwHi - rng * 0.786 : lastSwLo + rng * 0.786
+                float f886 = upLegDone ? lastSwHi - rng * 0.886 : lastSwLo + rng * 0.886
+                f_fibLine(f5,   cGp5,   "0.5",   x1, x2, false)
+                f_fibLine(f618, cGp618, "0.618", x1, x2, false)
+                f_fibLine(f786, cGp786, "0.786", x1, x2, false)
+                f_fibLine(f886, cGp886, "0.886", x1, x2, true)
+
+            if fibTgtOn
+                float base = upLegDone ? lastSwHi : lastSwLo
+                float dir  = upLegDone ? -1.0 : 1.0
+                f_fibLine(base + dir * rng * 1.47,  cFibTgt, "1.47",  x1, x2, true)
+                f_fibLine(base + dir * rng * 1.55,  cFibTgt, "1.55",  x1, x2, true)
+                f_fibLine(base + dir * rng * 2.56,  cFibTgt, "2.56",  x1, x2, true)
+                f_fibLine(base + dir * rng * 2.64,  cFibTgt, "2.64",  x1, x2, true)
+                f_fibLine(base + dir * rng * -0.20, cFibTgt, "-0.20", x1, x2, true)
+                f_fibLine(base + dir * rng * -0.29, cFibTgt, "-0.29", x1, x2, true)
+
+
+// ============================================================================
+// 12g. LINE LABELS + PLAIN-ENGLISH READ
+// ----------------------------------------------------------------------------
+// A line with no name is a line you have to remember. Every level drawn by this
+// script now writes what it is beside itself, and the guidance label at the top
+// says what the auction is doing in words rather than leaving you to assemble
+// it from a dashboard.
+// ============================================================================
+var array<label> lvlLabels = array.new<label>()
+
+// Labels are queued first, then drawn in one pass sorted by price. That lets
+// clustered levels be nudged apart instead of stacking on top of each other,
+// which is what made VWAP / IB / prior POC unreadable when they sat within a
+// few ticks of one another.
+var array<float>  qY = array.new<float>()
+var array<string> qT = array.new<string>()
+var array<color>  qC = array.new<color>()
+
+f_lblSize() =>
+    switch lblSizeIn
+        "Tiny"   => size.tiny
+        "Normal" => size.normal
+        => size.small
+
+f_queue(float y, string nm, color c) =>
+    if lblOn and not na(y)
+        string txt = nm
+        if lblStyle == "Name + Price"
+            txt := nm + "  " + str.tostring(y, format.mintick)
+        else if lblStyle == "Price Only"
+            txt := str.tostring(y, format.mintick)
+        qY.push(y)
+        qT.push(txt)
+        qC.push(c)
+
+float lblAtr = ta.atr(14)
+
+if barstate.islast
+    for lb in lvlLabels
+        label.delete(lb)
+    lvlLabels.clear()
+    qY.clear()
+    qT.clear()
+    qC.clear()
+
+    if aucOn
+        if devOk
+            f_queue(devVah, "VAH  value area high", cVa)
+            f_queue(devPoc, "POC  point of control", cPoc)
+            f_queue(devVal, "VAL  value area low", cVa)
+        if showPrior and not na(priorPoc)
+            f_queue(priorVah, "prior VAH", cPrior)
+            f_queue(priorPoc, "prior POC", cPrior)
+            f_queue(priorVal, "prior VAL", cPrior)
+        if showPrHL and not na(priorHi)
+            f_queue(priorHi, "prior HIGH", cPrHL)
+            f_queue(priorLo, "prior LOW", cPrHL)
+        if showIB and not na(ibH)
+            f_queue(ibH, "IB high  initial balance", cIB)
+            f_queue(ibL, "IB low  initial balance", cIB)
+        if showNpoc and npocPrice.size() > 0
+            for i = 0 to npocPrice.size() - 1
+                float np = npocPrice.get(i)
+                if math.abs(np - close) / close * 100 <= npocMaxDist
+                    f_queue(np, "nPOC  untested", cNpoc)
+        if showLvn and devOk and lvnLines.size() > 0
+            for i = 0 to lvnLines.size() - 1
+                f_queue(line.get_y1(lvnLines.get(i)), "LVN  thin, price moves fast", cLvn)
+    if vwapOn and not na(vwapVal)
+        f_queue(vwapVal, "VWAP", cVwap)
+    if htfOn and not na(htfDevPoc)
+        f_queue(htfDevVah, htfMode + " VAH", cHtfVa)
+        f_queue(htfDevPoc, htfMode + " POC", cHtfPoc)
+        f_queue(htfDevVal, htfMode + " VAL", cHtfVa)
+
+    // draw in ascending price order, nudging apart anything that would collide
+    if qY.size() > 0
+        // NOT named "order" — that is a reserved Pine namespace (order.ascending)
+        array<int> sortIdx = qY.sort_indices(order.ascending)
+        float minGap = lblAtr * 0.45
+        float lastY = na
+        for k = 0 to sortIdx.size() - 1
+            int idx = sortIdx.get(k)
+            float trueY = qY.get(idx)
+            float drawY = trueY
+            if not na(lastY)
+                if drawY - lastY < minGap
+                    drawY := lastY + minGap
+            lastY := drawY
+
+            // style_label_lower_left seats the box ABOVE its anchor, so the
+            // line no longer runs through the middle of the text.
+            lvlLabels.push(label.new(bar_index + lblOffset, drawY, qT.get(idx),
+                 xloc=xloc.bar_index, style=label.style_label_lower_left,
+                 color=color.new(qC.get(idx), 88), textcolor=qC.get(idx),
+                 size=f_lblSize(), force_overlay=true))
+
+            // if it had to move, draw a hairline back to the real level
+            if math.abs(drawY - trueY) > syminfo.mintick
+                lvlLabels.push(label.new(bar_index + lblOffset, trueY, "▬",
+                     xloc=xloc.bar_index, style=label.style_none,
+                     textcolor=color.new(qC.get(idx), 45), size=size.tiny,
+                     force_overlay=true))
+
+// ============================================================================
+// 13. AUCTION DRAWING  (force_overlay puts these on the PRICE chart)
+// ============================================================================
+if barstate.islast and aucOn
+    int tR = time
+    int tL = na(periodStart) ? time : periodStart
+
+    // THE VERTICAL GREY LINE — FOUND.
+    // Every one of these levels is drawn with extend=extend.right. When x1 and
+    // x2 are the SAME timestamp the line has no slope, and Pine renders a
+    // zero-length extended line VERTICALLY, straight down the chart.
+    //
+    // periodStart is set to `time` on every new period. On a DAILY chart with
+    // "24h UTC" mode every bar IS a new period, so periodStart == time on the
+    // last bar and tL == tR. That is why it only appeared on daily, on both BTC
+    // and gold, and vanished when the indicator was switched off.
+    //
+    // Same root cause as the naked POC and LVN lines I fixed earlier; I patched
+    // those two and missed this block, which draws POC, VAH, VAL, prior value,
+    // prior high/low and the initial balance.
+    if tL >= tR
+        tL := na(time[1]) ? time - 60000 : time[1]
+
+    if devOk
+        if na(lnPoc)
+            lnPoc := line.new(tL, devPoc, tR, devPoc, xloc=xloc.bar_time, color=cPoc, width=2, extend=extend.right, force_overlay=true)
+            lnVah := line.new(tL, devVah, tR, devVah, xloc=xloc.bar_time, color=cVa, style=line.style_dashed, extend=extend.right, force_overlay=true)
+            lnVal := line.new(tL, devVal, tR, devVal, xloc=xloc.bar_time, color=cVa, style=line.style_dashed, extend=extend.right, force_overlay=true)
+        else
+            line.set_xy1(lnPoc, tL, devPoc)
+            line.set_xy2(lnPoc, tR, devPoc)
+            line.set_xy1(lnVah, tL, devVah)
+            line.set_xy2(lnVah, tR, devVah)
+            line.set_xy1(lnVal, tL, devVal)
+            line.set_xy2(lnVal, tR, devVal)
+
+    if showPrior and not na(priorPoc)
+        if na(lnPPoc)
+            lnPPoc := line.new(tL, priorPoc, tR, priorPoc, xloc=xloc.bar_time, color=cPrior, width=2, extend=extend.right, force_overlay=true)
+            lnPVah := line.new(tL, priorVah, tR, priorVah, xloc=xloc.bar_time, color=cPrior, style=line.style_dotted, extend=extend.right, force_overlay=true)
+            lnPVal := line.new(tL, priorVal, tR, priorVal, xloc=xloc.bar_time, color=cPrior, style=line.style_dotted, extend=extend.right, force_overlay=true)
+        else
+            line.set_xy1(lnPPoc, tL, priorPoc)
+            line.set_xy2(lnPPoc, tR, priorPoc)
+            line.set_xy1(lnPVah, tL, priorVah)
+            line.set_xy2(lnPVah, tR, priorVah)
+            line.set_xy1(lnPVal, tL, priorVal)
+            line.set_xy2(lnPVal, tR, priorVal)
+
+    if showPrHL and not na(priorHi)
+        if na(lnPrH)
+            lnPrH := line.new(tL, priorHi, tR, priorHi, xloc=xloc.bar_time, color=cPrHL, extend=extend.right, force_overlay=true)
+            lnPrL := line.new(tL, priorLo, tR, priorLo, xloc=xloc.bar_time, color=cPrHL, extend=extend.right, force_overlay=true)
+        else
+            line.set_xy1(lnPrH, tL, priorHi)
+            line.set_xy2(lnPrH, tR, priorHi)
+            line.set_xy1(lnPrL, tL, priorLo)
+            line.set_xy2(lnPrL, tR, priorLo)
+
+    if showIB and not na(ibH) and not na(ibL)
+        if na(lnIbH)
+            lnIbH := line.new(tL, ibH, tR, ibH, xloc=xloc.bar_time, color=cIB, extend=extend.right, force_overlay=true)
+            lnIbL := line.new(tL, ibL, tR, ibL, xloc=xloc.bar_time, color=cIB, extend=extend.right, force_overlay=true)
+        else
+            line.set_xy1(lnIbH, tL, ibH)
+            line.set_xy2(lnIbH, tR, ibH)
+            line.set_xy1(lnIbL, tL, ibL)
+            line.set_xy2(lnIbL, tR, ibL)
+
+    for b in histBoxes
+        box.delete(b)
+    histBoxes.clear()
+
+    if showHist and devOk and devHi > devLo
+        float step = (devHi - devLo) / profRows
+        float mx = devBins.max()
+        if mx > 0
+            for lvl = 0 to profRows - 1
+                int wid = int(math.round(devBins.get(lvl) / mx * histWidth))
+                if wid > 0
+                    float top = devLo + (lvl + 1) * step
+                    float bot = devLo + lvl * step
+                    histBoxes.push(box.new(bar_index + 30, top, bar_index + 30 + wid, bot,
+                         bgcolor=cHist, border_color=color(na), force_overlay=true))
+
+// ============================================================================
+// 14. MOMENTUM WAVES  (WaveTrend)
+// ============================================================================
+float wtSrc = hlc3
+float esa = ta.ema(wtSrc, wtChannel)
+float dev = ta.ema(math.abs(wtSrc - esa), wtChannel)
+float ci  = dev != 0 ? (wtSrc - esa) / (0.015 * dev) : 0.0
+float wt1 = ta.ema(ci, wtAverage)
+float wt2 = ta.sma(wt1, wtMALen)
+float wtDiff = (wt1 - wt2) * vwScale
+
+bool wtCrossUp = ta.crossover(wt1, wt2)
+bool wtCrossDn = ta.crossunder(wt1, wt2)
+
+// ============================================================================
+// 15. MONEY FLOW — all four computed every bar
+// ----------------------------------------------------------------------------
+// Stateful ta.* functions inside a conditional branch do not accumulate
+// history correctly, so the selection happens after the maths, not around it.
+// ============================================================================
+float mfDelta = ta.sma(ta.ema(deltaRatio * 100.0, mfSmooth), math.max(1, int(mfLength / 10)))
+float mfMfi   = ta.sma(ta.mfi(hlc3, mfLength) - 50.0, mfSmooth)
+
+float hlRange = high - low
+float mfm     = hlRange != 0 ? ((close - low) - (high - close)) / hlRange : 0.0
+float mfvSum  = math.sum(mfm * nz(volume), mfLength)
+float volSum  = math.sum(nz(volume), mfLength)
+float mfCmf   = ta.sma(volSum != 0 ? mfvSum / volSum * 100.0 : 0.0, mfSmooth)
+
+// the original — note that volume appears nowhere in this line
+float ogBody = hlRange != 0 ? (close - open) / hlRange : 0.0
+float mfOg   = ta.sma(ogBody * ogMult, mfLength) - ogPosY
+
+float mfRaw = mfOg
+if mfSource == "Volume Delta (intrabar)"
+    mfRaw := mfDelta
+else if mfSource == "Money Flow Index"
+    mfRaw := mfMfi
+else if mfSource == "Chaikin Money Flow"
+    mfRaw := mfCmf
+
+float mfSd = ta.stdev(mfRaw, 200)
+float mfPlot = mfRaw * mfScale
+if mfAutoNorm and mfSd > 0
+    mfPlot := mfRaw / mfSd * 12.0 * mfScale
+bool mfBull = mfRaw > 0
+
+// ============================================================================
+// 16. CVD
+// ============================================================================
+float rollDelta = math.sum(barDelta, cvdRoll)
+
+bool cvdNew = false
+if cvdReset == "Daily"
+    cvdNew := chgD
+else if cvdReset == "Weekly"
+    cvdNew := chgW
+else if cvdReset == "Session"
+    cvdNew := chgS
+
+var float cvdRun = 0.0
+if cvdNew
+    cvdRun := barDelta
+else
+    cvdRun := cvdRun + barDelta
+
+float cvdAcc = cvdReset == "None (rolling)" ? rollDelta : cvdRun
+// Normalised the way the original does it: mapped into a fixed band by its own
+// 300-bar high/low, rather than a z-score. Bounded and predictable, so the line
+// never wanders off the pane.
+float cvdHi = ta.highest(cvdAcc, 300)
+float cvdLo = ta.lowest(cvdAcc, 300)
+float cvdRng = cvdHi - cvdLo
+float cvdNorm = cvdRng > 0 ? -cvdLineScale + (2.0 * cvdLineScale) * ((cvdAcc - cvdLo) / cvdRng) : 0.0
+
+// GREEN rising, RED falling. Nothing else to decode.
+bool cvdRising = ta.change(cvdAcc) >= 0
+color cvdCol = cvdRising ? cCvdUp : cCvdDn
+
+// ============================================================================
+// 17. HIDDEN LINES
+// ============================================================================
+float rsiVal  = ta.rsi(close, rsiLen)
+float rsiPlot = rsiVal - 50.0
+
+// ============================================================================
+// 18. DIVERGENCE ENGINE
+// ----------------------------------------------------------------------------
+// Pivot-confirmed. A pivot is only known divLbR bars after it forms, so markers
+// and lines are placed divLbR bars back. Delayed, not repainting.
+// ============================================================================
+f_inRange(bool cond) =>
+    int bars = ta.barssince(cond == true)
+    divRangeMin <= bars and bars <= divRangeMax
+
+// [bullReg, bearReg, bullHid, bearHid, prevLowVal, prevLowIdx, prevHighVal, prevHighIdx]
+f_divergence(float osc, int lbL, int lbR) =>
+    float pl = ta.pivotlow(osc, lbL, lbR)
+    float ph = ta.pivothigh(osc, lbL, lbR)
+    bool plFound = not na(pl)
+    bool phFound = not na(ph)
+
+    float prevLowV  = ta.valuewhen(plFound, osc[lbR], 1)
+    int   prevLowI  = int(ta.valuewhen(plFound, bar_index[lbR], 1))
+    float prevHighV = ta.valuewhen(phFound, osc[lbR], 1)
+    int   prevHighI = int(ta.valuewhen(phFound, bar_index[lbR], 1))
+
+    // f_inRange depends on ta.barssince, so it must be evaluated unconditionally
+    // and once per side. Calling it inside an `and` chain lets short-circuiting
+    // skip bars, which corrupts the bar count it relies on.
+    bool rngLow  = f_inRange(plFound[1])
+    bool rngHigh = f_inRange(phFound[1])
+
+    float prevLowPrice  = ta.valuewhen(plFound, low[lbR], 1)
+    float prevHighPrice = ta.valuewhen(phFound, high[lbR], 1)
+
+    bool oscHL   = osc[lbR] > prevLowV and rngLow
+    bool priceLL = low[lbR] < prevLowPrice
+    bool bullReg = plFound and oscHL and priceLL
+
+    bool oscLH   = osc[lbR] < prevHighV and rngHigh
+    bool priceHH = high[lbR] > prevHighPrice
+    bool bearReg = phFound and oscLH and priceHH
+
+    bool oscLL   = osc[lbR] < prevLowV and rngLow
+    bool priceHL = low[lbR] > prevLowPrice
+    bool bullHid = plFound and oscLL and priceHL
+
+    bool oscHH   = osc[lbR] > prevHighV and rngHigh
+    bool priceLH = high[lbR] < prevHighPrice
+    bool bearHid = phFound and oscHH and priceLH
+
+    [bullReg, bearReg, bullHid, bearHid, prevLowV, prevLowI, prevHighV, prevHighI]
+
+[wtBull, wtBear, wtBullH, wtBearH, wtPLV, wtPLI, wtPHV, wtPHI] = f_divergence(wt2, divLbL, divLbR)
+[cvBull, cvBear, cvBullH, cvBearH, cvPLV, cvPLI, cvPHV, cvPHI] = f_divergence(cvdNorm, divLbL, divLbR)
+
+bool wtBullDiv = divWt and (wtBull or (divHidden and wtBullH))
+bool wtBearDiv = divWt and (wtBear or (divHidden and wtBearH))
+bool cvBullDiv = divCvd and (cvBull or (divHidden and cvBullH))
+bool cvBearDiv = divCvd and (cvBear or (divHidden and cvBearH))
+
+// ---- divergence LINES connecting the two pivots on the oscillator
+// BUDGET BUG FOUND: these were created with no bookkeeping at all. Pine caps
+// drawings at max_lines_count and silently deletes the OLDEST when it fills —
+// which on a long chart means the value area, naked POC and IB lines get thrown
+// away to make room for old divergence lines. The important levels were being
+// evicted by decoration.
+var array<line> divLineArr = array.new<line>()
+
+f_pushDivLine(line ln) =>
+    divLineArr.push(ln)
+    while divLineArr.size() > divMaxLines
+        line.delete(divLineArr.shift())
+
+if divLines
+    if wtBullDiv
+        f_pushDivLine(line.new(wtPLI, wtPLV, bar_index - divLbR, wt2[divLbR], color=C_UP, width=2))
+    if wtBearDiv
+        f_pushDivLine(line.new(wtPHI, wtPHV, bar_index - divLbR, wt2[divLbR], color=C_DN, width=2))
+    if cvBullDiv
+        f_pushDivLine(line.new(cvPLI, cvPLV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdUp, width=1, style=line.style_dashed))
+    if cvBearDiv
+        f_pushDivLine(line.new(cvPHI, cvPHV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdDn, width=1, style=line.style_dashed))
+
+// ============================================================================
+// 19. GRADED SIGNALS
+// ----------------------------------------------------------------------------
+// The original fires its "gold dot" on a fixed RSI level plus a cross. Here the
+// grade reflects how many independent things agree — momentum, real money flow
+// and absorption — so a weak setup looks weak instead of looking gold.
+// ============================================================================
+bool inOS = wt2 <= wtOS1
+bool inOB = wt2 >= wtOB1
+bool divRecentBull = ta.barssince(wtBullDiv or cvBullDiv) <= 3
+bool divRecentBear = ta.barssince(wtBearDiv or cvBearDiv) <= 3
+
+bool buyB  = wtCrossUp and inOS and mfBull
+bool buyA  = buyB and divRecentBull
+bool sellB = wtCrossDn and inOB and not mfBull
+bool sellA = sellB and divRecentBear
+
+// pBuyA..pSellC removed with the pane's own verdicts. buyA/sellA survive
+// because the alert dispatcher still reports them.
+
+
+// ============================================================================
+// 19b. MARKET STRUCTURE  —  BOS / CHoCH
+// ----------------------------------------------------------------------------
+// The one piece of SMC worth keeping. Everything else it sells you is already
+// in this script under a measured name: naked POC instead of unmitigated order
+// block, low volume node instead of fair value gap, excess instead of liquidity
+// sweep, acceptance outside value instead of break of structure.
+//
+// What structure genuinely adds is a visual skeleton — where the swings are and
+// which break mattered. It is drawn with lines and labels, so it costs nothing
+// from the plot budget.
+//
+//   BOS   — break in the same direction as the prevailing trend. Continuation.
+//   CHoCH — break against it. The first evidence the trend may be over.
+// ============================================================================
+var array<line>  strLines  = array.new<line>()
+var array<label> strLabels = array.new<label>()
+
+float pvHi = ta.pivothigh(high, strLen, strLen)
+float pvLo = ta.pivotlow(low, strLen, strLen)
+
+var float sHi = na, var int sHiIdx = na, var float sHiPrev = na
+var float sLo = na, var int sLoIdx = na, var float sLoPrev = na
+var int   trendDir = 0
+
+// Two helpers rather than one taking na — Pine cannot infer a parameter type
+// from a bare na literal.
+f_pushStrLine(line ln) =>
+    strLines.push(ln)
+    while strLines.size() > strMaxDraw
+        line.delete(strLines.shift())
+
+f_pushStrLabel(label lb) =>
+    strLabels.push(lb)
+    while strLabels.size() > strMaxDraw * 2
+        label.delete(strLabels.shift())
+
+if strOn and not na(pvHi)
+    sHiPrev := sHi
+    sHi := pvHi
+    sHiIdx := bar_index - strLen
+    if strSwings
+        string tag = na(sHiPrev) ? "H" : (pvHi > sHiPrev ? "HH" : "LH")
+        f_pushStrLabel(label.new(sHiIdx, pvHi, tag, xloc=xloc.bar_index,
+             style=label.style_label_down, color=color.new(cSwing, 92),
+             textcolor=cSwing, size=size.tiny, force_overlay=true))
+
+if strOn and not na(pvLo)
+    sLoPrev := sLo
+    sLo := pvLo
+    sLoIdx := bar_index - strLen
+    if strSwings
+        string tag = na(sLoPrev) ? "L" : (pvLo > sLoPrev ? "HL" : "LL")
+        f_pushStrLabel(label.new(sLoIdx, pvLo, tag, xloc=xloc.bar_index,
+             style=label.style_label_up, color=color.new(cSwing, 92),
+             textcolor=cSwing, size=size.tiny, force_overlay=true))
+
+bool bosUp = false
+bool bosDn = false
+bool chochUp = false
+bool chochDn = false
+
+if strOn
+    if not na(sHi) and close > sHi
+        if trendDir < 0
+            chochUp := true
+        else
+            bosUp := true
+        color bc = chochUp ? cChoch : cBos
+        string bt = chochUp ? "CHoCH" : "BOS"
+        f_pushStrLine(line.new(sHiIdx, sHi, bar_index, sHi, xloc=xloc.bar_index,
+             color=bc, style=line.style_dashed, width=1, force_overlay=true))
+        f_pushStrLabel(label.new(bar_index, sHi, bt, xloc=xloc.bar_index,
+             style=label.style_label_down, color=color.new(bc, 80),
+             textcolor=bc, size=size.small, force_overlay=true))
+        trendDir := 1
+        sHi := na
+
+    if not na(sLo) and close < sLo
+        if trendDir > 0
+            chochDn := true
+        else
+            bosDn := true
+        color bc2 = chochDn ? cChoch : cBos
+        string bt2 = chochDn ? "CHoCH" : "BOS"
+        f_pushStrLine(line.new(sLoIdx, sLo, bar_index, sLo, xloc=xloc.bar_index,
+             color=bc2, style=line.style_dashed, width=1, force_overlay=true))
+        f_pushStrLabel(label.new(bar_index, sLo, bt2, xloc=xloc.bar_index,
+             style=label.style_label_up, color=color.new(bc2, 80),
+             textcolor=bc2, size=size.small, force_overlay=true))
+        trendDir := -1
+        sLo := na
+
+
+// ============================================================================
+// 19e. BALANCE AREAS  —  auto-detected, clock-independent
+// ----------------------------------------------------------------------------
+// A balance area is not a calendar event. It starts when the market stops
+// trending and begins rotating, and it ends when someone forces it out. ADX
+// falling through its threshold is the cleanest signal of that transition in
+// pure price terms.
+//
+// The box builds for balBuild bars, then gets its own volume profile. Its POC
+// is where this specific rotation did most of its business, and its edges are
+// what a breakout has to clear. Those are more relevant to the next hour than a
+// value area anchored to midnight.
+//
+// Concept from Low Volatility Profiles [BigBeluga], CC BY-NC-SA 4.0.
+// Reimplemented here rather than copied.
+// ============================================================================
+[_dip, _dim, adxVal] = ta.dmi(balAdxLen, balAdxLen)
+
+var box   balBody   = na
+var box   balFillBx = na
+var int   balStart  = na
+var bool  balActive = false
+var float balHi     = na
+var float balLo     = na
+var float balPoc    = na
+var bool  balArmed  = false
+var array<box>  balBars  = array.new<box>()
+var array<line> balPocLn = array.new<line>()
+
+// REAL BUG FOUND: broken balance boxes were never deleted. Every contraction
+// left two boxes on the chart permanently. Pine evicts the OLDEST drawing when
+// the 500-object cap fills, so these were quietly pushing out the value area
+// and naked POC lines — exactly the leak already fixed for divergence lines.
+var array<box>  balOldBx = array.new<box>()
+
+bool balContract = ta.crossunder(adxVal, balAdxTh)
+
+f_clearBalBars() =>
+    for b in balBars
+        box.delete(b)
+    balBars.clear()
+
+// ---- open a new balance area
+if balOn and balContract and not balActive
+    balStart := bar_index
+    balHi := high
+    balLo := low
+    balActive := true
+    balArmed := false
+    balPoc := na
+    f_clearBalBars()
+    balBody := box.new(bar_index, high, bar_index, low, border_color=cBalBox,
+         bgcolor=color(na), force_overlay=true)
+    balFillBx := box.new(bar_index, high, bar_index, low, border_color=color(na),
+         bgcolor=cBalFill, force_overlay=true)
+
+// ---- build it out
+if balOn and balActive
+    if bar_index - balStart < balBuild
+        balHi := math.max(balHi, high)
+        balLo := math.min(balLo, low)
+    else
+        balArmed := true
+    if not na(balBody)
+        box.set_top(balBody, balHi)
+        box.set_bottom(balBody, balLo)
+        box.set_right(balBody, bar_index + 3)
+        box.set_top(balFillBx, balHi)
+        box.set_bottom(balFillBx, balLo)
+        box.set_right(balFillBx, bar_index)
+
+// ---- profile the balance area (last bar only; the loop is not cheap)
+if balOn and balActive and balArmed and barstate.islast and balHi > balLo
+    f_clearBalBars()
+    float step = (balHi - balLo) / balBins
+    array<float> bBins = array.new<float>(balBins, 0.0)
+    float bDelta = 0.0
+    int look = math.min(bar_index - balStart, 300)
+    for k = 0 to look
+        float c = close[k]
+        float o = open[k]
+        float v = nz(volume[k])
+        bDelta += c > o ? v : -v
+        int bi = math.max(0, math.min(balBins - 1, int((c - balLo) / step)))
+        bBins.set(bi, bBins.get(bi) + v)
+
+    float bMax = bBins.max()
+    if bMax > 0 and balProfile
+        int pocIdx = bBins.indexof(bMax)
+        for i = 0 to balBins - 1
+            float wFrac = bBins.get(i) / bMax
+            int wBars = int(math.round(wFrac * balBuild))
+            if wBars > 0
+                float bl = balLo + step * i
+                float bt = bl + step
+                balBars.push(box.new(balStart, bt, balStart + wBars, bl,
+                     bgcolor=color.from_gradient(wFrac, 0, 1, cBalLo, color.new(cBalPoc, 35)),
+                     border_color=color(na), force_overlay=true))
+        balPoc := balLo + step * (pocIdx + 0.5)
+        box.set_text(balBody, "BALANCE  delta " + (bDelta > 0 ? "+" : "") + str.tostring(bDelta, format.volume))
+        box.set_text_color(balBody, chart.fg_color)
+        box.set_text_size(balBody, size.tiny)
+        box.set_text_halign(balBody, text.align_right)
+        box.set_text_valign(balBody, text.align_top)
+
+// ---- break it
+bool balBreakUp = false
+bool balBreakDn = false
+if balOn and balActive and balArmed
+    if close > balHi
+        balBreakUp := true
+    if close < balLo
+        balBreakDn := true
+
+if balBreakUp or balBreakDn
+    if not na(balBody)
+        box.set_border_style(balBody, line.style_dashed)
+        box.set_border_color(balBody, color.new(cBalBox, 70))
+        box.set_right(balBody, bar_index)
+        box.set_right(balFillBx, bar_index)
+        // retire the broken boxes into a bounded queue and release the handles
+        balOldBx.push(balBody)
+        balOldBx.push(balFillBx)
+        while balOldBx.size() > 12
+            box.delete(balOldBx.shift())
+        balBody := na
+        balFillBx := na
+    // the POC of a broken balance area stays a magnet
+    if not na(balPoc)
+        balPocLn.push(line.new(bar_index, balPoc, bar_index + 1, balPoc, xloc=xloc.bar_index,
+             color=color.new(cBalPoc, 40), style=line.style_dotted, width=1,
+             extend=extend.right, force_overlay=true))
+        while balPocLn.size() > 5
+            line.delete(balPocLn.shift())
+    balActive := false
+    balArmed := false
+
+
+// ============================================================================
+// 19f. CME GAP
+// ----------------------------------------------------------------------------
+// CME Bitcoin futures shut for the weekend; spot and perps do not. Whatever
+// range price covers while CME is closed is untraded ON THE FUTURES BOOK — a
+// genuine single print, and the cleanest real-world example of one.
+// ============================================================================
+float cmeO = request.security(cmeSym, "D", open,  ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
+float cmeC = request.security(cmeSym, "D", close, ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
+
+var array<float> gapTop = array.new<float>()
+var array<float> gapBot = array.new<float>()
+var array<box>   gapBox = array.new<box>()
+
+bool cmeNewDay = not na(cmeO) and cmeO != cmeO[1]
+if cmeOn and cmeNewDay and not na(cmeC[1])
+    float gT = math.max(cmeO, cmeC[1])
+    float gB = math.min(cmeO, cmeC[1])
+    if (gT - gB) / close * 100 >= cmeMin
+        gapTop.push(gT)
+        gapBot.push(gB)
+        gapBox.push(box.new(bar_index, gT, bar_index + 1, gB, bgcolor=cCmeGap,
+             border_color=color.new(cCmeGap, 40), extend=extend.right,
+             text="CME gap", text_color=color.new(chart.fg_color, 30),
+             text_size=size.tiny, text_halign=text.align_left, force_overlay=true))
+        while gapTop.size() > cmeKeep
+            box.delete(gapBox.shift())
+            gapTop.shift()
+            gapBot.shift()
+
+// a gap is closed once price has traded through it
+var int gapFilled = 0
+if gapTop.size() > 0
+    for i = gapTop.size() - 1 to 0
+        if low <= gapTop.get(i) and high >= gapBot.get(i)
+            box.delete(gapBox.get(i))
+            gapBox.remove(i)
+            gapTop.remove(i)
+            gapBot.remove(i)
+            gapFilled += 1
+
+// ============================================================================
+// 19g. SESSION RANGES
+// ----------------------------------------------------------------------------
+// Crypto has no exchange sessions but plenty of session behaviour. London and
+// New York routinely open by running one side of the Asia range. This is the
+// measured version of what ICT calls a killzone.
+// ============================================================================
+f_sessActive(string ss) =>
+    not na(time(timeframe.period, ss, sessTz))
+
+var array<box> sessBoxes = array.new<box>()
+
+f_sessTrack(bool active, bool activePrev, float hiIn, float loIn, color col, string nm) =>
+    var float sHiV = na
+    var float sLoV = na
+    var box   sBx = na
+    if active and not activePrev
+        sHiV := high
+        sLoV := low
+        sBx := box.new(bar_index, high, bar_index, low, bgcolor=col,
+             border_color=color(na), force_overlay=true,
+             text=sessLbl ? nm : "", text_color=color.new(chart.fg_color, 45),
+             text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
+        sessBoxes.push(sBx)
+        while sessBoxes.size() > sessKeep * 3
+            box.delete(sessBoxes.shift())
+    if active and not na(sBx)
+        sHiV := math.max(sHiV, high)
+        sLoV := math.min(sLoV, low)
+        box.set_top(sBx, sHiV)
+        box.set_bottom(sBx, sLoV)
+        box.set_right(sBx, bar_index)
+    [sHiV, sLoV]
+
+bool a1 = sessOn and f_sessActive(sess1)
+bool a2 = sessOn and f_sessActive(sess2)
+bool a3 = sessOn and f_sessActive(sess3)
+[asiaHi, asiaLo] = f_sessTrack(a1, a1[1], high, low, cSess1, "ASIA")
+[lonHi, lonLo]   = f_sessTrack(a2, a2[1], high, low, cSess2, "LONDON")
+[nyHi, nyLo]     = f_sessTrack(a3, a3[1], high, low, cSess3, "NEW YORK")
+
+
+// ============================================================================
+// 19h. RISK LAYER
+// ----------------------------------------------------------------------------
+// The layer that actually decides whether you keep money, and the one this
+// script was missing entirely.
+//
+// Stops here are STRUCTURAL, not an ATR multiple. A long taken off value fails
+// if the low that produced it is taken out — so the stop sits below that low
+// plus a buffer. The target is the next real level the auction must visit: the
+// opposite value edge, or the nearest untested POC.
+//
+// R is computed and drawn BEFORE you act. A 0.6R setup is a losing trade taken
+// slowly, and the minimum-R filter simply refuses to show it.
+// ============================================================================
+float rkAtr = ta.atr(14)
+
+// ---------------------------------------------------------------------------
+// WHY BUYS NEVER FIRED IN AN UPTREND
+// The target used to be the NEAREST level in the trade's direction. In a rally
+// the levels above are close (price is walking into them) while the levels
+// below are far away. So a long got a tiny R and was filtered out, and a short
+// got a huge R and passed — the minimum-R filter was quietly forcing the whole
+// system to trade counter-trend.
+//
+// Now every candidate level is collected and the nearest one that ACTUALLY
+// ACHIEVES the minimum R is chosen. If price is inches from the first level,
+// the trade aims at the next one instead of being discarded.
+// ---------------------------------------------------------------------------
+f_pushCand(array<float> arr, float v) =>
+    if not na(v)
+        arr.push(v)
+
+f_pickUp(float e, float risk) =>
+    array<float> c = array.new<float>()
+    // devVah and htfDevVah are computed on the last bar only. Including them
+    // gave the live bar a target list that no historical bar ever had, so R —
+    // and therefore whether a signal passed the minimum-R filter — differed
+    // between live and reload. Only every-bar levels are used.
+    f_pushCand(c, priorVah)
+    f_pushCand(c, npocUp)
+    f_pushCand(c, priorHi)
+    f_pushCand(c, vwapU1)
+    f_pushCand(c, vwapU2)
+    if balActive
+        f_pushCand(c, balHi)
+    float pick = na
+    if c.size() > 0 and risk > 0
+        c.sort(order.ascending)
+        for i = 0 to c.size() - 1
+            float t = c.get(i)
+            if t > e and (t - e) / risk >= riskMinR
+                pick := t
+                break
+        if na(pick)
+            // The old fallback returned the farthest level even when it failed
+            // minR. rkOkL rejected the signal anyway, so nothing leaked, but
+            // returning na here is cleaner than returning a target we know is
+            // unusable.
+            float far = c.max()
+            if far > e and (far - e) / risk >= riskMinR
+                pick := far
+    pick
+
+f_pickDn(float e, float risk) =>
+    array<float> c = array.new<float>()
+    f_pushCand(c, priorVal)
+    f_pushCand(c, npocDn)
+    f_pushCand(c, priorLo)
+    f_pushCand(c, vwapL1)
+    f_pushCand(c, vwapL2)
+    if balActive
+        f_pushCand(c, balLo)
+    float pick = na
+    if c.size() > 0 and risk > 0
+        c.sort(order.descending)
+        for i = 0 to c.size() - 1
+            float t = c.get(i)
+            if t < e and (e - t) / risk >= riskMinR
+                pick := t
+                break
+        if na(pick)
+            float far = c.min()
+            if far < e and (e - far) / risk >= riskMinR
+                pick := far
+    pick
+
+float rkEntry = close
+float rkMinDist = rkAtr * riskMinStop
+float rkStopL = math.min(ta.lowest(low, riskSwing) - rkAtr * riskBuf, close - rkMinDist)
+float rkStopS = math.max(ta.highest(high, riskSwing) + rkAtr * riskBuf, close + rkMinDist)
+
+float rkRiskL = rkEntry - rkStopL
+float rkRiskS = rkStopS - rkEntry
+float rkTgtL  = f_pickUp(rkEntry, rkRiskL)
+float rkTgtS  = f_pickDn(rkEntry, rkRiskS)
+
+float rkRL = rkRiskL > 0 and not na(rkTgtL) ? (rkTgtL - rkEntry) / rkRiskL : na
+float rkRS = rkRiskS > 0 and not na(rkTgtS) ? (rkEntry - rkTgtS) / rkRiskS : na
+
+bool rkOkL = not na(rkRL) and rkRL >= riskMinR
+bool rkOkS = not na(rkRS) and rkRS >= riskMinR
+
+// ============================================================================
+// 19c. CHART SIGNALS  —  all four layers must agree
+// ----------------------------------------------------------------------------
+// The pane's A/B/C grades are momentum only: a WaveTrend cross with money flow
+// agreeing. That is a trigger, not a trade. On the price chart a signal has to
+// clear all four layers of the hierarchy:
+//
+//   CONTEXT   the regime permits this direction
+//   LOCATION  price is at a value area edge or an untested POC
+//   TRIGGER   a WaveTrend cross fired in the extreme zone, recently
+//   PROOF     money flow, absorption, or a delta divergence backs it
+//
+// There will be far fewer of these than pane signals. That is the entire point.
+// ============================================================================
+float locTol = close * csigTol / 100.0
+
+// ============================================================================
+// WHY THE PREVIOUS VERSION FIRED ON EVERY BAR
+// ----------------------------------------------------------------------------
+// Three of the four gates were not gates at all.
+//
+//   LOCATION was "price is beyond the level". In a downtrend price sits under
+//   VWAP -1sd for days, so that gate was permanently open. A level only means
+//   something when price REACHES it and gets REJECTED — reached and rejected,
+//   not merely passed.
+//
+//   PROOF for a sell was "not mfBull". Money flow is negative roughly half the
+//   time, so that gate was open on a coin flip. The absence of the opposite is
+//   not evidence. Proof now requires something that actually happened: a
+//   divergence, absorption, or money flow CROSSING zero — an event, not a state.
+//
+//   COOLDOWN was six bars, so even a genuine setup re-fired repeatedly through
+//   one swing.
+//
+// A level touched and rejected, a cross, positive evidence and a permitting
+// regime is a rare combination. It should be.
+// ============================================================================
+
+// ---- LOCATION: touched and rejected on this bar
+f_rejUp(float lvl) =>
+    bool outr = false
+    if not na(lvl)
+        // closing back above the level IS the rejection. Also demanding an up
+        // candle threw away most higher-timeframe rejections, where the bar
+        // often closes red after a deep wick.
+        if low <= lvl + locTol and close > lvl
+            if not csigNeedBody or close > open
+                outr := true
+    outr
+
+f_rejDn(float lvl) =>
+    bool outr = false
+    if not na(lvl)
+        if high >= lvl - locTol and close < lvl
+            if not csigNeedBody or close < open
+                outr := true
+    outr
+
+// ---------------------------------------------------------------------------
+// WHY 1m AND 3m SIGNALLED BUT 15m AND 30m DID NOT
+// The rejection had to happen on the SAME BAR as everything else. A 1m chart
+// gets thirty times as many bars as a 30m chart, so it got thirty times as many
+// chances to line that up. The criteria were bar-count dependent, which is the
+// opposite of harmonised.
+//
+// A rejection now stays valid for csigWindow bars, exactly like the trigger, so
+// the same setup registers on every timeframe.
+// ---------------------------------------------------------------------------
+bool rejLowNow = f_rejUp(priorVal) or f_rejUp(npocDn) or f_rejUp(ibL) or f_rejUp(priorLo)
+bool rejHighNow = f_rejDn(priorVah) or f_rejDn(npocUp) or f_rejDn(ibH) or f_rejDn(priorHi)
+if csigVwap
+    if f_rejUp(vwapL1)
+        rejLowNow := true
+    if f_rejDn(vwapU1)
+        rejHighNow := true
+// The developing value area is deliberately NOT used as a signal location. It
+// is computed on the last bar only, so including it gave the live bar a way to
+// trigger that no historical bar ever had — live signals would appear that a
+// reloaded chart could not reproduce. Prior value, VWAP, naked POCs, IB, HTF
+// value and the balance box all exist on every bar, so live and historical
+// behaviour are identical.
+if htfOn
+    if f_rejUp(htfDevVal)
+        rejLowNow := true
+    if f_rejDn(htfDevVah)
+        rejHighNow := true
+if balUseLoc and balActive
+    if f_rejUp(balLo) or f_rejUp(balPoc)
+        rejLowNow := true
+    if f_rejDn(balHi) or f_rejDn(balPoc)
+        rejHighNow := true
+
+bool atLowEdge  = ta.barssince(rejLowNow) <= csigWindow
+bool atHighEdge = ta.barssince(rejHighNow) <= csigWindow
+
+// ---- TRIGGER
+bool crossUpOk = csigZoneOnly ? (wtCrossUp and wt2 <= wtOS1) : wtCrossUp
+bool crossDnOk = csigZoneOnly ? (wtCrossDn and wt2 >= wtOB1) : wtCrossDn
+bool trigBuy  = ta.barssince(crossUpOk) <= csigWindow
+bool trigSell = ta.barssince(crossDnOk) <= csigWindow
+
+// ---- PROOF: an event, never a state
+bool mfTurnUp = ta.crossover(mfRaw, 0)
+bool mfTurnDn = ta.crossunder(mfRaw, 0)
+// LOGIC ERROR FOUND: dnaAbsorb appeared in BOTH proofs. Absorption as computed
+// is directionless, so it satisfied the evidence gate for a buy and a sell at
+// the same time — a free pass to whichever side happened to have the other
+// three gates open. Absorption on an up bar supports buying, on a down bar
+// supports selling; it cannot support both.
+bool absorbUp = dnaAbsorb and close >= open
+bool absorbDn = dnaAbsorb and close <  open
+bool proofBuy  = cvBullDiv or wtBullDiv or absorbUp or mfTurnUp
+bool proofSell = cvBearDiv or wtBearDiv or absorbDn or mfTurnDn
+
+// ---- CONTEXT
+bool ctxBuy  = true
+bool ctxSell = true
+if csigStrict
+    // regimeLive, not regime — the displayed one is blank on historical bars
+    ctxBuy  := not imbDn
+    ctxSell := not imbUp
+
+int gatesBuy  = (ctxBuy ? 1 : 0) + (atLowEdge ? 1 : 0) + (trigBuy ? 1 : 0) + (proofBuy ? 1 : 0)
+int gatesSell = (ctxSell ? 1 : 0) + (atHighEdge ? 1 : 0) + (trigSell ? 1 : 0) + (proofSell ? 1 : 0)
+
+int needGates = 4
+if csigSens == "Standard (3 of 4)"
+    needGates := 3
+else if csigSens == "Loose (location + trigger)"
+    needGates := 2
+
+// location and trigger are never optional, whatever the sensitivity
+bool rawBuySig  = csigOn and atLowEdge  and trigBuy  and gatesBuy  >= needGates
+bool rawSellSig = csigOn and atHighEdge and trigSell and gatesSell >= needGates
+
+// LOGIC ERROR FOUND: these were independent, so a wide bar that touched a low
+// level AND a high level satisfied both location tests and printed BUY and SELL
+// on the same candle. Two contradictory instructions is worse than none.
+// When both sides qualify the evidence is genuinely conflicting, so neither is
+// shown and the ACTION row says so.
+bool sigConflict = rawBuySig and rawSellSig
+if sigConflict
+    rawBuySig := false
+    rawSellSig := false
+if riskOn and riskMinR > 0
+    // a setup whose target is nearer than the stop is not a setup
+    if not rkOkL
+        rawBuySig := false
+    if not rkOkS
+        rawSellSig := false
+
+var int lastBuyBar = -9999
+var int lastSellBar = -9999
+bool chartBuy = false
+bool chartSell = false
+if rawBuySig and bar_index - lastBuyBar > csigCool
+    chartBuy := true
+    lastBuyBar := bar_index
+if rawSellSig and bar_index - lastSellBar > csigCool
+    chartSell := true
+    lastSellBar := bar_index
+
+
+// ---- draw the trade
+// The boxes used to be kept on a rolling queue of twelve, so a trade that had
+// already hit its target or stop kept showing its risk/reward zones for another
+// eleven signals. They are now tied to the trade and deleted the moment it
+// resolves.
+var array<TradeDraw> opDraw = array.new<TradeDraw>()
+
+f_drawTrade(bool isLong, float e, float st, float tg, float rr) =>
+    box tb = box.new(bar_index, tg, bar_index + riskExtend, e, bgcolor=cRiskTgt,
+         border_color=color(na), force_overlay=true)
+    box sb = box.new(bar_index, e, bar_index + riskExtend, st, bgcolor=cRiskStop,
+         border_color=color(na), force_overlay=true)
+    label lb = label.new(bar_index + riskExtend, tg,
+         (isLong ? "LONG " : "SHORT ") + str.tostring(rr, "#.##") + "R\ne " + str.tostring(e, format.mintick) +
+         "\nsl " + str.tostring(st, format.mintick) + "\ntp " + str.tostring(tg, format.mintick),
+         xloc=xloc.bar_index, style=label.style_label_left,
+         color=color.new(#131722, 15), textcolor=isLong ? cBuySig : cSellSig,
+         size=size.tiny, force_overlay=true)
+    opDraw.push(TradeDraw.new(tb, sb, lb))
+
+// ============================================================================
+// 19i. STATISTICS
+// ----------------------------------------------------------------------------
+// Every claim this script makes — poor highs get revisited, excess holds,
+// balance breaks follow through, signals work — is a CLAIM until it is counted
+// on YOUR instrument. This counts them.
+//
+// Read the sample size before the percentage. Under about 20 occurrences these
+// numbers mean nothing at all, and a confident-looking 71% from 7 events is
+// worse than no number.
+// ============================================================================
+var array<float> opEntry = array.new<float>()
+var array<float> opStop  = array.new<float>()
+var array<float> opTgt   = array.new<float>()
+var array<int>   opDir   = array.new<int>()
+var array<int>   opBar   = array.new<int>()
+
+var int sigWin = 0
+var int sigLoss = 0
+var int sigOpen = 0
+var int sigExpired = 0
+
+if chartBuy and not na(rkTgtL)
+    opEntry.push(rkEntry)
+    opStop.push(rkStopL)
+    opTgt.push(rkTgtL)
+    opDir.push(1)
+    opBar.push(bar_index)
+    if riskOn
+        f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
+if chartSell and not na(rkTgtS)
+    opEntry.push(rkEntry)
+    opStop.push(rkStopS)
+    opTgt.push(rkTgtS)
+    opDir.push(-1)
+    opBar.push(bar_index)
+    if riskOn
+        f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
+
+if opEntry.size() > 0
+    for i = opEntry.size() - 1 to 0
+        int d = opDir.get(i)
+        float st = opStop.get(i)
+        float tg = opTgt.get(i)
+        bool done = false
+        if d == 1
+            if low <= st
+                sigLoss += 1
+                done := true
+            else if high >= tg
+                sigWin += 1
+                done := true
+        else
+            if high >= st
+                sigLoss += 1
+                done := true
+            else if low <= tg
+                sigWin += 1
+                done := true
+        // MEASUREMENT ERROR FOUND: a trade that reached neither target nor stop
+        // within the horizon used to be deleted silently. It disappeared from
+        // the denominator entirely, so the win rate was computed only over
+        // trades that resolved — systematically overstating it. Expired trades
+        // are now counted and shown.
+        if not done and bar_index - opBar.get(i) > statHorizon
+            sigExpired += 1
+            done := true
+        if done
+            // remove the drawings with the trade — this is the cleanup that was
+            // missing, which is why finished trades kept showing their boxes
+            if riskOn and opDraw.size() > i
+                TradeDraw td = opDraw.get(i)
+                box.delete(td.tgtBox)
+                box.delete(td.stopBox)
+                label.delete(td.info)
+                opDraw.remove(i)
+            opEntry.remove(i)
+            opStop.remove(i)
+            opTgt.remove(i)
+            opDir.remove(i)
+            opBar.remove(i)
+sigOpen := opEntry.size()
+
+// ---- does a POOR extreme really get revisited?
+var int poorHiTotal = 0
+var int poorHiHit = 0
+var int poorLoTotal = 0
+var int poorLoHit = 0
+var float poorHiLvl = na
+var int poorHiBar = na
+var float poorLoLvl = na
+var int poorLoBar = na
+
+if isNewPeriod and priorHighQual == "POOR" and not na(priorHiLvl)
+    poorHiLvl := priorHiLvl
+    poorHiBar := bar_index
+    poorHiTotal += 1
+if not na(poorHiLvl)
+    if high >= poorHiLvl
+        poorHiHit += 1
+        poorHiLvl := na
+    else if bar_index - poorHiBar > statHorizon
+        poorHiLvl := na
+
+if isNewPeriod and priorLowQual == "POOR" and not na(priorLoLvl)
+    poorLoLvl := priorLoLvl
+    poorLoBar := bar_index
+    poorLoTotal += 1
+if not na(poorLoLvl)
+    if low <= poorLoLvl
+        poorLoHit += 1
+        poorLoLvl := na
+    else if bar_index - poorLoBar > statHorizon
+        poorLoLvl := na
+
+// ---- does a balance break actually follow through?
+var int balTotal = 0
+var int balHold = 0
+var float balBrkLvl = na
+var int balBrkBar = na
+var int balBrkDir = 0
+if balBreakUp or balBreakDn
+    balTotal += 1
+    balBrkLvl := balBreakUp ? balHi : balLo
+    balBrkBar := bar_index
+    balBrkDir := balBreakUp ? 1 : -1
+if not na(balBrkLvl)
+    float need = rkAtr * 1.5
+    if balBrkDir == 1
+        if close > balBrkLvl + need
+            balHold += 1
+            balBrkLvl := na
+        else if close < balBrkLvl
+            balBrkLvl := na
+    else
+        if close < balBrkLvl - need
+            balHold += 1
+            balBrkLvl := na
+        else if close > balBrkLvl
+            balBrkLvl := na
+    if not na(balBrkLvl) and bar_index - balBrkBar > statHorizon
+        balBrkLvl := na
+
+f_pct(int hit, int tot) =>
+    tot > 0 ? str.tostring(math.round(hit / tot * 100)) + "%  (" + str.tostring(tot) + ")" : "—"
+
+var table stat = table.new(f_tablePos(statPos), 2, 9, bgcolor=cTblBg,
+     border_color=color.new(#000000, 75), border_width=1,
+     frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
+
+// Pine requires functions at global scope — this cannot live inside the if
+// block that uses it.
+f_pair2(int r, string k, string v, color c) =>
+    table.cell(stat, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(stat, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+if statOn and barstate.islast
+    table.cell(stat, 0, 0, "MEASURED ON THIS CHART", text_color=cTxt, text_size=size.tiny, text_halign=text.align_left)
+    table.cell(stat, 1, 0, str.tostring(statHorizon) + "b", text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
+
+    int sigTot = sigWin + sigLoss
+    int sigAll = sigWin + sigLoss + sigExpired
+    f_pair2(1, "Hit target (resolved)", f_pct(sigWin, sigTot), sigTot < 20 ? C_NE : (sigWin * 2 > sigTot ? C_UP : C_DN))
+    f_pair2(2, "Hit target (all)", f_pct(sigWin, sigAll), sigAll < 20 ? C_NE : C_WN)
+    f_pair2(3, "Win/Loss/Expired", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" + str.tostring(sigExpired), C_NE)
+    f_pair2(4, "Poor high revisited", f_pct(poorHiHit, poorHiTotal), poorHiTotal < 20 ? C_NE : C_WN)
+    f_pair2(5, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
+    f_pair2(6, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
+    f_pair2(7, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
+
+// THE ONLY MARKER THAT MEANS "TRADE". A labelled box, not a triangle, so it can
+// never be mistaken for the DNA or momentum annotations around it.
+// ---- TAKE PROFIT
+// The previous build had no take-profit logic anywhere — I checked. But the
+// risk layer already computes a structural target, so the honest version is to
+// mark the bar where an open trade actually reaches it.
+var array<float> tpLvl = array.new<float>()
+var array<int>   tpDir = array.new<int>()
+var array<int>   tpBar = array.new<int>()
+bool tpHit = false
+if chartBuy and not na(rkTgtL)
+    tpLvl.push(rkTgtL)
+    tpDir.push(1)
+    tpBar.push(bar_index)
+if chartSell and not na(rkTgtS)
+    tpLvl.push(rkTgtS)
+    tpDir.push(-1)
+    tpBar.push(bar_index)
+if tpLvl.size() > 0
+    for i = tpLvl.size() - 1 to 0
+        float t = tpLvl.get(i)
+        int d = tpDir.get(i)
+        bool reached = (d == 1 and high >= t) or (d == -1 and low <= t)
+        bool stale = bar_index - tpBar.get(i) > statHorizon
+        if reached
+            tpHit := true
+        if reached or stale
+            tpLvl.remove(i)
+            tpDir.remove(i)
+            tpBar.remove(i)
+    while tpLvl.size() > 20
+        tpLvl.shift()
+        tpDir.shift()
+        tpBar.shift()
+
+plotshape(tpHit ? close : na, "TAKE PROFIT", shape.xcross, location.absolute,
+     color=#00e676, size=size.small, text="TP", textcolor=#00e676, force_overlay=true)
+
+plotshape(chartBuy ? low : na, "CHART BUY", shape.labelup, location.belowbar,
+     color=cBuySig, text="BUY", textcolor=#000000, size=size.normal, force_overlay=true)
+plotshape(chartSell ? high : na, "CHART SELL", shape.labeldown, location.abovebar,
+     color=cSellSig, text="SELL", textcolor=#ffffff, size=size.normal, force_overlay=true)
+
+
+// ============================================================================
+// 19j. THE PLAIN-ENGLISH READ
+// ----------------------------------------------------------------------------
+// Moved here deliberately. It reports chartBuy / chartSell, which are not
+// computed until the signal section above — reading them from section 12g meant
+// referencing variables that did not exist yet. Pine resolves strictly top to
+// bottom, so anything that summarises the whole picture has to come last.
+// ============================================================================
+// ---- the plain-English read
+var label guideLbl = na
+if guideOn and barstate.islast
+    label.delete(guideLbl)
+
+    string headline = "WAITING — not enough data yet"
+    color  headCol = C_NE
+    if regime == "BALANCE"
+        headline := "BALANCE — two-way auction. Fade the edges back to POC."
+        headCol := C_UP
+    else if regime == "IMBALANCE"
+        headline := "IMBALANCE — value is moving. Go with it, do not fade."
+        headCol := C_WN
+    else if regime == "TRANSITION"
+        headline := "TRANSITION — the auction has not decided. Stand down."
+        headCol := C_NE
+
+    string whereTxt = "inside value"
+    if posVsValue == "ABOVE value"
+        whereTxt := "above value (expensive)"
+    else if posVsValue == "BELOW value"
+        whereTxt := "below value (cheap)"
+
+    string doTxt = ""
+    if regime == "BALANCE"
+        if posVsValue == "ABOVE value"
+            doTxt := "\nSELL side favoured back toward POC " + (devOk ? str.tostring(devPoc, format.mintick) : "")
+        else if posVsValue == "BELOW value"
+            doTxt := "\nBUY side favoured back toward POC " + (devOk ? str.tostring(devPoc, format.mintick) : "")
+        else
+            doTxt := "\nMid-value. Wait for an edge — VAH or VAL."
+    else if regime == "IMBALANCE"
+        doTxt := "\nTarget the untested POC: " + (na(npocUp) ? "—" : str.tostring(npocUp, format.mintick)) + " up / " + (na(npocDn) ? "—" : str.tostring(npocDn, format.mintick)) + " down"
+
+    string htfLine = ""
+    if htfOn and htfPos != "n/a"
+        htfLine := "\nZoomed out: price is " + htfPos + "."
+
+    string extremes = ""
+    if highQual == "POOR"
+        extremes += "\nHigh is POOR — unfinished, expect a revisit up."
+    else if highQual == "EXCESS"
+        extremes += "\nHigh is EXCESS — finished, rejection was real."
+    if lowQual == "POOR"
+        extremes += "\nLow is POOR — unfinished, expect a revisit down."
+    else if lowQual == "EXCESS"
+        extremes += "\nLow is EXCESS — finished, rejection was real."
+
+    string dnaTxt = ""
+    if dnaAbsorb
+        dnaTxt := "\nABSORPTION now — someone is soaking up this level."
+    else if dnaExhaust
+        dnaTxt := "\nEXHAUSTION now — this move has no volume behind it."
+
+    string actLine = ""
+    if chartBuy
+        actLine := "\n>>> BUY SIGNAL — all four gates open."
+    else if chartSell
+        actLine := "\n>>> SELL SIGNAL — all four gates open."
+
+    guideLbl := label.new(bar_index + lblOffset + guideGap, high + lblAtr * 2, headline + actLine +
+         "\nPrice is " + whereTxt + " · day type " + dayType + doTxt + htfLine + extremes + dnaTxt,
+         xloc=xloc.bar_index, style=label.style_label_left,
+         color=color.new(#131722, 12), textcolor=headCol, size=f_lblSize(),
+         force_overlay=true)
+
+// ============================================================================
+// 19d. OPEN INTEREST & FUNDING
+// ----------------------------------------------------------------------------
+// The last thing this system could not see, and for perpetuals it is the most
+// important. Price alone cannot distinguish a short squeeze from genuine
+// buying — both go up. Open interest can:
+//
+//   price up   + OI up     new longs opening. Real demand, risk building.
+//   price up   + OI down   shorts covering. A squeeze. Tends to stall.
+//   price down + OI up     new shorts opening. Real supply.
+//   price down + OI down   longs closing or liquidated. A flush.
+//
+// ignore_invalid_symbol keeps this safe on instruments with no OI feed — it
+// returns na instead of killing the script.
+// ============================================================================
+string oiTicker = syminfo.prefix + ":" + syminfo.ticker + "_OI"
+float oiClose = request.security(oiTicker, timeframe.period, close, ignore_invalid_symbol=true)
+
+string fSymEff = fundSym == "" ? syminfo.tickerid : fundSym
+float fundVal = request.security(fSymEff, timeframe.period, close, ignore_invalid_symbol=true)
+bool fundOk = fundSym != "" and not na(fundVal)
+
+bool oiOk = oiOn and not na(oiClose)
+float oiChg = oiOk ? oiClose - nz(oiClose[1], oiClose) : 0.0
+float oiChgMean = ta.sma(oiChg, 50)
+float oiChgSd = ta.stdev(oiChg, 50)
+float oiChgZ = oiChgSd > 0 ? (oiChg - oiChgMean) / oiChgSd : 0.0
+
+float priceChg = close - close[1]
+
+string oiState = "—"
+color  oiCol = C_NE
+if oiOk
+    if oiChg > 0 and priceChg > 0
+        oiState := "Longs opening"
+        oiCol := cOiUp
+    else if oiChg > 0 and priceChg < 0
+        oiState := "Shorts opening"
+        oiCol := cOiDn
+    else if oiChg < 0 and priceChg > 0
+        oiState := "Shorts covering"
+        oiCol := C_WN
+    else if oiChg < 0 and priceChg < 0
+        oiState := "Longs closing"
+        oiCol := C_WN
+
+// A wide bar on collapsing OI is forced closing, not conviction. These
+// overshoot, which is why they so often print the excess tail at the extreme.
+bool liqCascade = false
+if liqOn and oiOk
+    if oiChgZ < -liqOiZ and spreadZ > liqSprZ
+        liqCascade := true
+
+
+// OI histogram plot removed. It was off by default but a declared plot costs a
+// slot whether or not it draws, and it was the clutter behind the money flow
+// waves. The OI reading you need is the dashboard row.
+
+plotshape(liqCascade ? high : na, "Liquidation Cascade", shape.xcross, location.abovebar,
+     color=cLiq, size=size.small, force_overlay=true)
+
+// ============================================================================
+// 20. PANE PLOTS — drawn back to front in the order you described
+// ============================================================================
+hline(0, "Zero", color=cZeroLine)
+hOB1 = hline(wtOB1, "Overbought", color=cObOs, linestyle=hline.style_dotted)
+hOB2 = hline(wtOB2, "Extreme OB", color=cObOs, linestyle=hline.style_dotted)
+hOS1 = hline(wtOS1, "Oversold",   color=cObOs, linestyle=hline.style_dotted)
+hOS2 = hline(wtOS2, "Extreme OS", color=cObOs, linestyle=hline.style_dotted)
+
+// Shaded extreme zones. You should see "we are stretched" without reading a
+// number off the scale.
+// Barely-there shading. The original marks these with thin dotted lines only;
+// my slabs were heavy enough to read as another data series.
+fill(hOB1, hOB2, color=color.new(C_DN, 95), title="Overbought Zone")
+fill(hOS1, hOS2, color=color.new(C_UP, 95), title="Oversold Zone")
+
+// --- LAYER 1: momentum waves, behind everything
+// The area plots double as the fill anchors — separate line plots would cost
+// two more of the 64 available.
+// CLASSIC MARKET CIPHER B LAYERING
+// Area style is correct — it is what makes the waves read as waves. The mud
+// came from my colours, not the style: two similar-brightness blues at 45%
+// transparency overlapping into soup.
+//
+// The classic does it with contrast. The SLOW wave is dark navy and recedes;
+// the FAST wave is bright cyan and sits on top; you read the cross by watching
+// the bright one climb out of the dark one. Drawn slow-first so fast is above.
+//
+// No fill between them either — the original carries direction in the green/red
+// VWAP wave, and a third shaded band between the waves is exactly what made
+// this pane unreadable.
+// THE ORIGINAL'S KEY MOVE: the momentum waves are DARK GREY, almost black.
+// They recede and act as background, which is what lets the cyan, green and red
+// near zero read clearly on top of them. Bright blue waves dominated the pane
+// and everything else had to fight them.
+//
+// No outline. The zoomed original has none — the waves are pure dark fill, and
+// the bright edge I added was pulling the eye back to the thing that is meant
+// to recede.
+plot(wt2, "Slow Wave", style=plot.style_area, color=cSlowWave)
+plot(wt1, "Fast Wave", style=plot.style_area, color=cFastWave)
+
+// --- LAYER 2: VWAP wave (cyan) — BEHIND the money flow
+// The close-up of the original settles the order: cyan is the wider, softer
+// shape underneath, and the green/red money flow sits on top of it almost
+// opaque. I had these reversed, which washed the money flow out.
+plot(showVwap ? wtDiff : na, "VWAP Wave", style=plot.style_area,
+     color=wtDiff > 0 ? cVwapUp : cVwapDn)
+
+// --- LAYER 3: money flow, opaque, in front
+plot(mfShow ? mfPlot : na, "Money Flow", style=plot.style_area,
+     color=mfBull ? cMfiBull : cMfiBear)
+
+// --- LAYER 4 and 5: hidden by default
+plot(showRsi ? rsiPlot : na, "RSI", color=color.new(#ffffff, 45), linewidth=1)
+// Stoch RSI plot removed — redundant with RSI, and both were hidden anyway.
+
+// --- LAYER 6: CVD, in front
+plot(cvdShow ? cvdNorm : na, "CVD", color=cvdCol, linewidth=2)
+
+// --- LAYER 7: dots, divergence markers, signals
+// Up and down variants are merged into single plots with a dynamic colour.
+// Six plots became three, which is what keeps the script under the 64 limit.
+// plotshape's "size" argument must be a CONST string — a ternary makes it a
+// series string and the script will not compile. So the two sizes are two
+// separate plots rather than one plot with a computed size.
+
+// The MCB Dots Filter setting was declared but never consumed — changing it did
+// nothing. It now actually filters which crosses get a dot.
+bool dotsPass = true
+if dotsFilter == "Extreme Waves (< -20 / > +20)"
+    dotsPass := (wtCrossUp and wt2 < -20.0) or (wtCrossDn and wt2 > 20.0)
+else if dotsFilter == "Money Flow Direction"
+    dotsPass := (wtCrossUp and mfBull) or (wtCrossDn and not mfBull)
+else if dotsFilter == "Extreme Waves + Money Flow"
+    dotsPass := (wtCrossUp and wt2 < -20.0 and mfBull) or (wtCrossDn and wt2 > 20.0 and not mfBull)
+
+
+// The original plots dots as CIRCLES on the slow wave, sized by linewidth.
+// linewidth must be a constant, so a big and a small version are separate
+// plots — which is also how the size ends up carrying meaning.
+bool dotBuy  = wtCrossUp and dotsPass
+bool dotSell = wtCrossDn and dotsPass
+// ta.barssince COUNTS BARS, so it has to run on every one of them. Sitting on
+// the right of an `or` it can be short-circuited away, and the count silently
+// drifts. Hoisted to global scope — the same mistake that was in f_inRange.
+//
+// The leading "wtBullDiv or cvBullDiv" was also redundant: barssince returns 0
+// on the bar the divergence fires, which <= 3 already covers.
+int barsSinceBullDiv = ta.barssince(wtBullDiv or cvBullDiv)
+int barsSinceBearDiv = ta.barssince(wtBearDiv or cvBearDiv)
+
+bool dotBuyBig  = dotBuy  and barsSinceBullDiv <= 3
+bool dotSellBig = dotSell and barsSinceBearDiv <= 3
+
+bool ribbonBull = trendDir > 0 ? true : trendDir < 0 ? false : wt1 > wt2
+
+// TREND RIBBON
+// The red/green strip along the bottom of the original pane. Two invisible
+// anchor plots with a fill between them, which is exactly how the old build did
+// it. Green when structure is bullish, red when bearish; it falls back to the
+// wave relationship before the first swing is confirmed.
+rb1 = plot(ribbonOn ? ribbonTop : na, "Ribbon Top", color=color.new(#000000, 100), display=display.none)
+rb2 = plot(ribbonOn ? ribbonBot : na, "Ribbon Bot", color=color.new(#000000, 100), display=display.none)
+fill(rb1, rb2, color=ribbonBull ? cRibbonUp : cRibbonDn, title="Trend Ribbon")
+
+plot(dotBuy and not dotBuyBig ? wt2 : na, "Buy Dot", color=cBuyDot, style=plot.style_circles, linewidth=4)
+plot(dotSell and not dotSellBig ? wt2 : na, "Sell Dot", color=cSellDot, style=plot.style_circles, linewidth=4)
+
+// BIG dot = a cross with a divergence behind it. This is the one to look for.
+plot(dotBuyBig ? wt2 : na, "Buy Dot BIG (divergence)", color=cBuyDot, style=plot.style_circles, linewidth=9)
+plot(dotSellBig ? wt2 : na, "Sell Dot BIG (divergence)", color=cSellDot, style=plot.style_circles, linewidth=9)
+
+// A cross inside an extreme zone is the one worth seeing — drawn large, so the
+// size itself carries the meaning.
+
+// Yellow for divergence, as in the original — the one marker that should catch
+// your eye in the pane.
+plotshape(wtBullDiv or wtBearDiv ? wt2[divLbR] : na, "WT Divergence", shape.circle, location.absolute,
+     color=wtBullDiv ? #ffea00 : #ffea00, size=size.tiny, offset=-divLbR)
+plotshape(cvBullDiv or cvBearDiv ? cvdNorm[divLbR] : na, "CVD Absorption", shape.diamond, location.absolute,
+     color=cvBullDiv ? C_GLD : #ff7043, size=size.tiny, offset=-divLbR)
+
+// Grade A keeps its own labelled marker. B and C share one plot, separated by
+// colour depth rather than by shape.
+// The pane's own A/B/C verdicts have been REMOVED. They judged momentum alone,
+// so they routinely said "buy" while the chart correctly said nothing — and you
+// were left choosing between two of my own opinions.
+//
+// The pane now describes. The chart decides. One BUY label, one SELL label,
+// and nothing else on either surface claims to be a trade.
+
+// --- VOLUME DNA markers, pushed onto the PRICE chart
+plotshape(dnaAbsorb or dnaExhaust ? 1 : na, "Absorption / Exhaustion", shape.square,
+     location.abovebar, color=dnaAbsorb ? cAbs : cExh, size=size.tiny, force_overlay=true)
+// Circles, not triangles. These describe VOLUME BEHAVIOUR, they are not calls
+// to act, and they were being confused with the buy/sell markers.
+// Merged into one plot with a dynamic price and colour — saves two slots.
+plotshape(dnaEffortB or dnaEffortS ? (dnaEffortB ? low : high) : na, "Effort",
+     shape.circle, location.absolute, color=dnaEffortB ? cEffB : cEffS,
+     size=size.tiny, force_overlay=true)
+// Exhaustion shares the marker above, coloured differently — see the dashboard
+// DNA row and the barcode tape to tell them apart at a glance.
+// Stagnation is the "nothing happening" quadrant — it still appears in the tape
+// and the dashboard, but it does not earn a chart marker or a plot slot.
+
+// ============================================================================
+// 21. COMBINED DASHBOARD  (4 columns to stay compact in the pane)
+// ============================================================================
+// force_overlay lifts the dashboard onto the PRICE chart instead of leaving it
+// stacked beside the oscillator in the lower pane.
+var table dash = table.new(f_tablePos(tblPos), 4, 18, bgcolor=cTblBg,
+     border_color=color.new(#000000, 75), border_width=1,
+     frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
+
+f_pair(int r, int c, string k, string v, color vc) =>
+    table.cell(dash, c, r, k, text_color=color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, c + 1, r, v, text_color=vc, text_size=size.tiny, text_halign=text.align_right)
+
+if showTable and barstate.islast
+    string modeTag = "Daily"
+    if periodMode == "RTH Session (futures)"
+        modeTag := "RTH"
+    else if periodMode == "24h UTC (crypto)"
+        modeTag := "UTC"
+    else if periodMode == "Weekly"
+        modeTag := "Week"
+
+    string srcTag = "OG (no vol)"
+    if mfSource == "Volume Delta (intrabar)"
+        srcTag := deltaOfficial ? deltaTf + " delta*" : (ltfPresent ? ltfEff + " delta" : "chart delta")
+    if not useLtf
+        srcTag := "chart delta (no LTF)"
+    else if mfSource == "Money Flow Index"
+        srcTag := "MFI"
+    else if mfSource == "Chaikin Money Flow"
+        srcTag := "CMF"
+
+    color regCol = C_NE
+    if regime == "IMBALANCE"
+        regCol := C_WN
+    else if regime == "BALANCE"
+        regCol := C_UP
+
+    color posCol = C_NE
+    if posVsValue == "ABOVE value"
+        posCol := C_UP
+    else if posVsValue == "BELOW value"
+        posCol := C_DN
+
+    color relCol = C_NE
+    if vaRelation == "Higher value"
+        relCol := C_UP
+    else if vaRelation == "Lower value"
+        relCol := C_DN
+
+    color hiCol = C_NE
+    if highQual == "POOR"
+        hiCol := C_WN
+    else if highQual == "EXCESS"
+        hiCol := C_UP
+    color loCol = C_NE
+    if lowQual == "POOR"
+        loCol := C_WN
+    else if lowQual == "EXCESS"
+        loCol := C_UP
+
+    string zone = "Mid"
+    if wt2 >= wtOB2
+        zone := "Extreme OB"
+    else if wt2 >= wtOB1
+        zone := "Overbought"
+    else if wt2 <= wtOS2
+        zone := "Extreme OS"
+    else if wt2 <= wtOS1
+        zone := "Oversold"
+    color zoneCol = C_NE
+    if wt2 >= wtOB1
+        zoneCol := C_DN
+    if wt2 <= wtOS1
+        zoneCol := C_UP
+
+    string divTxt = "—"
+    color divCol = C_NE
+    if divRecentBull
+        divTxt := "Bullish"
+        divCol := C_UP
+    else if divRecentBear
+        divTxt := "Bearish"
+        divCol := C_DN
+
+    table.cell(dash, 0, 0, "AUCTION CIPHER", text_color=cTxt, text_size=size.small, text_halign=text.align_left)
+    table.cell(dash, 1, 0, modeTag, text_color=color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_right)
+
+    f_pair(1, 0, "Regime",   regime, regCol)
+    f_pair(1, 2, "Wave",     wt1 > wt2 ? "Bullish" : "Bearish", wt1 > wt2 ? C_UP : C_DN)
+    f_pair(2, 0, "Day type", dayType, dayType == "Trend day" ? C_WN : C_NE)
+    f_pair(2, 2, "Zone",     zone, zoneCol)
+    f_pair(3, 0, "Open",     openType, C_NE)
+    f_pair(3, 2, "WT2",      str.tostring(wt2, "#.#"), C_NE)
+    f_pair(4, 0, "Position", posVsValue, posCol)
+    f_pair(4, 2, "Flow",     str.tostring(mfRaw, "#.##"), mfBull ? C_UP : C_DN)
+    f_pair(5, 0, "Vs prior", vaRelation, relCol)
+    f_pair(5, 2, "Delta",    str.tostring(deltaRatio * 100, "#.#") + "%", deltaRatio > 0 ? C_UP : C_DN)
+    f_pair(6, 0, "POC",      devOk ? str.tostring(devPoc, format.mintick) : "—", cPoc)
+    f_pair(6, 2, "CVD",      str.tostring(cvdNorm, "#.#"), cvdNorm > 0 ? C_UP : C_DN)
+    f_pair(7, 0, "VAH",      devOk ? str.tostring(devVah, format.mintick) : "—", cVa)
+    f_pair(7, 2, "Diverge",  divTxt, divCol)
+    f_pair(8, 0, "VAL",      devOk ? str.tostring(devVal, format.mintick) : "—", cVa)
+    f_pair(8, 2, "IB ext",   ibExt, C_NE)
+    f_pair(9, 0, "High",     highQual, hiCol)
+    f_pair(9, 2, "Low",      lowQual, loCol)
+    f_pair(10, 0, "nPOC up", na(npocUp) ? "—" : str.tostring(npocUp, format.mintick), cNpoc)
+    f_pair(10, 2, "nPOC dn", na(npocDn) ? "—" : str.tostring(npocDn, format.mintick), cNpoc)
+    f_pair(11, 0, "DNA",     dnaState, dnaCol)
+    f_pair(11, 2, "Vol z",   str.tostring(volZ, "#.#") + " / spr " + str.tostring(spreadZ, "#.#"), volZ > dnaVolTh ? C_WN : C_NE)
+    string vwTxt = "—"
+    color  vwCol = C_NE
+    if not na(vwapVal)
+        vwTxt := str.tostring(vwapVal, format.mintick)
+        vwCol := close > vwapVal ? C_UP : C_DN
+    f_pair(12, 0, "VWAP", vwTxt, vwCol)
+    int barsPer = curH.size()
+    bool tooCoarse = barsPer < 10
+    f_pair(12, 2, "Profile", tooCoarse ? "TOO FEW BARS" : (ltfOk ? ltfEff + " intra" : "chart bars"),
+         tooCoarse ? C_DN : C_UP)
+    f_pair(13, 0, "Open int", oiOk ? oiState : "no OI feed", oiCol)
+    f_pair(13, 2, "OI z", oiOk ? str.tostring(oiChgZ, "#.#") : "—", math.abs(oiChgZ) > 1.5 ? C_WN : C_NE)
+    f_pair(14, 0, "Structure", trendDir > 0 ? "Bullish" : trendDir < 0 ? "Bearish" : "—",
+         trendDir > 0 ? C_UP : trendDir < 0 ? C_DN : C_NE)
+    f_pair(14, 2, "Funding", fundOk ? str.tostring(fundVal, "#.####") : "—", C_NE)
+    color htfCol = C_NE
+    if str.contains(htfPos, "above")
+        htfCol := C_UP
+    else if str.contains(htfPos, "below")
+        htfCol := C_DN
+    f_pair(15, 0, "HTF value", htfPos, htfCol)
+    f_pair(15, 2, htfMode + " POC", na(htfDevPoc) ? "—" : str.tostring(htfDevPoc, format.mintick), cHtfPoc)
+
+    // Which gates are currently open, so a silent chart is explainable
+    string gBuy = (ctxBuy ? "C" : "·") + (atLowEdge ? "L" : "·") + (trigBuy ? "T" : "·") + (proofBuy ? "P" : "·")
+    string gSell = (ctxSell ? "C" : "·") + (atHighEdge ? "L" : "·") + (trigSell ? "T" : "·") + (proofSell ? "P" : "·")
+    f_pair(16, 0, "Buy gates", gBuy + "  " + str.tostring(gatesBuy) + "/" + str.tostring(needGates),
+         gatesBuy >= needGates ? C_UP : C_NE)
+    // ACTION — the single authoritative line. Everything else on both surfaces
+    // is description; this is the only thing that says trade.
+    string actTxt = "WAIT"
+    color  actCol = C_NE
+    if sigConflict
+        actTxt := "CONFLICT — both sides qualified"
+        actCol := C_WN
+    else if chartBuy
+        actTxt := "BUY  " + (na(rkRL) ? "" : str.tostring(rkRL, "#.#") + "R")
+        actCol := cBuySig
+    else if chartSell
+        actTxt := "SELL  " + (na(rkRS) ? "" : str.tostring(rkRS, "#.#") + "R")
+        actCol := cSellSig
+    else if gatesBuy >= needGates - 1 and atLowEdge
+        actTxt := "buy setting up"
+        actCol := C_UP
+    else if gatesSell >= needGates - 1 and atHighEdge
+        actTxt := "sell setting up"
+        actCol := C_DN
+    f_pair(0, 2, "ACTION", actTxt, actCol)
+
+    string balTxt = balActive ? (balArmed ? "ARMED " + str.tostring(balLo, format.mintick) + "-" + str.tostring(balHi, format.mintick) : "forming") : "none"
+    f_pair(17, 0, "Balance area", balTxt, balActive and balArmed ? C_WN : C_NE)
+    f_pair(17, 2, "ADX", str.tostring(adxVal, "#.#"), adxVal < balAdxTh ? C_NE : C_UP)
+    f_pair(16, 2, "Sell gates", gSell + "  " + str.tostring(gatesSell) + "/" + str.tostring(needGates),
+         gatesSell >= needGates ? C_DN : C_NE)
+
+// ============================================================================
+// 22. ALERTS
+// ============================================================================
+bool inValNow = false
+bool inValPrev = false
+if not na(priorVah) and not na(priorVal)
+    inValNow := close <= priorVah and close >= priorVal
+    inValPrev := close[1] <= priorVah and close[1] >= priorVal
+bool backInValue = inValNow and not inValPrev
+
+bool acceptAbove = false
+bool acceptBelow = false
+if not na(priorVah)
+    acceptAbove := close > priorVah and close[1] > priorVah and close[2] > priorVah and close[3] <= priorVah
+if not na(priorVal)
+    acceptBelow := close < priorVal and close[1] < priorVal and close[2] < priorVal and close[3] >= priorVal
+
+// ----------------------------------------------------------------------------
+// These use alert() rather than alertcondition(). alertcondition costs one of
+// the 64 plot slots EACH — thirteen of them were quietly consuming a fifth of
+// the budget. alert() costs nothing.
+//
+// Setup differs slightly: create ONE alert on this indicator and choose
+// "Any alert() function call". Every event below then arrives through it, and
+// the message tells you which one fired. One alert instead of thirteen.
+// ----------------------------------------------------------------------------
+string alertMsg = ""
+
+if buyA
+    alertMsg += "GRADE A BUY — cross up in oversold, money flow positive, divergence present. "
+if sellA
+    alertMsg += "GRADE A SELL — cross down in overbought, money flow negative, divergence present. "
+if buyB and not buyA
+    alertMsg += "Grade B buy — cross up in oversold with money flow agreement. "
+if sellB and not sellA
+    alertMsg += "Grade B sell — cross down in overbought with money flow agreement. "
+if acceptAbove
+    alertMsg += "ACCEPTANCE ABOVE VALUE — three closes above prior VAH, balance to imbalance. "
+if acceptBelow
+    alertMsg += "ACCEPTANCE BELOW VALUE — three closes below prior VAL, balance to imbalance. "
+if backInValue
+    alertMsg += "Rotation back into prior value area. "
+if cvBullDiv
+    alertMsg += "CVD ABSORPTION BULL — price lower low, CVD higher low, sellers not being paid. "
+if cvBearDiv
+    alertMsg += "CVD ABSORPTION BEAR — price higher high, CVD lower high, buyers not being paid. "
+if dnaAbsorb
+    alertMsg += "VOLUME DNA ABSORPTION — high volume, narrow spread" + (dnaAtEdge ? " at a value area edge" : "") + ". "
+if dnaExhaust
+    alertMsg += "VOLUME DNA EXHAUSTION — low volume, wide spread, the move is running on empty. "
+if balBreakUp
+    alertMsg += "BALANCE BREAK UP — the rotation resolved higher. "
+if balBreakDn
+    alertMsg += "BALANCE BREAK DOWN — the rotation resolved lower. "
+if liqCascade
+    alertMsg += "LIQUIDATION CASCADE — open interest collapsing on a wide bar, forced closing not conviction. "
+if chartBuy
+    alertMsg += "CHART BUY — context, location, trigger and proof all agree. "
+if chartSell
+    alertMsg += "CHART SELL — context, location, trigger and proof all agree. "
+if chochUp
+    alertMsg += "CHoCH up — structure shifted bullish. "
+if chochDn
+    alertMsg += "CHoCH down — structure shifted bearish. "
+if qBig
+    alertMsg += "BIG volume cluster. "
+else if qMed
+    alertMsg += "Medium volume cluster. "
+
+if alertMsg != ""
+    alert(str.tostring(syminfo.ticker) + " " + timeframe.period + " | " + alertMsg, alert.freq_once_per_bar_close)
