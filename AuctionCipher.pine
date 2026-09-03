@@ -260,6 +260,11 @@ float riskMinStop = input.float(0.6, "Minimum Stop Distance (x ATR)", minval=0.1
      tooltip="Floor on how close the stop may sit. Without it, a tight recent low produced an enormous R that passed the minimum-R filter automatically — rewarding the stops most likely to be taken out.")
 float riskMinR  = input.float(1.5, "Minimum R to Show Signal", minval=0.0, maxval=10.0, group=G_RISK,
      tooltip="Signals whose target is closer than this multiple of the risk are not drawn. A 0.6R setup is a losing trade taken slowly — better never to see it.")
+string riskFill = input.string("Next bar open (realistic)", "Assumed Fill",
+     options=["Next bar open (realistic)", "Signal bar close (optimistic)"], group=G_RISK,
+     tooltip="Where the statistics assume you actually got filled.\n\nThe signal is only KNOWN at the close of its bar, so you cannot have bought at that close — the first price available to you is the next bar's open. Measuring from the signal bar's close quietly credits you with a fill nobody could have taken, and overstates expectancy by that distance on every single trade.\n\nLeave this on the realistic setting unless you are comparing against something that measures the optimistic way.")
+float riskSlipT = input.float(0.0, "Slippage (ticks)", minval=0.0, maxval=200.0, group=G_RISK,
+     tooltip="Applied against you on entry — buys fill higher, sells fill lower. Set it to what your venue actually costs you and the expectancy row becomes something you can trust.")
 int   riskExtend= input.int(25, "Box Extend (bars)", minval=5, maxval=200, group=G_RISK)
 color cRiskStop = input.color(color.new(#ef5350, 78), "Stop Zone", group=G_RISK)
 color cRiskTgt  = input.color(color.new(#26a69a, 78), "Target Zone", group=G_RISK)
@@ -2243,9 +2248,9 @@ if (balBreakUp or balBreakDn) and barClosed
 // range price covers while CME is closed is untraded ON THE FUTURES BOOK — a
 // genuine single print, and the cleanest real-world example of one.
 // ============================================================================
-// dayofweek comes along in the same request so the weekend gap can be told
-// apart from an ordinary daily open gap — one request, not two.
-[cmeO, cmeC, cmeDow] = request.security(cmeSym, "D", [open, close, dayofweek],
+// The session timestamp comes along in the same request so a weekend gap can be
+// told apart from an ordinary daily open gap — one request, not two.
+[cmeO, cmeC, cmeT] = request.security(cmeSym, "D", [open, close, time],
      ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
 
 var array<float> gapTop = array.new<float>()
@@ -2253,9 +2258,15 @@ var array<float> gapBot = array.new<float>()
 var array<box>   gapBox = array.new<box>()
 
 bool cmeNewDay = not na(cmeO) and cmeO != cmeO[1]
-// The CME daily bar that opens Sunday evening is labelled Monday, so the gap
-// spans the weekend exactly when the PREVIOUS completed CME day was a Friday.
-bool cmeWeekendGap = not na(cmeDow) and cmeDow[1] == dayofweek.friday
+// Testing "was the previous CME day a Friday" breaks on any holiday that shuts
+// the book on a Friday — Good Friday most obviously. The last session before
+// that weekend is a Thursday and a genuine multi-day gap goes unrecorded.
+//
+// Measuring the actual time between consecutive CME sessions has no such
+// blind spot. A normal day-to-day step is 24 hours; anything past 40 means the
+// futures book was shut for a weekend or a holiday, whichever it was.
+float cmeStepH = na(cmeT) ? na : (cmeT - nz(cmeT[1], cmeT)) / 3600000.0
+bool cmeWeekendGap = not na(cmeStepH) and cmeStepH >= 40
 if cmeOn and cmeNewDay and not na(cmeC[1]) and barClosed and (not cmeWeekOnly or cmeWeekendGap)
     float gT = math.max(cmeO, cmeC[1])
     float gB = math.min(cmeO, cmeC[1])
@@ -2458,10 +2469,20 @@ var float sumRealR = 0.0
 var float sumPlanR = 0.0
 var int   nClosed  = 0
 var int sigFlat = 0
+var int sigSkip = 0
 
-// What is live right now, as of the close of the previous bar.
-bool anyLongOpen  = false
-bool anyShortOpen = false
+// A signal is known at its bar's CLOSE, so the earliest price anyone could
+// actually trade is the next bar's OPEN. These hold a signal for that one bar.
+var bool  pendLong  = false
+var bool  pendShort = false
+var float pendStop  = na
+var float pendTgt   = na
+
+// What is live right now, as of the close of the previous bar. A pending
+// signal counts as a commitment — otherwise a second one could fire in the
+// gap between the signal and its fill.
+bool anyLongOpen  = pendLong
+bool anyShortOpen = pendShort
 if opDir.size() > 0
     for i = 0 to opDir.size() - 1
         if opDir.get(i) == 1
@@ -2636,15 +2657,24 @@ if csigVwap
     if f_rejDn(vwapU1)
         rejHighNow := true
 // The developing value area is deliberately NOT used as a signal location. It
-// is computed on the last bar only, so including it gave the live bar a way to
+// is computed on the last bar only, so including it gives the live bar a way to
 // trigger that no historical bar ever had — live signals would appear that a
-// reloaded chart could not reproduce. Prior value, VWAP, naked POCs, IB, HTF
-// value and the balance box all exist on every bar, so live and historical
-// behaviour are identical.
+// reloaded chart could not reproduce.
+//
+// THE COMMENT HERE USED TO CLAIM HTF VALUE WAS SAFE. IT WAS NOT. htfDevVah and
+// htfDevVal are built inside the same barstate.islast guard as devVah/devVal,
+// so on every historical bar they are na and contribute nothing, while on the
+// live bar they can open the location gate. That is precisely the live-only
+// signal this section exists to prevent, and it was sitting under a comment
+// asserting the opposite.
+//
+// htfVah / htfVal — the last COMPLETED higher-timeframe value area — are set at
+// each HTF rollover and do exist on every bar. They were computed and then
+// never used. They are the correct levels for a gate.
 if htfOn
-    if f_rejUp(htfDevVal)
+    if f_rejUp(htfVal)
         rejLowNow := true
-    if f_rejDn(htfDevVah)
+    if f_rejDn(htfVah)
         rejHighNow := true
 if balUseLoc and balActive
     if f_rejUp(balLo) or f_rejUp(balPoc)
@@ -2837,26 +2867,65 @@ if closeOnReversal and barClosed and opEntry.size() > 0
             opRisk.remove(i)
             opRPlan.remove(i)
 
+bool fillNextOpen = riskFill == "Next bar open (realistic)"
+
+// ---- fill whatever was pending, at THIS bar's open. The stop and target are
+// structural levels chosen by the auction, so they do not move with the fill —
+// but R does, and R computed from a price you could actually get is the only
+// honest one.
+if barClosed and (pendLong or pendShort)
+    float slip  = riskSlipT * syminfo.mintick
+    float fillP = pendLong ? open + slip : open - slip
+    float fRisk = pendLong ? fillP - pendStop : pendStop - fillP
+    float fR    = fRisk > 0 ? (pendLong ? pendTgt - fillP : fillP - pendTgt) / fRisk : na
+    // if the market opened past the stop, or the move to the open ate enough of
+    // the edge that the setup no longer clears its own minimum, it is not a
+    // trade any more. Counted, not hidden.
+    if not na(fR) and fR >= riskMinR
+        opEntry.push(fillP)
+        opStop.push(pendStop)
+        opTgt.push(pendTgt)
+        opDir.push(pendLong ? 1 : -1)
+        opBar.push(bar_index)
+        opRisk.push(fRisk)
+        opRPlan.push(fR)
+        if riskOn
+            f_drawTrade(pendLong, fillP, pendStop, pendTgt, fR)
+    else
+        sigSkip += 1
+    pendLong  := false
+    pendShort := false
+
 if chartBuy and not na(rkTgtL) and barClosed
-    opEntry.push(rkEntry)
-    opStop.push(rkStopL)
-    opTgt.push(rkTgtL)
-    opDir.push(1)
-    opBar.push(bar_index)
-    opRisk.push(rkRiskL)
-    opRPlan.push(rkRL)
-    if riskOn
-        f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
+    if fillNextOpen
+        pendLong := true
+        pendStop := rkStopL
+        pendTgt  := rkTgtL
+    else
+        opEntry.push(rkEntry)
+        opStop.push(rkStopL)
+        opTgt.push(rkTgtL)
+        opDir.push(1)
+        opBar.push(bar_index)
+        opRisk.push(rkRiskL)
+        opRPlan.push(rkRL)
+        if riskOn
+            f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
 if chartSell and not na(rkTgtS) and barClosed
-    opEntry.push(rkEntry)
-    opStop.push(rkStopS)
-    opTgt.push(rkTgtS)
-    opDir.push(-1)
-    opBar.push(bar_index)
-    opRisk.push(rkRiskS)
-    opRPlan.push(rkRS)
-    if riskOn
-        f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
+    if fillNextOpen
+        pendShort := true
+        pendStop  := rkStopS
+        pendTgt   := rkTgtS
+    else
+        opEntry.push(rkEntry)
+        opStop.push(rkStopS)
+        opTgt.push(rkTgtS)
+        opDir.push(-1)
+        opBar.push(bar_index)
+        opRisk.push(rkRiskS)
+        opRPlan.push(rkRS)
+        if riskOn
+            f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
 
 if opEntry.size() > 0 and barClosed
     for i = opEntry.size() - 1 to 0
@@ -3003,7 +3072,8 @@ f_pair2(int r, string k, string v, color c) =>
 
 if statOn and barstate.islast
     table.cell(stat, 0, 0, "MEASURED ON THIS CHART", text_color=cTxt, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(stat, 1, 0, str.tostring(statHorizon) + "b", text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
+    table.cell(stat, 1, 0, str.tostring(statHorizon) + "b" + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " gapped" : ""),
+         text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
 
     int sigTot = sigWin + sigLoss
     int sigAll = sigWin + sigLoss + sigExpired + sigFlat
