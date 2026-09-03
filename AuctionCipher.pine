@@ -2578,6 +2578,13 @@ var int sigExpired = 0
 var float sumRealR = 0.0
 var float sumPlanR = 0.0
 var int   nClosed  = 0
+// Total R alone cannot say WHERE the money went. Splitting realised R by how
+// each trade ended separates an edge that is not there from an edge that is
+// being given back by the exits.
+var float sumRWin  = 0.0
+var float sumRLoss = 0.0
+var float sumRExp  = 0.0
+var float sumRFlat = 0.0
 var int sigFlat = 0
 var int sigSkip = 0
 
@@ -2977,7 +2984,9 @@ if closeOnReversal and barClosed and opEntry.size() > 0
         if invalid
             float rk = opRisk.get(i)
             float en = opEntry.get(i)
-            sumRealR += rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
+            float flatR = rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
+            sumRealR += flatR
+            sumRFlat += flatR
             sumPlanR += nz(opRPlan.get(i))
             nClosed  += 1
             sigFlat  += 1
@@ -3090,25 +3099,30 @@ if opEntry.size() > 0 and barClosed
         // is marked to market. Every closed trade contributes, so the average
         // is the real one and not a survivor's.
         float realR = 0.0
+        int   outc  = 0
         if d == 1
             if low <= st
                 sigLoss += 1
                 realR := -1.0
+                outc  := 2
                 done := true
             else if high >= tg
                 sigWin += 1
                 tpHit  := true
                 realR := opRPlan.get(i)
+                outc  := 1
                 done := true
         else
             if high >= st
                 sigLoss += 1
                 realR := -1.0
+                outc  := 2
                 done := true
             else if low <= tg
                 sigWin += 1
                 tpHit  := true
                 realR := opRPlan.get(i)
+                outc  := 1
                 done := true
         // MEASUREMENT ERROR FOUND: a trade that reached neither target nor stop
         // within the horizon used to be deleted silently. It disappeared from
@@ -3118,6 +3132,7 @@ if opEntry.size() > 0 and barClosed
         if not done and bar_index - opBar.get(i) > statHorizon
             sigExpired += 1
             realR := rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
+            outc  := 3
             done := true
         if done
             // remove the drawings with the trade — this is the cleanup that was
@@ -3129,6 +3144,12 @@ if opEntry.size() > 0 and barClosed
                 label.delete(td.info)
                 opDraw.remove(i)
             sumRealR += realR
+            if outc == 1
+                sumRWin += realR
+            else if outc == 2
+                sumRLoss += realR
+            else
+                sumRExp += realR
             sumPlanR += nz(opRPlan.get(i))
             nClosed  += 1
             opEntry.remove(i)
@@ -3212,7 +3233,7 @@ f_pct(int hit, int tot) =>
     // only ever read 0% or 100%. Multiplying first keeps it in floating point.
     tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "—"
 
-var table stat = table.new(f_tablePos(statPos), 2, 12, bgcolor=cTblBg,
+var table stat = table.new(f_tablePos(statPos), 2, 14, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -3238,11 +3259,19 @@ if statOn and barstate.islast
     f_pair2(4, "Expectancy  R/trade", na(expectR) ? "—" : str.tostring(expectR, "#.##") + "R", expCol)
     f_pair2(5, "Total R", na(expectR) ? "—" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
     f_pair2(6, "Avg R targeted", na(avgPlanR) ? "—" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
-    f_pair2(7, "Poor high revisited", f_pct(poorHiHit, poorHiTotal), poorHiTotal < 20 ? C_NE : C_WN)
-    f_pair2(8, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
-    f_pair2(9, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
-    f_pair2(10, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
-    f_pair2(11, "Signals still open", str.tostring(sigOpen), C_NE)
+    // WHERE the R went. If wins minus losses is positive while the total is
+    // not, the entries are finding an edge and the EXITS are handing it back.
+    f_pair2(7, "R  win / loss",
+         (sumRWin >= 0 ? "+" : "") + str.tostring(sumRWin, "#.#") + " / " + str.tostring(sumRLoss, "#.#"),
+         sumRWin + sumRLoss > 0 ? C_UP : C_DN)
+    f_pair2(8, "R  expired / flat",
+         str.tostring(sumRExp, "#.#") + " / " + str.tostring(sumRFlat, "#.#"),
+         sumRExp + sumRFlat > 0 ? C_UP : C_DN)
+    f_pair2(9, "Poor high revisited", f_pct(poorHiHit, poorHiTotal), poorHiTotal < 20 ? C_NE : C_WN)
+    f_pair2(10, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
+    f_pair2(11, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
+    f_pair2(12, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
+    f_pair2(13, "Signals still open", str.tostring(sigOpen), C_NE)
 
 // THE ONLY MARKERS THAT MEAN "TRADE". Labelled boxes, not triangles, so they
 // can never be mistaken for the DNA or momentum annotations around them.
