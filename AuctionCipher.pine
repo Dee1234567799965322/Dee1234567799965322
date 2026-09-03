@@ -2882,6 +2882,18 @@ f_drawTrade(bool isLong, float e, float st, float tg, float rr) =>
 // ---- a fully qualified opposite signal invalidates the open thesis. Close it
 // at market and book whatever R it actually made, rather than leaving it to
 // drift to a stop the setup no longer supports.
+// A pending order is a commitment the gate already counts, but it is not in
+// the ledger yet, so the loop below could never reach it. Without this, the
+// system would decide the opposite side had won and then still buy the next
+// open on an order it had already disowned.
+if closeOnReversal and barClosed
+    if pendLong and wantSell
+        pendLong := false
+        sigSkip  += 1
+    if pendShort and wantBuy
+        pendShort := false
+        sigSkip   += 1
+
 if closeOnReversal and barClosed and opEntry.size() > 0
     for i = opEntry.size() - 1 to 0
         int d = opDir.get(i)
@@ -2913,27 +2925,43 @@ bool fillNextOpen = riskFill == "Next bar open (realistic)"
 // structural levels chosen by the auction, so they do not move with the fill —
 // but R does, and R computed from a price you could actually get is the only
 // honest one.
-if barClosed and (pendLong or pendShort)
-    float slip  = riskSlipT * syminfo.mintick
-    float fillP = pendLong ? open + slip : open - slip
-    float fRisk = pendLong ? fillP - pendStop : pendStop - fillP
-    float fR    = fRisk > 0 ? (pendLong ? pendTgt - fillP : fillP - pendTgt) / fRisk : na
-    // if the market opened past the stop, or the move to the open ate enough of
-    // the edge that the setup no longer clears its own minimum, it is not a
-    // trade any more. Counted, not hidden.
-    if not na(fR) and fR >= riskMinR
+//
+// Long and short are filled by SEPARATE blocks. To be accurate about why: the
+// two can never currently both be pending, because a same-bar conflict is
+// suppressed upstream and the fill always clears the flag before a new signal
+// can set one. So this is not fixing an observed bug — it is removing a shared
+// pendStop / pendTgt trap that a single shared block depended on, which would
+// have silently dropped one of the two the moment that upstream guard changed.
+float fillSlip = riskSlipT * syminfo.mintick
+
+// returns true if the fill was taken
+f_fillPending(bool isLong, float st, float tg) =>
+    float fillP = isLong ? open + fillSlip : open - fillSlip
+    float fRisk = isLong ? fillP - st : st - fillP
+    float fR    = fRisk > 0 ? (isLong ? tg - fillP : fillP - tg) / fRisk : na
+    bool taken = not na(fR) and fR >= riskMinR
+    if taken
         opEntry.push(fillP)
-        opStop.push(pendStop)
-        opTgt.push(pendTgt)
-        opDir.push(pendLong ? 1 : -1)
+        opStop.push(st)
+        opTgt.push(tg)
+        opDir.push(isLong ? 1 : -1)
         opBar.push(bar_index)
         opRisk.push(fRisk)
         opRPlan.push(fR)
         if riskOn
-            f_drawTrade(pendLong, fillP, pendStop, pendTgt, fR)
-    else
+            f_drawTrade(isLong, fillP, st, tg, fR)
+    taken
+
+// if the market opened past the stop, or the move to the open ate enough of the
+// edge that the setup no longer clears its own minimum, it is not a trade any
+// more. Counted as unfilled, not hidden.
+if barClosed and pendLong
+    if not f_fillPending(true, pendStop, pendTgt)
         sigSkip += 1
-    pendLong  := false
+    pendLong := false
+if barClosed and pendShort
+    if not f_fillPending(false, pendStop, pendTgt)
+        sigSkip += 1
     pendShort := false
 
 if chartBuy and not na(rkTgtL) and barClosed
@@ -2967,6 +2995,12 @@ if chartSell and not na(rkTgtS) and barClosed
         if riskOn
             f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
 
+// The take-profit marker is derived from THIS loop rather than from a second
+// parallel ledger of its own. That duplicate ledger was pushed at signal time,
+// so once fills moved to the next open it could mark a target reached for a
+// trade that was never actually taken.
+bool tpHit = false
+
 if opEntry.size() > 0 and barClosed
     for i = opEntry.size() - 1 to 0
         int d = opDir.get(i)
@@ -2987,6 +3021,7 @@ if opEntry.size() > 0 and barClosed
                 done := true
             else if high >= tg
                 sigWin += 1
+                tpHit  := true
                 realR := opRPlan.get(i)
                 done := true
         else
@@ -2996,6 +3031,7 @@ if opEntry.size() > 0 and barClosed
                 done := true
             else if low <= tg
                 sigWin += 1
+                tpHit  := true
                 realR := opRPlan.get(i)
                 done := true
         // MEASUREMENT ERROR FOUND: a trade that reached neither target nor stop
@@ -3112,7 +3148,7 @@ f_pair2(int r, string k, string v, color c) =>
 
 if statOn and barstate.islast
     table.cell(stat, 0, 0, "MEASURED ON THIS CHART", text_color=cTxt, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(stat, 1, 0, str.tostring(statHorizon) + "b" + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " gapped" : ""),
+    table.cell(stat, 1, 0, str.tostring(statHorizon) + "b" + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
          text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
 
     int sigTot = sigWin + sigLoss
@@ -3132,41 +3168,10 @@ if statOn and barstate.islast
     f_pair2(10, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
     f_pair2(11, "Signals still open", str.tostring(sigOpen), C_NE)
 
-// THE ONLY MARKER THAT MEANS "TRADE". A labelled box, not a triangle, so it can
-// never be mistaken for the DNA or momentum annotations around it.
-// ---- TAKE PROFIT
-// The previous build had no take-profit logic anywhere — I checked. But the
-// risk layer already computes a structural target, so the honest version is to
-// mark the bar where an open trade actually reaches it.
-var array<float> tpLvl = array.new<float>()
-var array<int>   tpDir = array.new<int>()
-var array<int>   tpBar = array.new<int>()
-bool tpHit = false
-if chartBuy and not na(rkTgtL) and barClosed
-    tpLvl.push(rkTgtL)
-    tpDir.push(1)
-    tpBar.push(bar_index)
-if chartSell and not na(rkTgtS) and barClosed
-    tpLvl.push(rkTgtS)
-    tpDir.push(-1)
-    tpBar.push(bar_index)
-if tpLvl.size() > 0 and barClosed
-    for i = tpLvl.size() - 1 to 0
-        float t = tpLvl.get(i)
-        int d = tpDir.get(i)
-        bool reached = (d == 1 and high >= t) or (d == -1 and low <= t)
-        bool stale = bar_index - tpBar.get(i) > statHorizon
-        if reached
-            tpHit := true
-        if reached or stale
-            tpLvl.remove(i)
-            tpDir.remove(i)
-            tpBar.remove(i)
-    while tpLvl.size() > 20
-        tpLvl.shift()
-        tpDir.shift()
-        tpBar.shift()
-
+// THE ONLY MARKERS THAT MEAN "TRADE". Labelled boxes, not triangles, so they
+// can never be mistaken for the DNA or momentum annotations around them.
+// TP is now set by the trade ledger itself, so it can only ever fire for a
+// trade that was actually filled.
 plotshape(tpHit ? close : na, "TAKE PROFIT", shape.xcross, location.absolute,
      color=#00e676, size=size.small, text="TP", textcolor=#00e676, force_overlay=true)
 
