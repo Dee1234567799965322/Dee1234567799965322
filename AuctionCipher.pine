@@ -251,7 +251,7 @@ bool   cmeOn_in   = input.bool(true, "Show CME Gaps", group=G_CME,
      tooltip="CME Bitcoin futures close for the weekend; spot and perps do not. The range price travelled while CME was shut is genuinely UNTRADED on the futures book — a single print in auction terms, and the cleanest example of one you will find.\n\nIf the symbol does not resolve it is ignored rather than breaking the script.")
 string cmeSym  = input.string("CME:BTC1!", "CME Symbol", group=G_CME)
 bool   cmeWeekOnly = input.bool(true, "Weekend Gaps Only", group=G_CME,
-     tooltip="THE fix for a gap count in the hundreds. The detector fires on every CME daily open gap, and BTC gaps the daily open constantly — those are not what anyone means by 'the CME gap'.\n\nWith this ON only the Friday-close to Sunday-open gap counts, which is the one that is genuinely untraded on the futures book.")
+     tooltip="THE fix for a gap count in the hundreds. The detector fires on every CME daily open gap, and BTC gaps the daily open constantly — those are not what anyone means by 'the CME gap'.\n\nWith this ON, a gap only counts when the futures book was actually SHUT across it. That is measured from the real time between consecutive CME sessions rather than by looking for a Friday, so a holiday closure — Good Friday, Christmas, Thanksgiving — is caught the same way a normal weekend is.")
 float  cmeMin  = input.float(0.5, "Minimum Gap (%)", minval=0.01, maxval=5.0, group=G_CME)
 int    cmeKeep = input.int(6, "Max Open Gaps", minval=1, maxval=20, group=G_CME)
 color  cCmeGap = input.color(color.new(#9c27b0, 82), "Gap Color", group=G_CME)
@@ -1005,10 +1005,18 @@ if rangeHist.size() > 0
 // ---------------------------------------------------------------------------
 var float runHi = na
 var float runLo = na
+// SESSION LEAK: this used to extend on EVERY bar. In RTH mode — which the gold
+// profile now selects by default — that meant the running range absorbed the
+// whole overnight session while avgRange, which it is measured against, is
+// built only from RTH profiles. runRange was therefore inflated against a
+// yardstick that excluded the same hours, and regimeLive read IMBALANCE far
+// too readily, which then closed the context gate on exactly the rotations
+// gold spends its RTH session doing. It must measure the same hours the
+// profile measures.
 if isNewPeriod
     runHi := high
     runLo := low
-else
+else if inPeriod
     runHi := na(runHi) ? high : math.max(runHi, high)
     runLo := na(runLo) ? low : math.min(runLo, low)
 
@@ -1500,22 +1508,32 @@ var line lnHPoc = na
 var line lnHVah = na
 var line lnHVal = na
 
-if htfOn and barstate.islast and not na(htfDevPoc)
+// THE LINES MUST BE THE LEVELS THE ENGINE USES. The signal gate was moved to
+// htfVah / htfVal — the last COMPLETED higher-timeframe value area, the only
+// version that exists on every bar — but the lines and their labels were still
+// drawing htfDevVah / htfDevVal, the developing one. Those are different
+// prices. You would watch price reject a line marked "Weekly VAL" and get no
+// signal, because the engine was testing a level that was never drawn.
+//
+// The completed value area is also the conventional reference: it is to the
+// week what prior VAH / VAL is to the day. The developing read still has a
+// home — the dashboard row, which says so explicitly.
+if htfOn and barstate.islast and not na(htfPoc)
     int htL = na(periodStart) ? time : periodStart
     // same degenerate-line guard as the auction block below
     if htL >= time
         htL := na(time[1]) ? time - 60000 : time[1]
     if na(lnHPoc)
-        lnHPoc := line.new(htL, htfDevPoc, time, htfDevPoc, xloc=xloc.bar_time, color=cHtfPoc, width=2, extend=extend.right, force_overlay=true)
-        lnHVah := line.new(htL, htfDevVah, time, htfDevVah, xloc=xloc.bar_time, color=cHtfVa, width=1, extend=extend.right, force_overlay=true)
-        lnHVal := line.new(htL, htfDevVal, time, htfDevVal, xloc=xloc.bar_time, color=cHtfVa, width=1, extend=extend.right, force_overlay=true)
+        lnHPoc := line.new(htL, htfPoc, time, htfPoc, xloc=xloc.bar_time, color=cHtfPoc, width=2, extend=extend.right, force_overlay=true)
+        lnHVah := line.new(htL, htfVah, time, htfVah, xloc=xloc.bar_time, color=cHtfVa, width=1, extend=extend.right, force_overlay=true)
+        lnHVal := line.new(htL, htfVal, time, htfVal, xloc=xloc.bar_time, color=cHtfVa, width=1, extend=extend.right, force_overlay=true)
     else
-        line.set_xy1(lnHPoc, htL, htfDevPoc)
-        line.set_xy2(lnHPoc, time, htfDevPoc)
-        line.set_xy1(lnHVah, htL, htfDevVah)
-        line.set_xy2(lnHVah, time, htfDevVah)
-        line.set_xy1(lnHVal, htL, htfDevVal)
-        line.set_xy2(lnHVal, time, htfDevVal)
+        line.set_xy1(lnHPoc, htL, htfPoc)
+        line.set_xy2(lnHPoc, time, htfPoc)
+        line.set_xy1(lnHVah, htL, htfVah)
+        line.set_xy2(lnHVah, time, htfVah)
+        line.set_xy1(lnHVal, htL, htfVal)
+        line.set_xy2(lnHVal, time, htfVal)
 
 // where does today's value sit inside the bigger auction?
 string htfPos = "n/a"
@@ -1549,13 +1567,21 @@ var float vwSumPV  = 0.0
 var float vwSumV   = 0.0
 var float vwSumPV2 = 0.0
 
+// Same session leak as the running range above. Anchored to the auction period
+// in RTH mode, this was still adding every overnight bar, so what the chart
+// called the session VWAP was really a rolling 24-hour VWAP wearing a session
+// label — and its bands are signal LOCATIONS, so the error reached the trades.
+// The other anchors mean what they say and are left alone: if you asked for a
+// daily VWAP on an RTH chart, overnight volume belongs in it.
+bool vwapAccum = vwapAnchor != "Auction Period" or inPeriod
+
 float vwSrc = hlc3
 float vwVol = nz(volume)
 if vwapReset
     vwSumPV  := vwSrc * vwVol
     vwSumV   := vwVol
     vwSumPV2 := vwSrc * vwSrc * vwVol
-else
+else if vwapAccum
     vwSumPV  := vwSumPV + vwSrc * vwVol
     vwSumV   := vwSumV + vwVol
     vwSumPV2 := vwSumPV2 + vwSrc * vwSrc * vwVol
@@ -1740,10 +1766,10 @@ if barstate.islast
                 f_queue(line.get_y1(lvnLines.get(i)), "LVN  thin, price moves fast", cLvn)
     if vwapOn and not na(vwapVal)
         f_queue(vwapVal, "VWAP", cVwap)
-    if htfOn and not na(htfDevPoc)
-        f_queue(htfDevVah, htfMode + " VAH", cHtfVa)
-        f_queue(htfDevPoc, htfMode + " POC", cHtfPoc)
-        f_queue(htfDevVal, htfMode + " VAL", cHtfVa)
+    if htfOn and not na(htfPoc)
+        f_queue(htfVah, "prior " + htfMode + " VAH", cHtfVa)
+        f_queue(htfPoc, "prior " + htfMode + " POC", cHtfPoc)
+        f_queue(htfVal, "prior " + htfMode + " VAL", cHtfVa)
 
     // draw in ascending price order, nudging apart anything that would collide
     if qY.size() > 0
@@ -3546,8 +3572,9 @@ if showTable and barstate.islast
         htfCol := C_UP
     else if str.contains(htfPos, "below")
         htfCol := C_DN
-    f_pair(15, 0, "HTF value", htfPos, htfCol)
-    f_pair(15, 2, (htfOn ? htfMode : "HTF") + " POC", na(htfDevPoc) ? "—" : str.tostring(htfDevPoc, format.mintick), cHtfPoc)
+    // labelled "dev" because it IS the developing week, unlike the drawn lines
+    f_pair(15, 0, "HTF value (dev)", htfPos, htfCol)
+    f_pair(15, 2, "prior " + (htfOn ? htfMode : "HTF") + " POC", na(htfPoc) ? "—" : str.tostring(htfPoc, format.mintick), cHtfPoc)
 
     // Which gates are currently open, so a silent chart is explainable
     // C context · L location · T trigger · P proof, then the OI verdict:
@@ -3641,10 +3668,16 @@ if balBreakDn
     alertMsg += "BALANCE BREAK DOWN — the rotation resolved lower. "
 if liqCascade
     alertMsg += "LIQUIDATION CASCADE — open interest collapsing on a wide bar, forced closing not conviction. "
+// The fill model says the entry is the NEXT bar's open, so the alert has to say
+// so. An instruction that does not name its entry price is not an instruction.
 if chartBuy
-    alertMsg += "CHART BUY — context, location, trigger and proof all agree. "
+    alertMsg += "CHART BUY — context, location, trigger and proof all agree. Entry at the NEXT bar open" +
+         (na(rkStopL) ? "" : ", stop " + str.tostring(rkStopL, format.mintick)) +
+         (na(rkTgtL) ? "" : ", target " + str.tostring(rkTgtL, format.mintick)) + ". "
 if chartSell
-    alertMsg += "CHART SELL — context, location, trigger and proof all agree. "
+    alertMsg += "CHART SELL — context, location, trigger and proof all agree. Entry at the NEXT bar open" +
+         (na(rkStopS) ? "" : ", stop " + str.tostring(rkStopS, format.mintick)) +
+         (na(rkTgtS) ? "" : ", target " + str.tostring(rkTgtS, format.mintick)) + ". "
 if chochUp
     alertMsg += "CHoCH up — structure shifted bullish. "
 if chochDn
