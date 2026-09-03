@@ -662,19 +662,24 @@ if intrabarUseful and ltfPresent
 // profile, used only when the library returns nothing (deep history).
 float buyVol  = 0.0
 float sellVol = 0.0
-if ltfPresent
-    for i = 0 to lC.size() - 1
-        float v = lV.get(i)
-        if not na(v)
-            if lC.get(i) > lO.get(i)
-                buyVol += v
-            else if lC.get(i) < lO.get(i)
-                sellVol += v
-else
-    if close > open
-        buyVol := nz(volume)
-    else if close < open
-        sellVol := nz(volume)
+// RUNTIME: this loop walks every intrabar of every bar — 48 iterations a bar on
+// a 4h chart at 5m resolution. It only ever feeds fbDelta, which is only used
+// when the official delta is missing, so on any chart where the library returns
+// data it was pure waste. Now it only runs when it is actually the source.
+if na(dLast)
+    if ltfPresent
+        for i = 0 to lC.size() - 1
+            float v = lV.get(i)
+            if not na(v)
+                if lC.get(i) > lO.get(i)
+                    buyVol += v
+                else if lC.get(i) < lO.get(i)
+                    sellVol += v
+    else
+        if close > open
+            buyVol := nz(volume)
+        else if close < open
+            sellVol := nz(volume)
 
 // The denominator has to be the bar's TOTAL traded volume. Summing only the
 // intrabars that closed up or down silently drops every flat intrabar, so the
@@ -1331,25 +1336,55 @@ if dnaTape and barstate.islast
 // ============================================================================
 float absDelta = math.abs(barDelta)
 
-float vSmS = ta.percentile_linear_interpolation(volume, bubShortW, bubSmallP)
-float vSmM = ta.percentile_linear_interpolation(volume, bubMidW,   bubSmallP)
-float vSmL = ta.percentile_linear_interpolation(volume, bubLongW,  bubSmallP)
-float vMdS = ta.percentile_linear_interpolation(volume, bubShortW, bubMedP)
-float vMdM = ta.percentile_linear_interpolation(volume, bubMidW,   bubMedP)
-float vMdL = ta.percentile_linear_interpolation(volume, bubLongW,  bubMedP)
-float vBgS = ta.percentile_linear_interpolation(volume, bubShortW, bubBigP)
-float vBgM = ta.percentile_linear_interpolation(volume, bubMidW,   bubBigP)
-float vBgL = ta.percentile_linear_interpolation(volume, bubLongW,  bubBigP)
+// RUNTIME: each of these sorts its whole lookback window on every bar, and
+// there are eighteen of them across three windows and two sources. They ran
+// unconditionally — including for everyone with Volume Bubbles switched OFF,
+// which is the default. On a long chart that was the single largest block of
+// wasted work in the script and the main reason for the "Heavy script" warning.
+//
+// bubOn is fixed for the whole run (it comes from an input and the preset), so
+// the branch is taken identically on every bar. That is the condition under
+// which skipping a ta.* call is safe: what makes it unsafe is a condition that
+// VARIES bar to bar, because the function then misses the bars it was not
+// called on and its window silently desynchronises.
+float vSmS = na
+float vSmM = na
+float vSmL = na
+float vMdS = na
+float vMdM = na
+float vMdL = na
+float vBgS = na
+float vBgM = na
+float vBgL = na
+float dSmS = na
+float dSmM = na
+float dSmL = na
+float dMdS = na
+float dMdM = na
+float dMdL = na
+float dBgS = na
+float dBgM = na
+float dBgL = na
 
-float dSmS = ta.percentile_linear_interpolation(absDelta, bubShortW, bubSmallP)
-float dSmM = ta.percentile_linear_interpolation(absDelta, bubMidW,   bubSmallP)
-float dSmL = ta.percentile_linear_interpolation(absDelta, bubLongW,  bubSmallP)
-float dMdS = ta.percentile_linear_interpolation(absDelta, bubShortW, bubMedP)
-float dMdM = ta.percentile_linear_interpolation(absDelta, bubMidW,   bubMedP)
-float dMdL = ta.percentile_linear_interpolation(absDelta, bubLongW,  bubMedP)
-float dBgS = ta.percentile_linear_interpolation(absDelta, bubShortW, bubBigP)
-float dBgM = ta.percentile_linear_interpolation(absDelta, bubMidW,   bubBigP)
-float dBgL = ta.percentile_linear_interpolation(absDelta, bubLongW,  bubBigP)
+if bubOn
+    vSmS := ta.percentile_linear_interpolation(volume, bubShortW, bubSmallP)
+    vSmM := ta.percentile_linear_interpolation(volume, bubMidW,   bubSmallP)
+    vSmL := ta.percentile_linear_interpolation(volume, bubLongW,  bubSmallP)
+    vMdS := ta.percentile_linear_interpolation(volume, bubShortW, bubMedP)
+    vMdM := ta.percentile_linear_interpolation(volume, bubMidW,   bubMedP)
+    vMdL := ta.percentile_linear_interpolation(volume, bubLongW,  bubMedP)
+    vBgS := ta.percentile_linear_interpolation(volume, bubShortW, bubBigP)
+    vBgM := ta.percentile_linear_interpolation(volume, bubMidW,   bubBigP)
+    vBgL := ta.percentile_linear_interpolation(volume, bubLongW,  bubBigP)
+    dSmS := ta.percentile_linear_interpolation(absDelta, bubShortW, bubSmallP)
+    dSmM := ta.percentile_linear_interpolation(absDelta, bubMidW,   bubSmallP)
+    dSmL := ta.percentile_linear_interpolation(absDelta, bubLongW,  bubSmallP)
+    dMdS := ta.percentile_linear_interpolation(absDelta, bubShortW, bubMedP)
+    dMdM := ta.percentile_linear_interpolation(absDelta, bubMidW,   bubMedP)
+    dMdL := ta.percentile_linear_interpolation(absDelta, bubLongW,  bubMedP)
+    dBgS := ta.percentile_linear_interpolation(absDelta, bubShortW, bubBigP)
+    dBgM := ta.percentile_linear_interpolation(absDelta, bubMidW,   bubBigP)
+    dBgL := ta.percentile_linear_interpolation(absDelta, bubLongW,  bubBigP)
 
 int needVotes = 2
 if bubConsen == "Any Window"
@@ -1731,7 +1766,9 @@ f_queue(float y, string nm, color c) =>
         qT.push(txt)
         qC.push(c)
 
-float lblAtr = ta.atr(14)
+// One ATR series, not two. This and the risk layer both wanted ta.atr(14) and
+// each declared its own, so the whole calculation ran twice per bar.
+float atr14 = ta.atr(14)
 
 if barstate.islast
     for lb in lvlLabels
@@ -1775,7 +1812,7 @@ if barstate.islast
     if qY.size() > 0
         // NOT named "order" — that is a reserved Pine namespace (order.ascending)
         array<int> sortIdx = qY.sort_indices(order.ascending)
-        float minGap = lblAtr * 0.45
+        float minGap = atr14 * 0.45
         float lastY = na
         for k = 0 to sortIdx.size() - 1
             int idx = sortIdx.get(k)
@@ -2316,8 +2353,17 @@ if (balBreakUp or balBreakDn) and barClosed
 // ============================================================================
 // The session timestamp comes along in the same request so a weekend gap can be
 // told apart from an ordinary daily open gap — one request, not two.
-[cmeO, cmeC, cmeT] = request.security(cmeSymEff, "D", [open, close, time],
-     ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
+// RUNTIME: a security request costs whether or not you look at the result, so
+// it is skipped entirely when the layer is switched off.
+float cmeO = na
+float cmeC = na
+int   cmeT = na
+if cmeOn
+    [qO, qC, qT] = request.security(cmeSymEff, "D", [open, close, time],
+         ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
+    cmeO := qO
+    cmeC := qC
+    cmeT := qT
 
 var array<float> gapTop = array.new<float>()
 var array<float> gapBot = array.new<float>()
@@ -2415,8 +2461,6 @@ bool a3 = sessOn and f_sessActive(sess3)
 // R is computed and drawn BEFORE you act. A 0.6R setup is a losing trade taken
 // slowly, and the minimum-R filter simply refuses to show it.
 // ============================================================================
-float rkAtr = ta.atr(14)
-
 // ---------------------------------------------------------------------------
 // WHY BUYS NEVER FIRED IN AN UPTREND
 // The target used to be the NEAREST level in the trade's direction. In a rally
@@ -2494,9 +2538,9 @@ f_pickDn(float e, float risk) =>
     pick
 
 float rkEntry = close
-float rkMinDist = rkAtr * riskMinStop
-float rkStopL = math.min(ta.lowest(low, riskSwing) - rkAtr * riskBuf, close - rkMinDist)
-float rkStopS = math.max(ta.highest(high, riskSwing) + rkAtr * riskBuf, close + rkMinDist)
+float rkMinDist = atr14 * riskMinStop
+float rkStopL = math.min(ta.lowest(low, riskSwing) - atr14 * riskBuf, close - rkMinDist)
+float rkStopS = math.max(ta.highest(high, riskSwing) + atr14 * riskBuf, close + rkMinDist)
 
 float rkRiskL = rkEntry - rkStopL
 float rkRiskS = rkStopS - rkEntry
@@ -2572,11 +2616,17 @@ if opDir.size() > 0
 // returns na instead of killing the script.
 // ============================================================================
 string oiTicker = syminfo.prefix + ":" + syminfo.ticker + "_OI"
-float oiClose = request.security(oiTicker, timeframe.period, close, ignore_invalid_symbol=true)
+float oiClose = na
+if oiOn
+    oiClose := request.security(oiTicker, timeframe.period, close, ignore_invalid_symbol=true)
 
-string fSymEff = fundSym == "" ? syminfo.tickerid : fundSym
-float fundVal = request.security(fSymEff, timeframe.period, close, ignore_invalid_symbol=true)
-bool fundOk = fundSym != "" and not na(fundVal)
+// This used to request syminfo.tickerid whenever the funding field was blank —
+// a whole security call fetching the chart's own close, so it could then be
+// discarded by the fundOk test below. Blank now means no request at all.
+float fundVal = na
+if fundSym != ""
+    fundVal := request.security(fundSym, timeframe.period, close, ignore_invalid_symbol=true)
+bool fundOk = not na(fundVal)
 
 bool oiOk = oiOn and not na(oiClose)
 float oiChg = oiOk ? oiClose - nz(oiClose[1], oiClose) : 0.0
@@ -3140,7 +3190,7 @@ if balBreakUp or balBreakDn
     balBrkBar := bar_index
     balBrkDir := balBreakUp ? 1 : -1
 if not na(balBrkLvl)
-    float need = rkAtr * 1.5
+    float need = atr14 * 1.5
     if balBrkDir == 1
         if close > balBrkLvl + need
             balHold += 1
@@ -3275,7 +3325,7 @@ if guideOn and barstate.islast
     else if chartSell
         actLine := "\n>>> SELL SIGNAL — all four gates open."
 
-    guideLbl := label.new(bar_index + lblOffset + guideGap, high + lblAtr * 2, headline + actLine +
+    guideLbl := label.new(bar_index + lblOffset + guideGap, high + atr14 * 2, headline + actLine +
          "\nPrice is " + whereTxt + " · day type " + dayType + doTxt + htfLine + extremes + dnaTxt,
          xloc=xloc.bar_index, style=label.style_label_left,
          color=color.new(#131722, 12), textcolor=headCol, size=f_lblSize(),
