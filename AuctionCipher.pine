@@ -72,7 +72,8 @@ string periodMode = input.string("24h UTC (crypto)", "Period Mode",
 string rthSess   = input.session("0820-1330", "RTH Session", group=G_PER)
 string rthTz     = input.string("America/New_York", "Session Timezone", group=G_PER,
      options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Tokyo", "UTC"])
-int    ibMinutes = input.int(60, "Initial Balance (minutes)", minval=5, maxval=480, group=G_PER)
+int    ibMinutes = input.int(240, "Initial Balance (minutes)", minval=5, maxval=480, group=G_PER,
+     tooltip="Classic Initial Balance is the first 60 minutes of a REGULAR TRADING HOURS session — roughly a sixth of it.\n\nA 24-hour crypto period is nearly four times longer, so 60 minutes is only a twenty-fourth of it and price extends past that range almost every day. That is what makes IB extension read BOTH and day type read Neutral on nearly every period, which tells you nothing.\n\n240 minutes is the same SIXTH of a 24-hour day, so the classification means something again.\n\nNote the resolution limit: this cannot be finer than one bar. On a 4h chart anything from 5 to 240 gives you exactly the first bar.")
 
 string G_AUC = "2 · AUCTION LAYER (price chart)"
 bool  aucOn_in      = input.bool(true,  "Enable Auction Layer", group=G_AUC)
