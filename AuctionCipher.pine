@@ -2805,8 +2805,24 @@ if balUseLoc and balActive
     if f_rejDn(balHi) or f_rejDn(balPoc)
         rejHighNow := true
 
-bool atLowEdge  = ta.barssince(rejLowNow) <= csigWindow
-bool atHighEdge = ta.barssince(rejHighNow) <= csigWindow
+// ---------------------------------------------------------------------------
+// ALL FOUR GATES SHARE ONE WINDOW
+// ---------------------------------------------------------------------------
+// Location used to sit on the tight csigWindow while trigger and proof were
+// widened to alignWin. The reasoning was "price must be at the level NOW" —
+// and it was wrong, because the rejection and the oscillator pivot are the
+// SAME swing low. Price wicks the level at bar N; the divergence measuring
+// that same low cannot confirm until bar N+divLbR. With location closing after
+// 3 bars and the divergence arriving on bar 5, the two could never coexist, so
+// a divergence you can plainly see on the oscillator still produced no signal.
+//
+// If the four gates are meant to describe ONE event, they have to agree on how
+// long that event lasts. alignWin is csigWindow + divLbR, so both inputs still
+// control it.
+int alignWin = csigWindow + divLbR
+
+bool atLowEdge  = ta.barssince(rejLowNow) <= alignWin
+bool atHighEdge = ta.barssince(rejHighNow) <= alignWin
 
 // ---- TRIGGER
 bool crossUpOk = csigZoneOnly ? (wtCrossUp and wt2 <= wtOS1) : wtCrossUp
@@ -2822,11 +2838,6 @@ bool crossDnOk = csigZoneOnly ? (wtCrossDn and wt2 >= wtOB1) : wtCrossDn
 // coincide. That is why a divergence plainly visible on the oscillator kept
 // producing no signal.
 //
-// Momentum evidence therefore gets the alignment window: the trigger window
-// plus the pivot lag it has to wait for. LOCATION deliberately stays on the
-// tight window — price still has to be AT the level now, not eight bars ago.
-int alignWin = csigWindow + divLbR
-
 bool trigBuy  = ta.barssince(crossUpOk) <= alignWin
 bool trigSell = ta.barssince(crossDnOk) <= alignWin
 
