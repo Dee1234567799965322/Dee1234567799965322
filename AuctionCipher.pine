@@ -367,6 +367,9 @@ int   csigWindow = input.int(3, "Trigger Window (bars)", minval=1, maxval=10, gr
 float csigTol    = input.float(0.12, "Location Tolerance (%)", minval=0.01, maxval=2.0, group=G_CSIG)
 bool  csigOneTrade = input.bool(true, "One Trade At A Time", group=G_CSIG,
      tooltip="Nothing used to stop a BUY firing while a SELL was still open, so the chart could show you a long and a short at once with their stop and target boxes overlapping — two contradictory instructions, which is worse than none.\n\nWith this ON no new signal is drawn while a trade is still live.")
+string csigFlipMode = input.string("Opposite setup completes", "Reversal Close Trigger",
+     options=["Opposite setup completes", "Opposite momentum cross"], group=G_CSIG,
+     tooltip="WHEN a reversal close fires.\n\nSETUP COMPLETES — the moment the opposite side satisfies all its gates. This is the behaviour every measurement so far was taken on.\n\nMOMENTUM CROSS — additionally requires the opposite WaveTrend cross on that exact bar. Far rarer, so more trades run to their stop or target instead.\n\nWhich is better is an open question, not a settled one. Read your own R rows: divide R-from-flat by the flat count, and R-from-wins-plus-losses by the resolved count. Whichever bucket has the higher per-trade R is where you want trades ending up. On the 297-trade sample that produced this input, flats returned +0.03R each against resolved trades at -0.035R each — so cutting early was marginally the better of the two, and the stricter setting would have sent more trades into the worse bucket.")
 bool  csigFlip     = input.bool(true, "Opposite Signal Closes Open Trade", group=G_CSIG,
      tooltip="If a long is open and the sell side fully qualifies, the reason you were long is gone. The trade is closed at market and counted at whatever R it actually made, instead of being left to drift to its stop.\n\nIt does NOT immediately reverse — you go flat and wait for the next clean signal.")
 int   csigConfMin = input.int(1, "Minimum Level Confluence", minval=1, maxval=6, group=G_CSIG,
@@ -3056,8 +3059,20 @@ bool wantSell = rawSellSig
 // re-read. Requiring the opposite TRIGGER to fire on this bar turns the close
 // back into a genuine event — the cross that says the move has turned, not the
 // lingering memory of one.
-bool flipLong  = csigFlip and anyLongOpen  and wantSell and crossDnOk
-bool flipShort = csigFlip and anyShortOpen and wantBuy  and crossUpOk
+// I hardcoded the momentum-cross requirement last round and called it a fix.
+// It was a hypothesis, and the arithmetic did not support it: 150 flats
+// returned +4.8R, or +0.032R each, while 145 resolved trades returned -5.1R,
+// or -0.035R each. Cutting early was the BETTER of the two buckets, so making
+// flips rarer pushes trades into the worse one. I had anchored on an earlier
+// 8-flat sample averaging +1.12R and read a larger sample regressing to the
+// mean as degradation.
+//
+// It is now selectable and defaults to the behaviour those 297 trades were
+// actually measured on, so nothing silently swaps a measured result for an
+// unmeasured one.
+bool flipCross = csigFlipMode == "Opposite momentum cross"
+bool flipLong  = csigFlip and anyLongOpen  and wantSell and (not flipCross or crossDnOk)
+bool flipShort = csigFlip and anyShortOpen and wantBuy  and (not flipCross or crossUpOk)
 bool closeOnReversal = flipLong or flipShort
 
 if csigOneTrade and (anyLongOpen or anyShortOpen)
