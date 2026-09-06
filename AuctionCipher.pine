@@ -367,6 +367,8 @@ bool  csigOneTrade = input.bool(true, "One Trade At A Time", group=G_CSIG,
      tooltip="Nothing used to stop a BUY firing while a SELL was still open, so the chart could show you a long and a short at once with their stop and target boxes overlapping — two contradictory instructions, which is worse than none.\n\nWith this ON no new signal is drawn while a trade is still live.")
 bool  csigFlip     = input.bool(true, "Opposite Signal Closes Open Trade", group=G_CSIG,
      tooltip="If a long is open and the sell side fully qualifies, the reason you were long is gone. The trade is closed at market and counted at whatever R it actually made, instead of being left to drift to its stop.\n\nIt does NOT immediately reverse — you go flat and wait for the next clean signal.")
+int   csigConfMin = input.int(1, "Minimum Level Confluence", minval=1, maxval=6, group=G_CSIG,
+     tooltip="How many independent levels must sit together at the rejection price.\n\nLocation is otherwise a BINARY test: a wick off a lone VWAP band counts exactly the same as a wick off a price where prior VAL, the POC, an untested POC and the weekly value low all coincide. Those are not the same trade.\n\n1 keeps the current behaviour — any single level qualifies. 2 or 3 demands a genuine cluster and will cut your signal count substantially.\n\nThe live count for both sides is shown after the gate letters in the dashboard, so you can watch what your instrument actually produces before raising this.")
 bool  csigNoiseOn = input.bool(false, "Require Efficient Price Movement", group=G_CSIG,
      tooltip="A NOISE gate. None of the other four gates asks whether the market is currently smooth enough for a target to be reachable — context measures the SIZE of the range, not how cleanly price moves through it.\n\nEfficiency ratio is the straight-line distance price covered divided by the total distance it actually travelled. Near 1 is a clean directional move; near 0 is chop that happens to end up somewhere.\n\nThis matters most when your targets are far away. A 3R target needs price to travel efficiently — in chop the stop is reached first, every time.\n\nOFF by default so it cannot disturb a measurement already in progress. Turn it on, gather a fresh sample, and compare expectancy against your baseline.")
 int   csigErLen  = input.int(20, "Efficiency Lookback (bars)", minval=5, maxval=200, group=G_CSIG)
@@ -2846,8 +2848,50 @@ if balUseLoc and balActive
 // control it.
 int alignWin = csigWindow + divLbR
 
-bool atLowEdge  = ta.barssince(rejLowNow) <= alignWin
-bool atHighEdge = ta.barssince(rejHighNow) <= alignWin
+// ---------------------------------------------------------------------------
+// CONFLUENCE — how many levels agree on this price?
+// ---------------------------------------------------------------------------
+// Every level counted here exists on EVERY bar, the same discipline the
+// location test itself follows. The developing value area is excluded for the
+// same reason: it is built on the last bar only, so counting it would make the
+// live bar score higher than any historical bar ever could.
+f_near(float a, float b, float tol) =>
+    not na(a) and not na(b) and math.abs(a - b) <= tol
+
+f_confluence(float px) =>
+    float tol = locTol * 2.0
+    int n = 0
+    n += f_near(px, priorVah, tol) ? 1 : 0
+    n += f_near(px, priorVal, tol) ? 1 : 0
+    n += f_near(px, priorPoc, tol) ? 1 : 0
+    n += f_near(px, priorHi,  tol) ? 1 : 0
+    n += f_near(px, priorLo,  tol) ? 1 : 0
+    n += f_near(px, npocUp,   tol) ? 1 : 0
+    n += f_near(px, npocDn,   tol) ? 1 : 0
+    n += f_near(px, ibH,      tol) ? 1 : 0
+    n += f_near(px, ibL,      tol) ? 1 : 0
+    n += f_near(px, vwapVal,  tol) ? 1 : 0
+    n += f_near(px, vwapU1,   tol) ? 1 : 0
+    n += f_near(px, vwapL1,   tol) ? 1 : 0
+    n += f_near(px, htfVah,   tol) ? 1 : 0
+    n += f_near(px, htfVal,   tol) ? 1 : 0
+    n += f_near(px, htfPoc,   tol) ? 1 : 0
+    if balActive
+        n += f_near(px, balHi,  tol) ? 1 : 0
+        n += f_near(px, balLo,  tol) ? 1 : 0
+        n += f_near(px, balPoc, tol) ? 1 : 0
+    n
+
+int confLow  = f_confluence(low)
+int confHigh = f_confluence(high)
+
+// scored at the REJECTION bar, not now — the cluster that mattered is the one
+// price actually wicked into, which may be several bars back
+int confAtLowRej  = int(ta.valuewhen(rejLowNow,  confLow,  0))
+int confAtHighRej = int(ta.valuewhen(rejHighNow, confHigh, 0))
+
+bool atLowEdge  = ta.barssince(rejLowNow) <= alignWin and confAtLowRej >= csigConfMin
+bool atHighEdge = ta.barssince(rejHighNow) <= alignWin and confAtHighRej >= csigConfMin
 
 // ---- TRIGGER
 bool crossUpOk = csigZoneOnly ? (wtCrossUp and wt2 <= wtOS1) : wtCrossUp
@@ -3702,9 +3746,9 @@ if showTable and barstate.islast
     // C context · L location · T trigger · P proof, then the OI verdict:
     // OK = open interest backs this side, NO = open interest vetoes it.
     string gBuy = (ctxBuy ? "C" : "·") + (atLowEdge ? "L" : "·") + (trigBuy ? "T" : "·") + (proofBuy ? "P" : "·") +
-         (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "")
+         "×" + str.tostring(confAtLowRej) + (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "")
     string gSell = (ctxSell ? "C" : "·") + (atHighEdge ? "L" : "·") + (trigSell ? "T" : "·") + (proofSell ? "P" : "·") +
-         (oiVetoSell ? " NO" : oiProofSell ? " OK" : "")
+         "×" + str.tostring(confAtHighRej) + (oiVetoSell ? " NO" : oiProofSell ? " OK" : "")
     f_pair(16, 0, "Buy gates", gBuy + "  " + str.tostring(gatesBuy) + "/" + str.tostring(needGates),
          gatesBuy >= needGates ? C_UP : C_NE)
     // ACTION — the single authoritative line. Everything else on both surfaces
