@@ -270,6 +270,8 @@ string riskFill = input.string("Next bar open (realistic)", "Assumed Fill",
      tooltip="Where the statistics assume you actually got filled.\n\nThe signal is only KNOWN at the close of its bar, so you cannot have bought at that close — the first price available to you is the next bar's open. Measuring from the signal bar's close quietly credits you with a fill nobody could have taken, and overstates expectancy by that distance on every single trade.\n\nLeave this on the realistic setting unless you are comparing against something that measures the optimistic way.")
 float riskSlipT = input.float(0.0, "Slippage (ticks)", minval=0.0, maxval=200.0, group=G_RISK,
      tooltip="Applied against you on entry — buys fill higher, sells fill lower. Set it to what your venue actually costs you and the expectancy row becomes something you can trust.")
+float riskTgtCap = input.float(0.0, "Cap Target at (R)", minval=0.0, maxval=20.0, step=0.5, group=G_RISK,
+     tooltip="0 = off. The target is otherwise always a STRUCTURAL level — the next place the auction has to visit — and nothing caps how far away that is.\n\nRead your own statistics before setting this. If R from wins minus R from losses is NEGATIVE while R from flat is strongly POSITIVE, the trades are reaching profit and then giving it back before the structural target: the entries work and the target is too far. A cap turns that into realised R.\n\nThe cap can never sit closer than Minimum R, or the setup would fail its own filter the moment it was drawn.")
 int   riskExtend= input.int(25, "Box Extend (bars)", minval=5, maxval=200, group=G_RISK)
 color cRiskStop = input.color(color.new(#ef5350, 78), "Stop Zone", group=G_RISK)
 color cRiskTgt  = input.color(color.new(#26a69a, 78), "Target Zone", group=G_RISK)
@@ -2574,6 +2576,18 @@ float rkRiskS = rkStopS - rkEntry
 float rkTgtL  = f_pickUp(rkEntry, rkRiskL)
 float rkTgtS  = f_pickDn(rkEntry, rkRiskS)
 
+// ---- optional cap on how far the structural target may sit
+// math.max keeps the cap at or beyond Minimum R: capping below it would draw a
+// target that fails the script's own filter on the bar it appears.
+if riskTgtCap > 0
+    float capMult = math.max(riskMinR, riskTgtCap)
+    if not na(rkTgtL) and rkRiskL > 0
+        float capL = rkEntry + rkRiskL * capMult
+        rkTgtL := math.min(rkTgtL, capL)
+    if not na(rkTgtS) and rkRiskS > 0
+        float capS = rkEntry - rkRiskS * capMult
+        rkTgtS := math.max(rkTgtS, capS)
+
 float rkRL = rkRiskL > 0 and not na(rkTgtL) ? (rkTgtL - rkEntry) / rkRiskL : na
 float rkRS = rkRiskS > 0 and not na(rkTgtS) ? (rkEntry - rkTgtS) / rkRiskS : na
 
@@ -2859,7 +2873,21 @@ f_near(float a, float b, float tol) =>
     not na(a) and not na(b) and math.abs(a - b) <= tol
 
 f_confluence(float px) =>
-    float tol = locTol * 2.0
+    // SATURATION: this used twice the location tolerance. On BTC at 79,800
+    // with the default 0.12% that is a 190-point band, and roughly half the
+    // tracked level set falls inside it during any ordinary range — the count
+    // sat at 5 or 6 on both sides at once and discriminated nothing.
+    //
+    // It is now exactly locTol, which halves the band AND preserves a
+    // necessary invariant: f_rejUp accepts a level within locTol of the low,
+    // so the level that actually triggered the rejection is always counted.
+    // Any tighter and confluence could read 0 on a genuine rejection, which
+    // would close the gate on the very setup that opened it.
+    //
+    // If the count is still saturated on your instrument, lower Location
+    // Tolerance itself — that tightens the rejection test and this band
+    // together, which is the coherent way to do it.
+    float tol = locTol
     int n = 0
     n += f_near(px, priorVah, tol) ? 1 : 0
     n += f_near(px, priorVal, tol) ? 1 : 0
