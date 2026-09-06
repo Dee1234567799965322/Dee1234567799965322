@@ -271,7 +271,7 @@ string riskFill = input.string("Next bar open (realistic)", "Assumed Fill",
 float riskSlipT = input.float(0.0, "Slippage (ticks)", minval=0.0, maxval=200.0, group=G_RISK,
      tooltip="Applied against you on entry — buys fill higher, sells fill lower. Set it to what your venue actually costs you and the expectancy row becomes something you can trust.")
 float riskTgtCap = input.float(0.0, "Cap Target at (R)", minval=0.0, maxval=20.0, step=0.5, group=G_RISK,
-     tooltip="0 = off. The target is otherwise always a STRUCTURAL level — the next place the auction has to visit — and nothing caps how far away that is.\n\nRead your own statistics before setting this. If R from wins minus R from losses is NEGATIVE while R from flat is strongly POSITIVE, the trades are reaching profit and then giving it back before the structural target: the entries work and the target is too far. A cap turns that into realised R.\n\nThe cap can never sit closer than Minimum R, or the setup would fail its own filter the moment it was drawn.")
+     tooltip="0 = off. The target is otherwise always a STRUCTURAL level — the next place the auction has to visit — and nothing caps how far away that is.\n\nRead your own statistics before setting this. If R from wins minus R from losses is NEGATIVE while R from flat is strongly POSITIVE, the trades are reaching profit and then giving it back before the structural target: the entries work and the target is too far. A cap turns that into realised R.\n\nThe cap can never sit closer than Minimum R, or the setup would fail its own filter the moment it was drawn.\n\nLeave HEADROOM. Setting the cap equal to Minimum R gives the trade none: fills happen at the next bar's open, R is recomputed from the price you actually got, and any adverse open then drops it under the minimum and the signal is dropped as unfilled. If Minimum R is 1.5, cap at 2 — or lower Minimum R first.")
 int   riskExtend= input.int(25, "Box Extend (bars)", minval=5, maxval=200, group=G_RISK)
 color cRiskStop = input.color(color.new(#ef5350, 78), "Stop Zone", group=G_RISK)
 color cRiskTgt  = input.color(color.new(#26a69a, 78), "Target Zone", group=G_RISK)
@@ -2591,8 +2591,22 @@ if riskTgtCap > 0
 float rkRL = rkRiskL > 0 and not na(rkTgtL) ? (rkTgtL - rkEntry) / rkRiskL : na
 float rkRS = rkRiskS > 0 and not na(rkTgtS) ? (rkEntry - rkTgtS) / rkRiskS : na
 
-bool rkOkL = not na(rkRL) and rkRL >= riskMinR
-bool rkOkS = not na(rkRS) and rkRS >= riskMinR
+// ---------------------------------------------------------------------------
+// FLOATING-POINT BOUNDARY — introduced by the target cap
+// ---------------------------------------------------------------------------
+// The cap sets the target to entry + risk × capMult, and R is then recovered
+// as (target − entry) / risk. In exact arithmetic that returns capMult. In
+// binary floating point it can return 1.4999999999999998, and with the natural
+// setting of cap 1.5 against Minimum R 1.5 the filter below would then reject
+// its own target — silently, on some price values and not others, so roughly
+// half the signals would vanish for no visible reason.
+//
+// One part per million of slack. Far below any price move that could matter,
+// and far above the representation error it exists to absorb.
+float rMinEps = riskMinR * 0.999999
+
+bool rkOkL = not na(rkRL) and rkRL >= rMinEps
+bool rkOkS = not na(rkRS) and rkRS >= rMinEps
 
 // ============================================================================
 // 19h2. THE TRADE LEDGER
@@ -3139,7 +3153,7 @@ f_fillPending(bool isLong, float st, float tg) =>
     float fillP = isLong ? open + fillSlip : open - fillSlip
     float fRisk = isLong ? fillP - st : st - fillP
     float fR    = fRisk > 0 ? (isLong ? tg - fillP : fillP - tg) / fRisk : na
-    bool taken = not na(fR) and fR >= riskMinR
+    bool taken = not na(fR) and fR >= rMinEps
     if taken
         opEntry.push(fillP)
         opStop.push(st)
@@ -3865,14 +3879,22 @@ if liqCascade
     alertMsg += "LIQUIDATION CASCADE — open interest collapsing on a wide bar, forced closing not conviction. "
 // The fill model says the entry is the NEXT bar's open, so the alert has to say
 // so. An instruction that does not name its entry price is not an instruction.
+// THE ALERT AND THE LEDGER MUST GIVE THE SAME INSTRUCTION.
+// The alert fires at this bar's close; the fill happens at the next bar's open,
+// and the script re-checks R there against the price actually available. If the
+// open has eaten the edge, the ledger records the signal as UNFILLED and never
+// tracks it. Without saying so, the alert would have sent you into a trade the
+// statistics quietly disown. The stand-down condition is now part of the
+// instruction.
+string standDown = " Stand down if the open leaves less than " + str.tostring(riskMinR, "#.#") + "R. "
 if chartBuy
     alertMsg += "CHART BUY — context, location, trigger and proof all agree. Entry at the NEXT bar open" +
          (na(rkStopL) ? "" : ", stop " + str.tostring(rkStopL, format.mintick)) +
-         (na(rkTgtL) ? "" : ", target " + str.tostring(rkTgtL, format.mintick)) + ". "
+         (na(rkTgtL) ? "" : ", target " + str.tostring(rkTgtL, format.mintick)) + "." + standDown
 if chartSell
     alertMsg += "CHART SELL — context, location, trigger and proof all agree. Entry at the NEXT bar open" +
          (na(rkStopS) ? "" : ", stop " + str.tostring(rkStopS, format.mintick)) +
-         (na(rkTgtS) ? "" : ", target " + str.tostring(rkTgtS, format.mintick)) + ". "
+         (na(rkTgtS) ? "" : ", target " + str.tostring(rkTgtS, format.mintick)) + "." + standDown
 if chochUp
     alertMsg += "CHoCH up — structure shifted bullish. "
 if chochDn
