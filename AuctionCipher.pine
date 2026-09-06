@@ -2359,11 +2359,15 @@ float cmeO = na
 float cmeC = na
 int   cmeT = na
 if cmeOn
-    [qO, qC, qT] = request.security(cmeSymEff, "D", [open, close, time],
+    // Named cmeQ* rather than q*: qC and qT are the label-queue arrays in the
+    // level-labelling section, and reusing those names shadowed them. Pine
+    // compiles it, but a local silently masking a global of a DIFFERENT type
+    // is a bug waiting for whoever edits this block next.
+    [cmeQO, cmeQC, cmeQT] = request.security(cmeSymEff, "D", [open, close, time],
          ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
-    cmeO := qO
-    cmeC := qC
-    cmeT := qT
+    cmeO := cmeQO
+    cmeC := cmeQC
+    cmeT := cmeQT
 
 var array<float> gapTop = array.new<float>()
 var array<float> gapBot = array.new<float>()
