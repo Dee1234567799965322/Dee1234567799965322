@@ -367,6 +367,11 @@ bool  csigOneTrade = input.bool(true, "One Trade At A Time", group=G_CSIG,
      tooltip="Nothing used to stop a BUY firing while a SELL was still open, so the chart could show you a long and a short at once with their stop and target boxes overlapping — two contradictory instructions, which is worse than none.\n\nWith this ON no new signal is drawn while a trade is still live.")
 bool  csigFlip     = input.bool(true, "Opposite Signal Closes Open Trade", group=G_CSIG,
      tooltip="If a long is open and the sell side fully qualifies, the reason you were long is gone. The trade is closed at market and counted at whatever R it actually made, instead of being left to drift to its stop.\n\nIt does NOT immediately reverse — you go flat and wait for the next clean signal.")
+bool  csigNoiseOn = input.bool(false, "Require Efficient Price Movement", group=G_CSIG,
+     tooltip="A NOISE gate. None of the other four gates asks whether the market is currently smooth enough for a target to be reachable — context measures the SIZE of the range, not how cleanly price moves through it.\n\nEfficiency ratio is the straight-line distance price covered divided by the total distance it actually travelled. Near 1 is a clean directional move; near 0 is chop that happens to end up somewhere.\n\nThis matters most when your targets are far away. A 3R target needs price to travel efficiently — in chop the stop is reached first, every time.\n\nOFF by default so it cannot disturb a measurement already in progress. Turn it on, gather a fresh sample, and compare expectancy against your baseline.")
+int   csigErLen  = input.int(20, "Efficiency Lookback (bars)", minval=5, maxval=200, group=G_CSIG)
+float csigErMin  = input.float(0.25, "Minimum Efficiency", minval=0.0, maxval=1.0, step=0.05, group=G_CSIG,
+     tooltip="Below this, no signal. Trending markets typically run 0.3 to 0.6; heavy chop sits under 0.15. Start at 0.25 and read the Efficiency row in the dashboard for a while before moving it.")
 bool  csigStrict = input.bool(true, "Require Regime Agreement", group=G_CSIG,
      tooltip="ON — no counter-trend buys while value is migrating down, and vice versa. This is the filter that stops you fading a trend day.")
 color cBuySig    = input.color(#00e676, "Buy Color", group=G_CSIG)
@@ -1043,6 +1048,22 @@ if not na(avgRange) and avgRange > 0 and not na(runRange)
 
 bool imbUp = regimeLive == "IMBALANCE" and acceptedAbove
 bool imbDn = regimeLive == "IMBALANCE" and acceptedBelow
+
+// ---------------------------------------------------------------------------
+// EFFICIENCY RATIO — is the market smooth enough for a distant target?
+// ---------------------------------------------------------------------------
+// Straight-line distance covered, divided by the total distance actually
+// travelled to get there. 1.0 is a move in one direction with no retracement;
+// 0.0 is pure chop that happens to finish where it started.
+//
+// The idea is borrowed from a D-RSI script that fits a polynomial to RSI and
+// refuses to signal when the fit is poor — a good instinct wrapped in a QR
+// decomposition running every bar. This measures the same thing, "is the data
+// smooth enough to act on", as a running sum. Kaufman's ratio, and it costs
+// nothing.
+float erNum = math.abs(close - close[csigErLen])
+float erDen = math.sum(math.abs(close - close[1]), csigErLen)
+float effRatio = erDen > 0 ? erNum / erDen : 0.0
 
 // BALANCE means rotate and fade the edges. IMBALANCE means value is migrating
 // and fading the edges is how you get run over.
@@ -2894,6 +2915,13 @@ bool sigConflict = rawBuySig and rawSellSig
 if sigConflict
     rawBuySig := false
     rawSellSig := false
+// NOISE GATE. A target three times the risk away is unreachable while price is
+// travelling three units to net one. This blocks both sides equally — chop is
+// not directional.
+if csigNoiseOn and effRatio < csigErMin
+    rawBuySig := false
+    rawSellSig := false
+
 // OPEN INTEREST VETO. A squeeze into resistance and genuine buying into
 // resistance are the same picture on price and opposite trades. When OI is
 // RISING with price the bid is real positioning, not short covering, and
@@ -3702,7 +3730,8 @@ if showTable and barstate.islast
 
     string balTxt = balActive ? (balArmed ? "ARMED " + str.tostring(balLo, format.mintick) + "-" + str.tostring(balHi, format.mintick) : "forming") : "none"
     f_pair(17, 0, "Balance area", balTxt, balActive and balArmed ? C_WN : C_NE)
-    f_pair(17, 2, "ADX", str.tostring(adxVal, "#.#"), adxVal < balAdxTh ? C_NE : C_UP)
+    f_pair(17, 2, "ADX / Eff", str.tostring(adxVal, "#.#") + " · " + str.tostring(effRatio, "#.##"),
+         csigNoiseOn and effRatio < csigErMin ? C_DN : effRatio >= csigErMin ? C_UP : C_NE)
     f_pair(16, 2, "Sell gates", gSell + "  " + str.tostring(gatesSell) + "/" + str.tostring(needGates),
          gatesSell >= needGates ? C_DN : C_NE)
 
