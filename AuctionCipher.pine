@@ -3290,6 +3290,26 @@ if opEntry.size() > 0 and barClosed
             opRPlan.remove(i)
 sigOpen := opEntry.size()
 
+// ---------------------------------------------------------------------------
+// UNREALISED R ON THE OPEN TRADE — the one number live trading needs and the
+// table did not have.
+// ---------------------------------------------------------------------------
+// Everything here reports on trades that have ALREADY closed. While a trade is
+// running the only readout was a count, so the position that is currently up
+// 1.2R and the one that is down 0.7R looked identical.
+//
+// That matters specifically because of what the R breakdown shows: trades reach
+// profit and hand it back before the structural target. Seeing that happen live
+// is the difference between taking the move and watching it go.
+float openR = na
+if opEntry.size() > 0
+    int li = opEntry.size() - 1
+    float oEn = opEntry.get(li)
+    float oRk = opRisk.get(li)
+    int   oDr = opDir.get(li)
+    if oRk > 0
+        openR := (oDr == 1 ? close - oEn : oEn - close) / oRk
+
 // Expectancy is the number that decides whether any of this is worth trading.
 // Positive means the edge pays; negative means a higher hit rate would still
 // be losing money, which is exactly the case a raw win percentage hides.
@@ -3400,7 +3420,9 @@ if statOn and barstate.islast
     f_pair2(10, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
     f_pair2(11, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
     f_pair2(12, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
-    f_pair2(13, "Signals still open", str.tostring(sigOpen), C_NE)
+    f_pair2(13, "Open now  (live R)",
+         str.tostring(sigOpen) + (na(openR) ? "" : "   " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"),
+         na(openR) ? C_NE : (openR > 0 ? C_UP : C_DN))
 
 // THE ONLY MARKERS THAT MEAN "TRADE". Labelled boxes, not triangles, so they
 // can never be mistaken for the DNA or momentum annotations around them.
@@ -3816,7 +3838,7 @@ if showTable and barstate.islast
 
     string balTxt = balActive ? (balArmed ? "ARMED " + str.tostring(balLo, format.mintick) + "-" + str.tostring(balHi, format.mintick) : "forming") : "none"
     f_pair(17, 0, "Balance area", balTxt, balActive and balArmed ? C_WN : C_NE)
-    f_pair(17, 2, "ADX / Eff", str.tostring(adxVal, "#.#") + " · " + str.tostring(effRatio, "#.##"),
+    f_pair(17, 2, "ADX / Eff", str.tostring(adxVal, "#.#") + " · " + str.tostring(effRatio, "0.00"),
          csigNoiseOn and effRatio < csigErMin ? C_DN : effRatio >= csigErMin ? C_UP : C_NE)
     f_pair(16, 2, "Sell gates", gSell + "  " + str.tostring(gatesSell) + "/" + str.tostring(needGates),
          gatesSell >= needGates ? C_DN : C_NE)
