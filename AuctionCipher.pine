@@ -3039,8 +3039,25 @@ if riskOn and riskMinR > 0
 bool wantBuy  = rawBuySig
 bool wantSell = rawSellSig
 
-bool flipLong  = csigFlip and anyLongOpen  and wantSell
-bool flipShort = csigFlip and anyShortOpen and wantBuy
+// ---------------------------------------------------------------------------
+// A REVERSAL CLOSE MUST BE AN EVENT, NOT A STATE
+// ---------------------------------------------------------------------------
+// wantSell is built from gates that all sit on alignWin, so once the sell side
+// qualifies it STAYS qualified for the whole window. When location was widened
+// from csigWindow to alignWin so divergences could complete, that window
+// doubled — and both sides now overlap constantly. The consequence is visible
+// in the statistics: reversal closes went from 8 of 120 trades, averaging
+// +1.12R and carrying the whole result, to 150 of 297 averaging +0.03R. The
+// exit stopped being selective and became churn.
+//
+// An ENTRY needs a window, because four pieces of evidence arriving on exactly
+// one bar is too much to ask. An EXIT does not: "the opposite side has been
+// qualified for the last eight bars" is not news, it is the same fact being
+// re-read. Requiring the opposite TRIGGER to fire on this bar turns the close
+// back into a genuine event — the cross that says the move has turned, not the
+// lingering memory of one.
+bool flipLong  = csigFlip and anyLongOpen  and wantSell and crossDnOk
+bool flipShort = csigFlip and anyShortOpen and wantBuy  and crossUpOk
 bool closeOnReversal = flipLong or flipShort
 
 if csigOneTrade and (anyLongOpen or anyShortOpen)
