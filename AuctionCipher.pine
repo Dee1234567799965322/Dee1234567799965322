@@ -70,7 +70,13 @@ string periodMode = input.string("24h UTC (crypto)", "Period Mode",
      options=["24h UTC (crypto)", "RTH Session (futures)", "Chart Daily", "Weekly"], group=G_PER,
      tooltip="24h UTC — new period at 00:00 UTC. Use for BTC perps.\nRTH Session — CME futures. Gold RTH is 0820-1330 New York.\nChart Daily — the symbol's own daily boundary.\nWeekly — composite weekly profile.")
 string rthSess   = input.session("0820-1330", "RTH Session", group=G_PER)
-string rthTz     = input.string("America/New_York", "Session Timezone", group=G_PER,
+// Named RTH explicitly. A second input in group 22 was also called "Session
+// Timezone", and the two control completely different things: this one decides
+// where the RTH session sits, which sets the whole period boundary and every
+// profile built on it, while the other only places the Asia/London/New York
+// boxes. Setting the wrong one silently moves the gold session and every level
+// derived from it, with nothing on the chart to say why.
+string rthTz     = input.string("America/New_York", "RTH Session Timezone", group=G_PER,
      options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Tokyo", "UTC"])
 int    ibMinutes = input.int(240, "Initial Balance (minutes)", minval=5, maxval=480, group=G_PER,
      tooltip="Classic Initial Balance is the first 60 minutes of a REGULAR TRADING HOURS session — roughly a sixth of it.\n\nA 24-hour crypto period is nearly four times longer, so 60 minutes is only a twenty-fourth of it and price extends past that range almost every day. That is what makes IB extension read BOTH and day type read Neutral on nearly every period, which tells you nothing.\n\n240 minutes is the same SIXTH of a 24-hour day, so the classification means something again.\n\nNote the resolution limit: this cannot be finer than one bar. On a 4h chart anything from 5 to 240 gives you exactly the first bar.")
@@ -84,7 +90,7 @@ bool  showHist_in   = input.bool(true,  "Profile Histogram", group=G_AUC)
 int   histWidth  = input.int(50, "Histogram Width (bars)", minval=10, maxval=200, group=G_AUC)
 bool  showPrior_in  = input.bool(true,  "Prior POC / VAH / VAL", group=G_AUC)
 bool  showPrHL_in   = input.bool(false, "Prior High / Low", group=G_AUC)
-bool  showIB_in     = input.bool(true,  "Initial Balance", group=G_AUC)
+bool  showIB_in     = input.bool(true,  "Initial Balance Lines", group=G_AUC)
 bool  showNpoc_in   = input.bool(true,  "Naked (untested) POCs", group=G_AUC,
      tooltip="A POC from a prior period price has not traded back through. The measurable version of an 'unmitigated' level — deleted the moment price touches it.")
 int   maxNpoc    = input.int(12, "Max Naked POCs", minval=1, maxval=40, group=G_AUC)
@@ -106,7 +112,7 @@ color cPrior = input.color(#9e9e9e, "Prior Value", group=G_AC)
 color cPrHL  = input.color(color.new(#9e9e9e, 50), "Prior High/Low", group=G_AC)
 color cNpoc  = input.color(#ec407a, "Naked POC", group=G_AC)
 color cLvn   = input.color(color.new(#ab47bc, 30), "LVN", group=G_AC)
-color cIB    = input.color(#66bb6a, "Initial Balance", group=G_AC)
+color cIB    = input.color(#66bb6a, "Initial Balance Line", group=G_AC)
 
 string G_WT = "3 · MOMENTUM WAVES (WaveTrend)"
 int   wtChannel = input.int(9,  "Channel Length", minval=2, group=G_WT)
@@ -216,7 +222,7 @@ bool   guideOn   = input.bool(true, "Show Plain-English Read", group=G_LBL,
 string G_VWAP = "13 · VWAP"
 bool   vwapOn_in    = input.bool(true, "Show VWAP", group=G_VWAP,
      tooltip="VWAP is the volume-weighted mean price. It belongs here: it is the same question the POC answers, asked continuously instead of once per period. When VWAP and POC sit apart, value is still migrating.")
-string vwapAnchor= input.string("Auction Period", "Anchor",
+string vwapAnchor= input.string("Auction Period", "VWAP Anchor",
      options=["Auction Period", "Daily", "Weekly", "Session"], group=G_VWAP,
      tooltip="Auction Period keeps VWAP on exactly the same clock as the volume profile, so VWAP and POC are always comparable.")
 bool   vwapBands_in = input.bool(true, "Show Std Dev Bands", group=G_VWAP)
@@ -282,7 +288,7 @@ bool   sessOn_in   = input.bool(true, "Show Session Ranges", group=G_SESS,
 string sess1    = input.session("0000-0800", "Asia", group=G_SESS)
 string sess2    = input.session("0800-1600", "London", group=G_SESS)
 string sess3    = input.session("1300-2100", "New York", group=G_SESS)
-string sessTz   = input.string("UTC", "Session Timezone", options=["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"], group=G_SESS)
+string sessTz   = input.string("UTC", "Session Range Timezone", options=["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"], group=G_SESS)
 int    sessKeep = input.int(3, "Days To Keep", minval=1, maxval=10, group=G_SESS)
 bool   sessLbl  = input.bool(true, "Label Sessions", group=G_SESS)
 color  cSess1   = input.color(color.new(#ffa726, 88), "Asia", group=G_SESS)
@@ -423,7 +429,7 @@ int  rsiLen    = input.int(14, "RSI Length", minval=2, group=G_HID)
 
 string G_CVD = "7 · CVD"
 bool   cvdShow  = input.bool(true, "Show CVD Line", group=G_CVD)
-string cvdReset = input.string("Daily", "Anchor", options=["Daily", "Weekly", "Session", "None (rolling)"], group=G_CVD)
+string cvdReset = input.string("Daily", "CVD Anchor", options=["Daily", "Weekly", "Session", "None (rolling)"], group=G_CVD)
 int    cvdRoll  = input.int(200, "Rolling Length", minval=10, group=G_CVD)
 
 string G_DIV = "8 · DIVERGENCES"
