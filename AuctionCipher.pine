@@ -2138,45 +2138,65 @@ if barstate.islast and aucOn
             for d = 0 to drawRows - 1
                 float tot = dTot.get(d)
                 if tot > 0
-                    int wid = int(math.round(tot / mx * histWidth))
-                    if wid > 0
-                        float slotLo = devLo + d * dStep
-                        float bot = slotLo + pad
-                        // The top slot can overshoot devHi when merging does not
-                        // divide the rows evenly; clamping it can invert the box,
-                        // so the row is skipped rather than drawn upside down.
-                        float top = math.min(devHi, slotLo + dStep - pad)
-                        // A row is "in value" when its own centre is inside the
-                        // value area, not when it merely overlaps it - otherwise
-                        // the two rows straddling VAH and VAL both light up and
-                        // the band reads two rows too wide.
-                        float mid   = slotLo + dStep / 2
-                        bool  inVa  = histVaColor and not na(devVah) and not na(devVal) and mid <= devVah and mid >= devVal
-                        bool  isPoc = d == pocRow
+                    // THE HOLES IN THE PROFILE.
+                    // This rounded to the nearest whole bar and then skipped the
+                    // row when the result was 0, so any price that traded less
+                    // than half a bar's worth of the busiest price drew NOTHING.
+                    // At a 34-bar width that is everything under about 1.5% of
+                    // the POC - which is exactly what a low volume node is. The
+                    // thinnest, most informative part of the auction was the
+                    // part being erased, and it came out as a black band
+                    // through the middle of the profile.
+                    //
+                    // A price that traded at all now always draws at least one
+                    // bar. Blank rows from here on mean genuinely zero volume:
+                    // price passed through without trading, which is a real and
+                    // different thing worth being able to see.
+                    int wid = math.max(1, int(math.round(tot / mx * histWidth)))
+                    float slotLo = devLo + d * dStep
+                    float bot = slotLo + pad
+                    // The top slot can overshoot devHi when merging does not
+                    // divide the rows evenly; clamping it can invert the box,
+                    // so the row is skipped rather than drawn upside down.
+                    float top = math.min(devHi, slotLo + dStep - pad)
+                    // A row is "in value" when its own centre is inside the
+                    // value area, not when it merely overlaps it - otherwise
+                    // the two rows straddling VAH and VAL both light up and
+                    // the band reads two rows too wide.
+                    float mid   = slotLo + dStep / 2
+                    bool  inVa  = histVaColor and not na(devVah) and not na(devVal) and mid <= devVah and mid >= devVal
+                    bool  isPoc = d == pocRow
 
-                        if top > bot
-                            // --- the row itself: TOTAL volume traded at this price
-                            color cRow = isPoc ? cHistPoc : inVa ? cHistVaTot : cHistTot
-                            int rx1 = histExtR ? xAnch : xAnch - wid
-                            int rx2 = histExtR ? xAnch + wid : xAnch
-                            histBoxes.push(box.new(rx1, top, rx2, bot, bgcolor=cRow,
-                                 border_color=color(na), force_overlay=true))
+                    if top > bot
+                        // --- the row itself: TOTAL volume traded at this price
+                        color cRow = isPoc ? cHistPoc : inVa ? cHistVaTot : cHistTot
+                        int rx1 = histExtR ? xAnch : xAnch - wid
+                        int rx2 = histExtR ? xAnch + wid : xAnch
+                        histBoxes.push(box.new(rx1, top, rx2, bot, bgcolor=cRow,
+                             border_color=color(na), force_overlay=true))
 
-                            // --- over it: the DOMINANT side, from the same edge
-                            // Same origin as the row, so the two tips can be read
-                            // against each other - how far the colour reaches into
-                            // the grey is how one-sided that price was.
-                            if histSplitUD
-                                float uv  = math.min(tot, math.max(0.0, dUp.get(d)))
-                                float dv  = tot - uv
-                                bool  buyDom = uv >= dv
-                                int   wOv = int(math.round((buyDom ? uv : dv) / mx * histWidth))
-                                if wOv > 0
-                                    color cOv = buyDom ? (inVa ? cHistVaUp : cHistUp) : (inVa ? cHistVaDn : cHistDn)
-                                    int ox1 = histExtR ? xAnch : xAnch - wOv
-                                    int ox2 = histExtR ? xAnch + wOv : xAnch
-                                    histLines.push(line.new(ox1, mid, ox2, mid, xloc=xloc.bar_index,
-                                         color=cOv, width=histOvW, force_overlay=true))
+                        // --- over it: the DOMINANT side, from the same edge
+                        // Same origin as the row, so the two tips can be read
+                        // against each other - how far the colour reaches into
+                        // the grey is how one-sided that price was.
+                        if histSplitUD
+                            float uv  = math.min(tot, math.max(0.0, dUp.get(d)))
+                            float dv  = tot - uv
+                            bool  buyDom = uv >= dv
+                            float dom = buyDom ? uv : dv
+                            // Same rounding trap as the row: on a thin row
+                            // the dominant side rounded away and the row lost
+                            // its colour, so the sparse edges of the profile
+                            // read as neutral when they are often the most
+                            // one-sided prices in it. Never wider than the
+                            // row it sits on.
+                            int   wOv = dom <= 0 ? 0 : math.min(wid, math.max(1, int(math.round(dom / mx * histWidth))))
+                            if wOv > 0
+                                color cOv = buyDom ? (inVa ? cHistVaUp : cHistUp) : (inVa ? cHistVaDn : cHistDn)
+                                int ox1 = histExtR ? xAnch : xAnch - wOv
+                                int ox2 = histExtR ? xAnch + wOv : xAnch
+                                histLines.push(line.new(ox1, mid, ox2, mid, xloc=xloc.bar_index,
+                                     color=cOv, width=histOvW, force_overlay=true))
 
             // --- value area extremities, drawn across the profile itself
             if histVaExt and not na(devVah) and not na(devVal)
