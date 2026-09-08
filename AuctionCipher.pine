@@ -464,6 +464,29 @@ int  divLbR     = input.int(5, "Pivot Right Bars", minval=1, maxval=50, group=G_
 int  divRangeMax= input.int(60, "Max Bars Between Pivots", minval=5, maxval=200, group=G_DIV)
 int  divRangeMin= input.int(5,  "Min Bars Between Pivots", minval=1, group=G_DIV)
 
+// --- QUALITY SCORE
+// Every oscillator already in this script - WaveTrend, RSI, MFI, CMF - is built
+// out of price and volume, so they mostly agree with each other by construction.
+// Stacking more of them does not add information, it adds correlated noise and
+// more signals. What follows is the opposite: four checks from data the
+// oscillators cannot see, used to REJECT weak divergences rather than to
+// generate new ones. Raising the minimum can only reduce the signal count.
+int  divMinQual = input.int(0, "Minimum Divergence Quality (0-4)", minval=0, maxval=4, group=G_DIV,
+     tooltip="0 = off, every divergence counts as proof exactly as before.\n\nSet this ABOVE ZERO ONLY AFTER MEASURING. Turn the statistics table on, run a few hundred bars at 0, note the expectancy, then raise it one step and compare. The dashboard shows the live score next to the gates so you can see what is being thrown away.\n\nThe four points are described in the settings below.")
+bool divQPart   = input.bool(true, "Quality: Participation", group=G_DIV,
+     tooltip="Scores a point when the new extreme was made on LESS volume than the previous swing extreme.\n\nA lower low that nobody traded is not selling, it is an absence of buying, and it takes very little to reverse it. A lower low on heavier volume is real distribution and is far more likely to continue. This is the one check no oscillator can make, because a divergence looks identical either way on the oscillator itself.")
+float divVolFrac= input.float(0.8, "Participation Ratio", minval=0.2, maxval=1.0, step=0.05, group=G_DIV,
+     tooltip="How much lighter the new extreme has to be. 0.8 means at most 80% of the previous extreme's volume.")
+bool divQOi     = input.bool(true, "Quality: Open Interest Across The Swing", group=G_DIV,
+     tooltip="Scores a point when open interest FELL from the previous swing extreme to this one.\n\nFalling OI into an extreme means positions are being CLOSED there - capitulating longs at a low, covering shorts at a high. That flow is finite and stops on its own. Rising OI into an extreme means new positions are being opened into the move, and those have not been squeezed out yet.\n\nThis is the same read as the existing OI proof, except measured across the swing the divergence is actually about instead of the last few bars. Needs Open Interest enabled and available for the symbol.")
+bool divQLoc    = input.bool(true, "Quality: At A Real Level", group=G_DIV,
+     tooltip="Scores a point when the rejection that goes with the divergence happened at the required number of stacked auction levels - value area edge, POC, naked POC, initial balance. A divergence in the middle of nowhere has nothing to reverse against.")
+bool divQRef    = input.bool(false, "Quality: Correlated Market Non-confirmation", group=G_DIV,
+     tooltip="Scores a point when a SECOND, correlated market did NOT make the matching new extreme.\n\nThis is the only genuinely new DATA on the list - everything else in the script is derived from this symbol's own price, volume and open interest. If gold makes a new low and the dollar has not made a new high, the low is not being driven by the thing that normally drives gold, and it is much more likely to fail.\n\nSuggestions - gold: TVC:DXY with Invert ON, or TVC:US10Y. BTC: BINANCE:ETHUSDT.P or CRYPTOCAP:TOTAL with Invert OFF.\n\nCosts one extra data request, so it is off by default.")
+string divRefSym= input.symbol("", "Correlated Symbol", group=G_DIV)
+bool divRefInv  = input.bool(false, "Correlated Symbol Is Inverse", group=G_DIV,
+     tooltip="ON for a symbol that normally moves OPPOSITE this one, such as DXY against gold.")
+
 // The pane's own graded markers were removed so it can never contradict the
 // chart. buyA / sellA remain as ALERT conditions only.
 
@@ -2888,6 +2911,14 @@ if fundSym != ""
     fundVal := request.security(fundSym, timeframe.period, close, ignore_invalid_symbol=true)
 bool fundOk = not na(fundVal)
 
+// The correlated market for the divergence quality score. Requested here, next
+// to the other external data, and only when it is actually switched on and
+// named - an unconditional request was what made this script "heavy" before.
+float refClose = na
+if divQRef and divRefSym != ""
+    refClose := request.security(divRefSym, timeframe.period, close, ignore_invalid_symbol=true)
+bool refOk = divQRef and not na(refClose)
+
 bool oiOk = oiOn and not na(oiClose)
 float oiChg = oiOk ? oiClose - nz(oiClose[1], oiClose) : 0.0
 float oiChgMean = ta.sma(oiChg, 50)
@@ -3150,6 +3181,68 @@ bool crossDnOk = csigZoneOnly ? (wtCrossDn and wt2 >= wtOB1) : wtCrossDn
 bool trigBuy  = ta.barssince(crossUpOk) <= alignWin
 bool trigSell = ta.barssince(crossDnOk) <= alignWin
 
+// ---------------------------------------------------------------------------
+// DIVERGENCE QUALITY
+// ---------------------------------------------------------------------------
+// A divergence says momentum disagreed with price. It does not say whether the
+// disagreement mattered. These four checks ask that, from data the oscillators
+// cannot reach, and they can only take signals away - at divMinQual 0 nothing
+// below changes a single decision.
+//
+// The span is the swing ITSELF: from the previous confirmed pivot to the one
+// that just completed the divergence. bar_index of the previous pivot comes
+// back from f_divergence, so the offset is exact rather than a fixed window.
+f_backFrom(int prevIdx) =>
+    int b = bar_index - nz(prevIdx, bar_index)
+    // 1 keeps it off the current bar; 480 keeps it inside max_bars_back
+    b >= 1 and b <= 480 ? b : -1
+
+// If both sources diverged, score the WaveTrend swing - it is the one the
+// trigger gate is built on, so the two are talking about the same event.
+int bullBack = f_backFrom(wtBullDiv ? wtPLI : cvPLI)
+int bearBack = f_backFrom(wtBearDiv ? wtPHI : cvPHI)
+// A ternary does not stop Pine from evaluating the history access on the dead
+// branch, and a negative offset is a runtime error, not an na. The offsets are
+// therefore always legal and the -1 is carried in the guard alone.
+int bullOff = math.max(1, bullBack)
+int bearOff = math.max(1, bearBack)
+
+// --- 1. participation: was the new extreme made on less volume than the old one
+float volAtPivot = volume[divLbR]
+float volPrevBull = bullBack > 0 ? volume[bullOff] : na
+float volPrevBear = bearBack > 0 ? volume[bearOff] : na
+bool qPartBull = divQPart and not na(volPrevBull) and volPrevBull > 0 and volAtPivot < volPrevBull * divVolFrac
+bool qPartBear = divQPart and not na(volPrevBear) and volPrevBear > 0 and volAtPivot < volPrevBear * divVolFrac
+
+// --- 2. open interest across the swing: closing flow, not new positioning
+float oiAtPivot  = oiOk ? oiClose[divLbR] : na
+float oiPrevBull = (oiOk and bullBack > 0) ? oiClose[bullOff] : na
+float oiPrevBear = (oiOk and bearBack > 0) ? oiClose[bearOff] : na
+bool qOiBull = divQOi and not na(oiPrevBull) and not na(oiAtPivot) and oiAtPivot < oiPrevBull
+bool qOiBear = divQOi and not na(oiPrevBear) and not na(oiAtPivot) and oiAtPivot < oiPrevBear
+
+// --- 3. the divergence is at a level worth reversing against
+bool qLocBull = divQLoc and confAtLowRej  >= csigConfMin and ta.barssince(rejLowNow)  <= alignWin
+bool qLocBear = divQLoc and confAtHighRej >= csigConfMin and ta.barssince(rejHighNow) <= alignWin
+
+// --- 4. the correlated market did not confirm the new extreme
+// With Invert ON the reference is expected to move the OTHER way, so "did not
+// confirm this low" becomes "did not make the matching HIGH".
+float refAtPivot  = refOk ? refClose[divLbR] : na
+float refPrevBull = (refOk and bullBack > 0) ? refClose[bullOff] : na
+float refPrevBear = (refOk and bearBack > 0) ? refClose[bearOff] : na
+bool qRefBull = refOk and not na(refPrevBull) and not na(refAtPivot) and
+     (divRefInv ? refAtPivot <= refPrevBull : refAtPivot >= refPrevBull)
+bool qRefBear = refOk and not na(refPrevBear) and not na(refAtPivot) and
+     (divRefInv ? refAtPivot >= refPrevBear : refAtPivot <= refPrevBear)
+
+int divQualBuy  = (qPartBull ? 1 : 0) + (qOiBull ? 1 : 0) + (qLocBull ? 1 : 0) + (qRefBull ? 1 : 0)
+int divQualSell = (qPartBear ? 1 : 0) + (qOiBear ? 1 : 0) + (qLocBear ? 1 : 0) + (qRefBear ? 1 : 0)
+
+// The gate. At divMinQual 0 this is exactly the old expression.
+bool divProofBuy  = (cvBullDiv or wtBullDiv) and divQualBuy  >= divMinQual
+bool divProofSell = (cvBearDiv or wtBearDiv) and divQualSell >= divMinQual
+
 // --- PROOF: an event, never a state
 bool mfTurnUp = ta.crossover(mfRaw, 0)
 bool mfTurnDn = ta.crossunder(mfRaw, 0)
@@ -3164,8 +3257,8 @@ bool absorbDn = dnaAbsorb and close <  open
 // of bars; proof counted only on the exact bar it fired. Three gates that
 // persist and one that does not can only line up by luck, which is the whole
 // of the "there is a divergence but no signal" complaint.
-bool proofBuyNow  = cvBullDiv or wtBullDiv or absorbUp or mfTurnUp or oiProofBuy
-bool proofSellNow = cvBearDiv or wtBearDiv or absorbDn or mfTurnDn or oiProofSell
+bool proofBuyNow  = divProofBuy  or absorbUp or mfTurnUp or oiProofBuy
+bool proofSellNow = divProofSell or absorbDn or mfTurnDn or oiProofSell
 bool proofBuy  = ta.barssince(proofBuyNow)  <= alignWin
 bool proofSell = ta.barssince(proofSellNow) <= alignWin
 
@@ -4068,10 +4161,14 @@ if showTable and barstate.islast
     // Which gates are currently open, so a silent chart is explainable
     // C context - L location - T trigger - P proof, then the OI verdict:
     // OK = open interest backs this side, NO = open interest vetoes it.
+    // qN is the divergence quality score, shown only once it can reject
+    // something, so the row does not grow for people who leave it at 0.
+    string qB = divMinQual > 0 ? " q" + str.tostring(divQualBuy)  : ""
+    string qS = divMinQual > 0 ? " q" + str.tostring(divQualSell) : ""
     string gBuy = (ctxBuy ? "C" : "-") + (atLowEdge ? "L" : "-") + (trigBuy ? "T" : "-") + (proofBuy ? "P" : "-") +
-         "x" + str.tostring(confAtLowRej) + (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "")
+         "x" + str.tostring(confAtLowRej) + (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "") + qB
     string gSell = (ctxSell ? "C" : "-") + (atHighEdge ? "L" : "-") + (trigSell ? "T" : "-") + (proofSell ? "P" : "-") +
-         "x" + str.tostring(confAtHighRej) + (oiVetoSell ? " NO" : oiProofSell ? " OK" : "")
+         "x" + str.tostring(confAtHighRej) + (oiVetoSell ? " NO" : oiProofSell ? " OK" : "") + qS
     f_pair(16, 0, "Buy gates", gBuy + "  " + str.tostring(gatesBuy) + "/" + str.tostring(needGates),
          gatesBuy >= needGates ? C_UP : C_NE)
     // ACTION - the single authoritative line. Everything else on both surfaces
