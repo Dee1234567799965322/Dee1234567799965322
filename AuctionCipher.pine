@@ -775,6 +775,24 @@ else
 // Plots, markers and the dashboard stay live — they hold no state.
 bool barClosed = barstate.isconfirmed
 
+// ---------------------------------------------------------------------------
+// IS THIS FEED ACTUALLY LIVE?
+// ---------------------------------------------------------------------------
+// On a real-time feed the current bar can never be older than one bar interval:
+// the moment it is, that bar has closed and a new one has opened. On a delayed
+// feed it can, by exactly the delay. So the age of the forming bar, measured
+// against the interval it belongs to, separates the two without needing any
+// flag the platform does not expose.
+//
+// This matters more than it looks. A free TradingView plan serves CME and COMEX
+// delayed, so a futures chart looks completely normal while every level, every
+// signal and every alert on it describes a market that moved ten minutes ago.
+// Nothing else on the chart would ever tell you.
+int  feedAgeMs  = timenow - time
+int  feedAgeMin = int(feedAgeMs / 60000)
+// 30 seconds of grace for ordinary clock and tick-arrival jitter.
+bool feedStale  = barstate.isrealtime and feedAgeMs > chartSec * 1000 + 30000
+
 // Declared here, not in the CVD section, because the VWAP anchor needs them too
 // and it is evaluated earlier in the script.
 bool chgD = timeframe.change("D")
@@ -3847,7 +3865,11 @@ if showTable and barstate.islast
         divCol := C_DN
 
     table.cell(dash, 0, 0, "AUCTION CIPHER", text_color=cTxt, text_size=size.small, text_halign=text.align_left)
-    table.cell(dash, 1, 0, acProfTag + " · " + modeTag, text_color=color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_right)
+    // A stale feed belongs at the top, not buried in a row. Everything below it
+    // is describing a market that has already moved on.
+    table.cell(dash, 1, 0,
+         feedStale ? "⚠ DELAYED " + str.tostring(feedAgeMin) + "m" : acProfTag + " · " + modeTag,
+         text_color=feedStale ? #ff1744 : color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_right)
 
     // The gate uses regimeLive (available on every bar); the row used to show
     // only `regime` (last bar only). When they disagree the dashboard was
