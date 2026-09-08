@@ -3180,8 +3180,17 @@ int confHigh = f_confluence(high)
 int confAtLowRej  = int(ta.valuewhen(rejLowNow,  confLow,  0))
 int confAtHighRej = int(ta.valuewhen(rejHighNow, confHigh, 0))
 
-bool atLowEdge  = ta.barssince(rejLowNow) <= alignWin and confAtLowRej >= csigConfMin
-bool atHighEdge = ta.barssince(rejHighNow) <= alignWin and confAtHighRej >= csigConfMin
+// ta.barssince COUNTS BARS, so it has to be reached on every bar or the count
+// it returns is wrong from then on. Behind an `and` it is not: the operator
+// short-circuits, so on any bar where the left side is false the call never
+// runs. That is the same trap f_inRange documents above, and it is why these
+// two are hoisted here and referenced everywhere else rather than called again
+// further down. Called once, unconditionally, at the top level.
+int barsSinceRejLow  = ta.barssince(rejLowNow)
+int barsSinceRejHigh = ta.barssince(rejHighNow)
+
+bool atLowEdge  = barsSinceRejLow  <= alignWin and confAtLowRej  >= csigConfMin
+bool atHighEdge = barsSinceRejHigh <= alignWin and confAtHighRej >= csigConfMin
 
 // --- TRIGGER
 bool crossUpOk = csigZoneOnly ? (wtCrossUp and wt2 <= wtOS1) : wtCrossUp
@@ -3241,8 +3250,9 @@ bool qOiBull = divQOi and not na(oiPrevBull) and not na(oiAtPivot) and oiAtPivot
 bool qOiBear = divQOi and not na(oiPrevBear) and not na(oiAtPivot) and oiAtPivot < oiPrevBear
 
 // --- 3. the divergence is at a level worth reversing against
-bool qLocBull = divQLoc and confAtLowRej  >= csigConfMin and ta.barssince(rejLowNow)  <= alignWin
-bool qLocBear = divQLoc and confAtHighRej >= csigConfMin and ta.barssince(rejHighNow) <= alignWin
+// barsSinceRejLow / High, not a second ta.barssince call - see the hoist above.
+bool qLocBull = divQLoc and confAtLowRej  >= csigConfMin and barsSinceRejLow  <= alignWin
+bool qLocBear = divQLoc and confAtHighRej >= csigConfMin and barsSinceRejHigh <= alignWin
 
 // --- 4. the correlated market did not confirm the new extreme
 // With Invert ON the reference is expected to move the OTHER way, so "did not
