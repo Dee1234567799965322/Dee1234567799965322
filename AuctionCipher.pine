@@ -939,6 +939,16 @@ if barstate.islast and aucOn
 // ============================================================================
 string highQual = "n/a"
 string lowQual  = "n/a"
+// Hoisted so the dashboard can show the MEASURED value beside the verdict.
+// Without it the threshold is uncalibratable: POOR needs the outer band to hold
+// excThresh x poorMult = 37.5% of the POC bin, and in a bell-shaped profile
+// that band typically holds 5 to 20%. So EXCESS fires nearly always and POOR
+// nearly never - the live statistics show POOR occurring 2 and 4 times across
+// hundreds of periods. A verdict that lands on one side 99% of the time is not
+// classifying anything. Showing the number lets the threshold be set from the
+// instrument's own distribution rather than guessed.
+float topPct = na
+float botPct = na
 if devOk
     float mxB = devBins.max()
     if mxB > 0
@@ -948,8 +958,8 @@ if devOk
         for e = 0 to dEdge - 1
             dTopSum += devBins.get(profRows - 1 - e)
             dBotSum += devBins.get(e)
-        float topPct = dTopSum / dEdge / mxB * 100
-        float botPct = dBotSum / dEdge / mxB * 100
+        topPct := dTopSum / dEdge / mxB * 100
+        botPct := dBotSum / dEdge / mxB * 100
         float poorCut = excThresh * poorMult
         if topPct < excThresh
             highQual := "EXCESS"
@@ -3512,9 +3522,31 @@ if guideOn and barstate.islast
 
     string headline = "WAITING — not enough data yet"
     color  headCol = C_NE
-    if regime == "BALANCE"
+
+    // ---------------------------------------------------------------------
+    // THE READ MUST NOT CONTRADICT THE LINE BELOW IT
+    // ---------------------------------------------------------------------
+    // regime is built from the value areas overlapping; dayType is built from
+    // the range against the initial balance. Both can be true at once — a day
+    // that travels 1.8x its IB and still finishes overlapping prior value is a
+    // trend day inside balance. But the ADVICE that followed only ever read
+    // regime, so the script printed "fade the edges back to POC" directly above
+    // "day type Trend day", and on gold breaking below weekly value it was
+    // recommending longs into a 1.4% decline.
+    //
+    // Fading is the one thing you must not do on a trend day. When the two
+    // disagree the read now says so and withholds the fade instead of asserting
+    // half the evidence as though the other half were not on the same label.
+    bool fadeUnsafe = dayType == "Trend day" or regimeLive == "IMBALANCE"
+
+    if regime == "BALANCE" and not fadeUnsafe
         headline := "BALANCE — two-way auction. Fade the edges back to POC."
         headCol := C_UP
+    else if regime == "BALANCE"
+        headline := "BALANCE by value, but " +
+             (dayType == "Trend day" ? "a TREND DAY is running" : "the live range says IMBALANCE") +
+             " — do NOT fade."
+        headCol := C_WN
     else if regime == "IMBALANCE"
         headline := "IMBALANCE — value is moving. Go with it, do not fade."
         headCol := C_WN
@@ -3529,7 +3561,9 @@ if guideOn and barstate.islast
         whereTxt := "below value (cheap)"
 
     string doTxt = ""
-    if regime == "BALANCE"
+    if regime == "BALANCE" and fadeUnsafe
+        doTxt := "\nThe rotation playbook is OFF while the day is extending. Wait for the range to stop expanding, or trade with the direction instead."
+    else if regime == "BALANCE"
         if posVsValue == "ABOVE value"
             doTxt := "\nSELL side favoured back toward POC " + (devOk ? str.tostring(devPoc, format.mintick) : "")
         else if posVsValue == "BELOW value"
@@ -3836,8 +3870,8 @@ if showTable and barstate.islast
     f_pair(7, 2, "Diverge",  divTxt, divCol)
     f_pair(8, 0, "VAL",      devOk ? str.tostring(devVal, format.mintick) : "—", cVa)
     f_pair(8, 2, "IB ext",   ibExt, C_NE)
-    f_pair(9, 0, "High",     highQual, hiCol)
-    f_pair(9, 2, "Low",      lowQual, loCol)
+    f_pair(9, 0, "High",     highQual + (na(topPct) ? "" : "  " + str.tostring(topPct, "#") + "%"), hiCol)
+    f_pair(9, 2, "Low",      lowQual  + (na(botPct) ? "" : "  " + str.tostring(botPct, "#") + "%"), loCol)
     f_pair(10, 0, "nPOC up", na(npocUp) ? "—" : str.tostring(npocUp, format.mintick), cNpoc)
     f_pair(10, 2, "nPOC dn", na(npocDn) ? "—" : str.tostring(npocDn, format.mintick), cNpoc)
     f_pair(11, 0, "DNA",     dnaState, dnaCol)
