@@ -527,19 +527,41 @@ bool acIsGold = str.contains(acTkr, "XAU") or str.contains(acTkr, "GOLD") or
 bool acBtc  = instrProf == "BTC / crypto perp" or (instrProf == "Auto-detect" and acIsBtc)
 bool acGold = instrProf == "Gold (XAU / GC)" or (instrProf == "Auto-detect" and acIsGold and not acIsBtc)
 
+// ---------------------------------------------------------------------------
+// RTH BELONGS TO FUTURES, NOT TO EVERY INSTRUMENT WITH GOLD IN THE NAME
+// ---------------------------------------------------------------------------
+// This profile used to put ALL gold into RTH mode, session 0820-1330 New York.
+// That is correct for COMEX:GC1!, whose pit session is a real thing. It is
+// wrong for TVC:GOLD, OANDA:XAUUSD and every other spot or CFD feed, which
+// trade close to 24 hours.
+//
+// The damage was not cosmetic. inPeriod is false outside the session, and
+// inPeriod gates profile accumulation, the running period range, and the VWAP
+// sums. So on a spot gold chart for roughly nineteen hours out of every
+// twenty-four the volume profile stopped taking data — the histogram, the value
+// area and the POC simply froze in place and stayed frozen while price walked
+// away from them. Nothing on the chart said why.
+//
+// syminfo.type separates the two cases exactly. Futures gold keeps its pit
+// session; spot gold gets Chart Daily, which follows the feed's own daily
+// boundary rather than a clock that does not apply to it.
+bool acGoldFut = acGold and syminfo.type == "futures"
+
 // Gold's regular session is 0820-1330 New York, about five and a quarter hours,
 // so the classic 60-minute initial balance is already the right sixth of it.
 // A 24-hour crypto period needs 240 to be the same fraction.
-string periodModeEff = acGold ? "RTH Session (futures)" : acBtc ? "24h UTC (crypto)" : periodMode
+string periodModeEff = acGoldFut ? "RTH Session (futures)" : acGold ? "Chart Daily" : acBtc ? "24h UTC (crypto)" : periodMode
 string rthSessEff    = acGold ? "0820-1330" : rthSess
 string rthTzEff      = acGold ? "America/New_York" : rthTz
-int    ibMinEff      = acGold ? 60 : acBtc ? 240 : ibMinutes
+// 60 minutes is the right sixth of a five-hour pit session; a near-24-hour
+// day needs 240 for the same fraction, which is why spot gold matches BTC here.
+int    ibMinEff      = acGoldFut ? 60 : (acGold or acBtc) ? 240 : ibMinutes
 string cmeSymEff     = acGold ? "COMEX:GC1!" : acBtc ? "CME:BTC1!" : cmeSym
 // Gold's daily range is roughly a third of BTC's, so the same percentage
 // threshold would hide most of its weekend gaps.
 float  cmeMinEff     = acGold ? 0.2 : acBtc ? 0.5 : cmeMin
 
-string acProfTag = acBtc ? "BTC" : acGold ? "GOLD" : "manual"
+string acProfTag = acBtc ? "BTC" : acGoldFut ? "GOLD-F" : acGold ? "GOLD" : "manual"
 
 // ============================================================================
 // 2. HELPERS
@@ -3828,8 +3850,12 @@ if showTable and barstate.islast
     f_pair(12, 0, "VWAP", vwTxt, vwCol)
     int barsPer = curH.size()
     bool tooCoarse = barsPer < 10
-    f_pair(12, 2, "Profile", tooCoarse ? "TOO FEW BARS" : (ltfOk ? ltfEff + " intra" : "chart bars"),
-         tooCoarse ? C_DN : C_UP)
+    // A frozen profile has to announce itself. Outside the session inPeriod is
+    // false and nothing is being added, so every level on the chart is a
+    // snapshot of the last close — true when it was drawn, stale now.
+    string profTxt = not inPeriod ? "DORMANT · outside session" :
+         tooCoarse ? "TOO FEW BARS" : (ltfOk ? ltfEff + " intra" : "chart bars")
+    f_pair(12, 2, "Profile", profTxt, not inPeriod ? C_WN : tooCoarse ? C_DN : C_UP)
     f_pair(13, 0, "Open int", oiOk ? oiState : "no OI feed", oiCol)
     f_pair(13, 2, "OI z", oiOk ? str.tostring(oiChgZ, "#.#") : "—", math.abs(oiChgZ) > 1.5 ? C_WN : C_NE)
     f_pair(14, 0, "Structure", trendDir > 0 ? "Bullish" : trendDir < 0 ? "Bearish" : "—",
