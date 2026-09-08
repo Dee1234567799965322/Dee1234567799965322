@@ -4,11 +4,11 @@
 // ----------------------------------------------------------------------------
 // ONE indicator. Two layers.
 //
-//   PRICE CHART  — auction context: volume profile, value area, naked POCs,
+//   PRICE CHART  - auction context: volume profile, value area, naked POCs,
 //                  initial balance, low volume nodes, excess/poor extremes.
 //                  Drawn onto the main chart using Pine v6 force_overlay.
 //
-//   LOWER PANE   — Market Cipher B style oscillator, with REAL money flow.
+//   LOWER PANE   - Market Cipher B style oscillator, with REAL money flow.
 //
 // This exists as one script because a free TradingView account allows two
 // indicators per chart, and you should not have to spend both on this.
@@ -46,7 +46,7 @@
 indicator("Auction Cipher", shorttitle="AUCTION CIPHER", overlay=false,
      max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=500)
 
-// Official TradingView library — provides requestVolumeDelta(), which is a more
+// Official TradingView library - provides requestVolumeDelta(), which is a more
 // faithful buy/sell split than classifying whole lower-timeframe bars by hand.
 // This is what both QuantAlgo's Volume Bubbles and the original Volume DNA use.
 //
@@ -65,10 +65,10 @@ type TradeDraw
 // ============================================================================
 // 1. INPUTS
 // ============================================================================
-string G_PER = "1 · PERIOD"
+string G_PER = "1 - PERIOD"
 string periodMode = input.string("24h UTC (crypto)", "Period Mode",
      options=["24h UTC (crypto)", "RTH Session (futures)", "Chart Daily", "Weekly"], group=G_PER,
-     tooltip="24h UTC — new period at 00:00 UTC. Use for BTC perps.\nRTH Session — CME futures. Gold RTH is 0820-1330 New York.\nChart Daily — the symbol's own daily boundary.\nWeekly — composite weekly profile.")
+     tooltip="24h UTC - new period at 00:00 UTC. Use for BTC perps.\nRTH Session - CME futures. Gold RTH is 0820-1330 New York.\nChart Daily - the symbol's own daily boundary.\nWeekly - composite weekly profile.")
 string rthSess   = input.session("0820-1330", "RTH Session", group=G_PER)
 // Named RTH explicitly. A second input in group 22 was also called "Session
 // Timezone", and the two control completely different things: this one decides
@@ -79,9 +79,9 @@ string rthSess   = input.session("0820-1330", "RTH Session", group=G_PER)
 string rthTz     = input.string("America/New_York", "RTH Session Timezone", group=G_PER,
      options=["America/New_York", "America/Chicago", "Europe/London", "Asia/Tokyo", "UTC"])
 int    ibMinutes = input.int(240, "Initial Balance (minutes)", minval=5, maxval=480, group=G_PER,
-     tooltip="Classic Initial Balance is the first 60 minutes of a REGULAR TRADING HOURS session — roughly a sixth of it.\n\nA 24-hour crypto period is nearly four times longer, so 60 minutes is only a twenty-fourth of it and price extends past that range almost every day. That is what makes IB extension read BOTH and day type read Neutral on nearly every period, which tells you nothing.\n\n240 minutes is the same SIXTH of a 24-hour day, so the classification means something again.\n\nNote the resolution limit: this cannot be finer than one bar. On a 4h chart anything from 5 to 240 gives you exactly the first bar.")
+     tooltip="Classic Initial Balance is the first 60 minutes of a REGULAR TRADING HOURS session - roughly a sixth of it.\n\nA 24-hour crypto period is nearly four times longer, so 60 minutes is only a twenty-fourth of it and price extends past that range almost every day. That is what makes IB extension read BOTH and day type read Neutral on nearly every period, which tells you nothing.\n\n240 minutes is the same SIXTH of a 24-hour day, so the classification means something again.\n\nNote the resolution limit: this cannot be finer than one bar. On a 4h chart anything from 5 to 240 gives you exactly the first bar.")
 
-string G_AUC = "2 · AUCTION LAYER (price chart)"
+string G_AUC = "2 - AUCTION LAYER (price chart)"
 bool  aucOn_in      = input.bool(true,  "Enable Auction Layer", group=G_AUC)
 int   profRows   = input.int(100, "Profile Rows", minval=8, maxval=180, group=G_AUC,
      tooltip="TradingView FRVP defaults to 250. Higher = finer POC, slower script.")
@@ -89,24 +89,24 @@ float vaPct      = input.float(70.0, "Value Area %", minval=50.0, maxval=95.0, g
 bool  showHist_in   = input.bool(true,  "Profile Histogram", group=G_AUC)
 int   histWidth  = input.int(50, "Histogram Width (bars)", minval=10, maxval=200, group=G_AUC)
 int   histOffset = input.int(8, "Histogram Offset (bars right)", minval=0, maxval=100, group=G_AUC,
-     tooltip="How far right of the last bar the profile is drawn.\n\nThis was hardcoded at 30. Together with a width of 50 that put the histogram between 30 and 80 bars into the future, which is further right than most charts leave empty — so on a normally scrolled chart the whole profile sat outside the visible area and looked like it was not being drawn at all.\n\n8 keeps it clear of the last candles while staying on screen. Raise it if it crowds price.")
+     tooltip="How far right of the last bar the profile is drawn.\n\nThis was hardcoded at 30. Together with a width of 50 that put the histogram between 30 and 80 bars into the future, which is further right than most charts leave empty - so on a normally scrolled chart the whole profile sat outside the visible area and looked like it was not being drawn at all.\n\n8 keeps it clear of the last candles while staying on screen. Raise it if it crowds price.")
 bool  showPrior_in  = input.bool(true,  "Prior POC / VAH / VAL", group=G_AUC)
 bool  showPrHL_in   = input.bool(false, "Prior High / Low", group=G_AUC)
 bool  showIB_in     = input.bool(true,  "Initial Balance Lines", group=G_AUC)
 bool  showNpoc_in   = input.bool(true,  "Naked (untested) POCs", group=G_AUC,
-     tooltip="A POC from a prior period price has not traded back through. The measurable version of an 'unmitigated' level — deleted the moment price touches it.")
+     tooltip="A POC from a prior period price has not traded back through. The measurable version of an 'unmitigated' level - deleted the moment price touches it.")
 int   maxNpoc    = input.int(12, "Max Naked POCs", minval=1, maxval=40, group=G_AUC)
 float npocMaxDist= input.float(15.0, "Ignore nPOC Beyond (%)", minval=1.0, maxval=100.0, group=G_AUC)
 bool  showLvn_in    = input.bool(true,  "Low Volume Nodes", group=G_AUC,
-     tooltip="Thin shelves inside the profile. The rigorous version of an 'imbalance' or 'fair value gap' — derived from where trade did NOT happen.")
+     tooltip="Thin shelves inside the profile. The rigorous version of an 'imbalance' or 'fair value gap' - derived from where trade did NOT happen.")
 float lvnThresh  = input.float(20.0, "LVN Threshold (% of POC)", minval=2.0, maxval=60.0, group=G_AUC)
 int   maxLvn     = input.int(6, "Max LVNs", minval=1, maxval=25, group=G_AUC)
 float excThresh  = input.float(15.0, "Excess Threshold (% of POC)", minval=2.0, maxval=50.0, group=G_AUC)
 float excBand    = input.float(5.0, "Extreme Band (% of range)", minval=1.0, maxval=25.0, group=G_AUC,
-     tooltip="How much of the range counts as 'the extreme'.\n\nThis previously tested ONE bin. At 24 rows that bin was 4% of the range; at the current default of 100 rows it is 1% — thin enough that it almost always looked empty, so nearly every high and low was reported as EXCESS. Measuring a fixed 5% band instead makes the reading independent of row count.")
+     tooltip="How much of the range counts as 'the extreme'.\n\nThis previously tested ONE bin. At 24 rows that bin was 4% of the range; at the current default of 100 rows it is 1% - thin enough that it almost always looked empty, so nearly every high and low was reported as EXCESS. Measuring a fixed 5% band instead makes the reading independent of row count.")
 float poorMult   = input.float(2.5,  "Poor Multiplier", minval=1.2, maxval=6.0, group=G_AUC)
 
-string G_AC = "2b · AUCTION COLORS"
+string G_AC = "2b - AUCTION COLORS"
 color cHist  = input.color(color.new(#5b8dd9, 82), "Histogram", group=G_AC)
 color cPoc   = input.color(#ffb300, "POC", group=G_AC)
 color cVa    = input.color(#26c6da, "VAH / VAL", group=G_AC)
@@ -116,7 +116,7 @@ color cNpoc  = input.color(#ec407a, "Naked POC", group=G_AC)
 color cLvn   = input.color(color.new(#ab47bc, 30), "LVN", group=G_AC)
 color cIB    = input.color(#66bb6a, "Initial Balance Line", group=G_AC)
 
-string G_WT = "3 · MOMENTUM WAVES (WaveTrend)"
+string G_WT = "3 - MOMENTUM WAVES (WaveTrend)"
 int   wtChannel = input.int(9,  "Channel Length", minval=2, group=G_WT)
 int   wtAverage = input.int(12, "Average Length", minval=2, group=G_WT)
 int   wtMALen   = input.int(3,  "Signal Length",  minval=1, group=G_WT)
@@ -125,11 +125,11 @@ float wtOB2 = input.float(60.0,  "Overbought 2", group=G_WT)
 float wtOS1 = input.float(-53.0, "Oversold 1",   group=G_WT)
 float wtOS2 = input.float(-60.0, "Oversold 2",   group=G_WT)
 
-string G_MF = "4 · MONEY FLOW"
+string G_MF = "4 - MONEY FLOW"
 string mfSource = input.string("Volume Delta (intrabar)", "Source",
      options=["Volume Delta (intrabar)", "Money Flow Index", "Chaikin Money Flow", "OG Market Cipher (no volume)"],
      group=G_MF,
-     tooltip="Volume Delta — signed volume from lower-timeframe bars. Most informative.\nMoney Flow Index — Wilder's real MFI.\nChaikin — close position in range, volume weighted.\nOG Market Cipher — the original formula, which contains no volume. Included for comparison.")
+     tooltip="Volume Delta - signed volume from lower-timeframe bars. Most informative.\nMoney Flow Index - Wilder's real MFI.\nChaikin - close position in range, volume weighted.\nOG Market Cipher - the original formula, which contains no volume. Included for comparison.")
 bool  mfShow    = input.bool(true, "Show Money Flow", group=G_MF)
 int   mfLength  = input.int(60, "Length", minval=2, group=G_MF)
 int   mfSmooth  = input.int(3,  "Smoothing", minval=1, group=G_MF)
@@ -139,9 +139,9 @@ float mfScale   = input.float(1.0, "Height", minval=0.1, maxval=10.0, group=G_MF
 float ogMult    = input.float(150.0, "OG Multiplier", group=G_MF)
 float ogPosY    = input.float(2.5,   "OG Y Offset",   group=G_MF)
 
-string G_DNA = "11 · VOLUME DNA (effort vs result)"
+string G_DNA = "11 - VOLUME DNA (effort vs result)"
 bool  dnaOn_in      = input.bool(true, "Enable Volume DNA", group=G_DNA,
-     tooltip="Wyckoff effort vs result, read from two z-scores: volume against its own average, and bar spread against its own average.\n\nABSORPTION   high volume, narrow spread — someone is soaking up everything thrown at them. The most valuable of the four.\nEFFORT       high volume, wide spread — participation and follow-through agree.\nEXHAUSTION   low volume, wide spread — the move is running on empty. This is what excess looks like as it forms.\nSTAGNATION   low volume, narrow spread — nobody home.")
+     tooltip="Wyckoff effort vs result, read from two z-scores: volume against its own average, and bar spread against its own average.\n\nABSORPTION   high volume, narrow spread - someone is soaking up everything thrown at them. The most valuable of the four.\nEFFORT       high volume, wide spread - participation and follow-through agree.\nEXHAUSTION   low volume, wide spread - the move is running on empty. This is what excess looks like as it forms.\nSTAGNATION   low volume, narrow spread - nobody home.")
 int   dnaVolLen  = input.int(20, "Volume Lookback", minval=5, group=G_DNA)
 int   dnaSprLen  = input.int(20, "Spread Lookback", minval=5, group=G_DNA)
 float dnaVolTh   = input.float(1.5, "Volume Std Dev Threshold", minval=0.5, maxval=5.0, group=G_DNA)
@@ -159,7 +159,7 @@ color cExh   = input.color(#ffd54f, "Exhaustion Color", group=G_DNA)
 color cStg   = input.color(color.new(#787b86, 40), "Stagnation Color", group=G_DNA)
 
 
-string G_DNAV = "11b · VOLUME DNA — VISUALS"
+string G_DNAV = "11b - VOLUME DNA - VISUALS"
 bool  dnaGlow_in    = input.bool(true,  "Ghost Glow Candles", group=G_DNAV,
      tooltip="Draws a soft halo around the candle body in the DNA colour. Additive, so your normal candles stay untouched.")
 bool  dnaCloud_in   = input.bool(true,  "Absorption Clouds", group=G_DNAV)
@@ -173,9 +173,9 @@ string tapePos   = input.string("Middle Right", "Tape Position",
      options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_DNAV,
      tooltip="Keep this away from the dashboard position or the two will overlap on the price chart.")
 
-string G_BUB = "12 · VOLUME BUBBLES"
+string G_BUB = "12 - VOLUME BUBBLES"
 bool   bubOn_in      = input.bool(false, "Enable Volume Bubbles", group=G_BUB,
-     tooltip="Percentile-based volume clusters. Concept from Volume Bubbles [QuantAlgo], CC BY-NC-SA 4.0 — reimplemented, not copied.\n\nOff by default because it stacks a lot of objects on the chart alongside everything else.")
+     tooltip="Percentile-based volume clusters. Concept from Volume Bubbles [QuantAlgo], CC BY-NC-SA 4.0 - reimplemented, not copied.\n\nOff by default because it stacks a lot of objects on the chart alongside everything else.")
 string bubDetect  = input.string("Volume OR Delta", "Detection Method",
      options=["Volume Only", "Delta Only", "Volume + Delta", "Volume OR Delta"], group=G_BUB)
 string bubClass   = input.string("Both", "Buy/Sell Classification",
@@ -200,18 +200,18 @@ color  bubMixCol  = input.color(color.new(#ffd600, 30), "Mixed Color", group=G_B
 
 
 
-string G_PRESET = "★ START HERE  —  CHART PRESET"
+string G_PRESET = "* START HERE  -  CHART PRESET"
 string preset = input.string("Standard", "Chart Preset",
      options=["Clean", "Standard", "Everything", "Custom (use the groups below)"], group=G_PRESET,
-     tooltip="CLEAN — value area, POC, naked POCs, VWAP, labels and the plain-English read. Nothing else. This is what you want when you are actually trading.\n\nSTANDARD — Clean plus the profile histogram, initial balance, low volume nodes, DNA glow and absorption clouds, golden pockets.\n\nEVERYTHING — every layer, including volume bubbles, the barcode tape, DNA circles and target fibs. For studying, not for trading.\n\nCUSTOM — the individual toggles in the groups below take over.")
+     tooltip="CLEAN - value area, POC, naked POCs, VWAP, labels and the plain-English read. Nothing else. This is what you want when you are actually trading.\n\nSTANDARD - Clean plus the profile histogram, initial balance, low volume nodes, DNA glow and absorption clouds, golden pockets.\n\nEVERYTHING - every layer, including volume bubbles, the barcode tape, DNA circles and target fibs. For studying, not for trading.\n\nCUSTOM - the individual toggles in the groups below take over.")
 
 string instrProf = input.string("Auto-detect", "Instrument Profile", group=G_PRESET,
      options=["Auto-detect", "BTC / crypto perp", "Gold (XAU / GC)", "Manual (use settings below)"],
-     tooltip="Switches the handful of settings that are genuinely instrument-specific, so you do not have to remember them when you change symbol.\n\nAUTO-DETECT reads the ticker and picks for you. BTC and GOLD force a profile regardless of symbol. MANUAL uses the values in the groups below exactly as you set them.\n\nWHAT IT CHANGES — and nothing else:\n  Period mode        BTC 24h UTC · Gold RTH session\n  RTH session        Gold 0820-1330 New York\n  Initial balance    BTC 240 min · Gold 60 min\n  CME symbol         CME:BTC1! · COMEX:GC1!\n  Minimum gap        BTC 0.5% · Gold 0.2%\n\nEverything else is already instrument-agnostic: WaveTrend is normalised, the DNA thresholds are z-scores, the risk layer is ATR-based, and the distance filters are percentages. Those need no switching and are left alone.\n\nOpen interest needs no switch either — it resolves per symbol and reports 'no OI feed' where there is none, which is the correct behaviour on spot gold.")
+     tooltip="Switches the handful of settings that are genuinely instrument-specific, so you do not have to remember them when you change symbol.\n\nAUTO-DETECT reads the ticker and picks for you. BTC and GOLD force a profile regardless of symbol. MANUAL uses the values in the groups below exactly as you set them.\n\nWHAT IT CHANGES - and nothing else:\n  Period mode        BTC 24h UTC - Gold RTH session\n  RTH session        Gold 0820-1330 New York\n  Initial balance    BTC 240 min - Gold 60 min\n  CME symbol         CME:BTC1! - COMEX:GC1!\n  Minimum gap        BTC 0.5% - Gold 0.2%\n\nEverything else is already instrument-agnostic: WaveTrend is normalised, the DNA thresholds are z-scores, the risk layer is ATR-based, and the distance filters are percentages. Those need no switching and are left alone.\n\nOpen interest needs no switch either - it resolves per symbol and reports 'no OI feed' where there is none, which is the correct behaviour on spot gold.")
 
-string G_LBL = "0 · LABELS  (read the chart without the menu)"
+string G_LBL = "0 - LABELS  (read the chart without the menu)"
 bool   lblOn     = input.bool(true, "Name Every Line", group=G_LBL,
-     tooltip="Writes what each line IS next to it — VAH, VAL, POC, IB High, nPOC, LVN, VWAP. You should never have to open settings to know what you are looking at.")
+     tooltip="Writes what each line IS next to it - VAH, VAL, POC, IB High, nPOC, LVN, VWAP. You should never have to open settings to know what you are looking at.")
 string lblStyle  = input.string("Name + Price", "Label Content",
      options=["Name Only", "Name + Price", "Price Only"], group=G_LBL)
 string lblSizeIn = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal"], group=G_LBL)
@@ -221,7 +221,7 @@ int    guideGap  = input.int(28, "Read Offset (bars right of labels)", minval=0,
 bool   guideOn   = input.bool(true, "Show Plain-English Read", group=G_LBL,
      tooltip="One line at the top of price telling you what the auction is doing and which playbook that selects. No jargon to decode.")
 
-string G_VWAP = "13 · VWAP"
+string G_VWAP = "13 - VWAP"
 bool   vwapOn_in    = input.bool(true, "Show VWAP", group=G_VWAP,
      tooltip="VWAP is the volume-weighted mean price. It belongs here: it is the same question the POC answers, asked continuously instead of once per period. When VWAP and POC sit apart, value is still migrating.")
 string vwapAnchor= input.string("Auction Period", "VWAP Anchor",
@@ -233,7 +233,7 @@ float  vwapMult2 = input.float(2.0, "Band 2 (std dev)", minval=0.1, maxval=5.0, 
 color  cVwap     = input.color(#ff9800, "VWAP Color", group=G_VWAP)
 color  cVwapBand = input.color(color.new(#ff9800, 70), "Band Color", group=G_VWAP)
 
-string G_FIB = "14 · FIB LEVELS"
+string G_FIB = "14 - FIB LEVELS"
 bool  gpOn_in      = input.bool(true, "Golden Pockets (retracement)", group=G_FIB,
      tooltip="0.5 / 0.618 / 0.786 / 0.886 measured from the most recent confirmed swing. Drawn as lines, so they cost no plot slots.")
 int   gpLookback= input.int(50, "Swing Lookback", minval=10, maxval=200, group=G_FIB)
@@ -254,39 +254,39 @@ color cFibTgt   = input.color(color.new(#ffffff, 55), "Target Fib Color", group=
 
 
 
-string G_CME = "20 · CME GAP"
+string G_CME = "20 - CME GAP"
 bool   cmeOn_in   = input.bool(true, "Show CME Gaps", group=G_CME,
-     tooltip="CME Bitcoin futures close for the weekend; spot and perps do not. The range price travelled while CME was shut is genuinely UNTRADED on the futures book — a single print in auction terms, and the cleanest example of one you will find.\n\nIf the symbol does not resolve it is ignored rather than breaking the script.")
+     tooltip="CME Bitcoin futures close for the weekend; spot and perps do not. The range price travelled while CME was shut is genuinely UNTRADED on the futures book - a single print in auction terms, and the cleanest example of one you will find.\n\nIf the symbol does not resolve it is ignored rather than breaking the script.")
 string cmeSym  = input.string("CME:BTC1!", "CME Symbol", group=G_CME)
 bool   cmeWeekOnly = input.bool(true, "Weekend Gaps Only", group=G_CME,
-     tooltip="THE fix for a gap count in the hundreds. The detector fires on every CME daily open gap, and BTC gaps the daily open constantly — those are not what anyone means by 'the CME gap'.\n\nWith this ON, a gap only counts when the futures book was actually SHUT across it. That is measured from the real time between consecutive CME sessions rather than by looking for a Friday, so a holiday closure — Good Friday, Christmas, Thanksgiving — is caught the same way a normal weekend is.")
+     tooltip="THE fix for a gap count in the hundreds. The detector fires on every CME daily open gap, and BTC gaps the daily open constantly - those are not what anyone means by 'the CME gap'.\n\nWith this ON, a gap only counts when the futures book was actually SHUT across it. That is measured from the real time between consecutive CME sessions rather than by looking for a Friday, so a holiday closure - Good Friday, Christmas, Thanksgiving - is caught the same way a normal weekend is.")
 float  cmeMin  = input.float(0.5, "Minimum Gap (%)", minval=0.01, maxval=5.0, group=G_CME)
 int    cmeKeep = input.int(6, "Max Open Gaps", minval=1, maxval=20, group=G_CME)
 color  cCmeGap = input.color(color.new(#9c27b0, 82), "Gap Color", group=G_CME)
 
-string G_RISK = "21 · RISK LAYER"
+string G_RISK = "21 - RISK LAYER"
 bool  riskOn_in    = input.bool(true, "Draw Stop / Target / R", group=G_RISK,
-     tooltip="The only layer that decides whether you keep money. Stops here are STRUCTURAL, not an ATR multiple: a long off value fails if the low that produced it is taken out, so the stop sits below that low. The target is the next real level the auction has to visit — the opposite value edge or the nearest untested POC.\n\nR is drawn before you act, not worked out afterwards.")
+     tooltip="The only layer that decides whether you keep money. Stops here are STRUCTURAL, not an ATR multiple: a long off value fails if the low that produced it is taken out, so the stop sits below that low. The target is the next real level the auction has to visit - the opposite value edge or the nearest untested POC.\n\nR is drawn before you act, not worked out afterwards.")
 float riskBuf   = input.float(0.3, "Stop Buffer (x ATR)", minval=0.05, maxval=2.0, group=G_RISK)
 int   riskSwing = input.int(5, "Stop Swing Lookback", minval=2, maxval=30, group=G_RISK)
 float riskMinStop = input.float(0.6, "Minimum Stop Distance (x ATR)", minval=0.1, maxval=3.0, group=G_RISK,
-     tooltip="Floor on how close the stop may sit. Without it, a tight recent low produced an enormous R that passed the minimum-R filter automatically — rewarding the stops most likely to be taken out.")
+     tooltip="Floor on how close the stop may sit. Without it, a tight recent low produced an enormous R that passed the minimum-R filter automatically - rewarding the stops most likely to be taken out.")
 float riskMinR  = input.float(1.5, "Minimum R to Show Signal", minval=0.0, maxval=10.0, group=G_RISK,
-     tooltip="Signals whose target is closer than this multiple of the risk are not drawn. A 0.6R setup is a losing trade taken slowly — better never to see it.")
+     tooltip="Signals whose target is closer than this multiple of the risk are not drawn. A 0.6R setup is a losing trade taken slowly - better never to see it.")
 string riskFill = input.string("Next bar open (realistic)", "Assumed Fill",
      options=["Next bar open (realistic)", "Signal bar close (optimistic)"], group=G_RISK,
-     tooltip="Where the statistics assume you actually got filled.\n\nThe signal is only KNOWN at the close of its bar, so you cannot have bought at that close — the first price available to you is the next bar's open. Measuring from the signal bar's close quietly credits you with a fill nobody could have taken, and overstates expectancy by that distance on every single trade.\n\nLeave this on the realistic setting unless you are comparing against something that measures the optimistic way.")
+     tooltip="Where the statistics assume you actually got filled.\n\nThe signal is only KNOWN at the close of its bar, so you cannot have bought at that close - the first price available to you is the next bar's open. Measuring from the signal bar's close quietly credits you with a fill nobody could have taken, and overstates expectancy by that distance on every single trade.\n\nLeave this on the realistic setting unless you are comparing against something that measures the optimistic way.")
 float riskSlipT = input.float(0.0, "Slippage (ticks)", minval=0.0, maxval=200.0, group=G_RISK,
-     tooltip="Applied against you on entry — buys fill higher, sells fill lower. Set it to what your venue actually costs you and the expectancy row becomes something you can trust.")
+     tooltip="Applied against you on entry - buys fill higher, sells fill lower. Set it to what your venue actually costs you and the expectancy row becomes something you can trust.")
 float riskTgtCap = input.float(0.0, "Cap Target at (R)", minval=0.0, maxval=20.0, step=0.5, group=G_RISK,
-     tooltip="0 = off. The target is otherwise always a STRUCTURAL level — the next place the auction has to visit — and nothing caps how far away that is.\n\nRead your own statistics before setting this. If R from wins minus R from losses is NEGATIVE while R from flat is strongly POSITIVE, the trades are reaching profit and then giving it back before the structural target: the entries work and the target is too far. A cap turns that into realised R.\n\nThe cap can never sit closer than Minimum R, or the setup would fail its own filter the moment it was drawn.\n\nLeave HEADROOM. Setting the cap equal to Minimum R gives the trade none: fills happen at the next bar's open, R is recomputed from the price you actually got, and any adverse open then drops it under the minimum and the signal is dropped as unfilled. If Minimum R is 1.5, cap at 2 — or lower Minimum R first.")
+     tooltip="0 = off. The target is otherwise always a STRUCTURAL level - the next place the auction has to visit - and nothing caps how far away that is.\n\nRead your own statistics before setting this. If R from wins minus R from losses is NEGATIVE while R from flat is strongly POSITIVE, the trades are reaching profit and then giving it back before the structural target: the entries work and the target is too far. A cap turns that into realised R.\n\nThe cap can never sit closer than Minimum R, or the setup would fail its own filter the moment it was drawn.\n\nLeave HEADROOM. Setting the cap equal to Minimum R gives the trade none: fills happen at the next bar's open, R is recomputed from the price you actually got, and any adverse open then drops it under the minimum and the signal is dropped as unfilled. If Minimum R is 1.5, cap at 2 - or lower Minimum R first.")
 int   riskExtend= input.int(25, "Box Extend (bars)", minval=5, maxval=200, group=G_RISK)
 color cRiskStop = input.color(color.new(#ef5350, 78), "Stop Zone", group=G_RISK)
 color cRiskTgt  = input.color(color.new(#26a69a, 78), "Target Zone", group=G_RISK)
 
-string G_SESS = "22 · SESSION RANGES"
+string G_SESS = "22 - SESSION RANGES"
 bool   sessOn_in   = input.bool(true, "Show Session Ranges", group=G_SESS,
-     tooltip="Crypto has no exchange sessions, but it absolutely has session behaviour. The Asia range in particular is a real reference — London and New York routinely open by taking one side of it.\n\nThis is the auction-legitimate version of ICT killzones: measured ranges rather than arbitrary windows.")
+     tooltip="Crypto has no exchange sessions, but it absolutely has session behaviour. The Asia range in particular is a real reference - London and New York routinely open by taking one side of it.\n\nThis is the auction-legitimate version of ICT killzones: measured ranges rather than arbitrary windows.")
 string sess1    = input.session("0000-0800", "Asia", group=G_SESS)
 string sess2    = input.session("0800-1600", "London", group=G_SESS)
 string sess3    = input.session("1300-2100", "New York", group=G_SESS)
@@ -297,17 +297,17 @@ color  cSess1   = input.color(color.new(#ffa726, 88), "Asia", group=G_SESS)
 color  cSess2   = input.color(color.new(#42a5f5, 88), "London", group=G_SESS)
 color  cSess3   = input.color(color.new(#66bb6a, 88), "New York", group=G_SESS)
 
-string G_STAT = "23 · STATISTICS"
+string G_STAT = "23 - STATISTICS"
 bool   statOn_in   = input.bool(true, "Show Statistics Table", group=G_STAT,
-     tooltip="Everything this indicator asserts — poor highs get revisited, excess holds, balance breaks follow through — is a CLAIM until it is counted on your instrument. This counts them.\n\nTreat a low sample size as no answer at all. Under about 20 occurrences the percentages mean nothing.")
+     tooltip="Everything this indicator asserts - poor highs get revisited, excess holds, balance breaks follow through - is a CLAIM until it is counted on your instrument. This counts them.\n\nTreat a low sample size as no answer at all. Under about 20 occurrences the percentages mean nothing.")
 int    statHorizon = input.int(50, "Outcome Horizon (bars)", minval=5, maxval=500, group=G_STAT,
      tooltip="How long a claim gets to come true before it is marked as failed.")
 string statPos  = input.string("Bottom Left", "Table Position",
      options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_STAT)
 
-string G_BAL = "19 · BALANCE AREAS  (auto-detected)"
+string G_BAL = "19 - BALANCE AREAS  (auto-detected)"
 bool  balOn_in      = input.bool(true, "Detect Balance Areas", group=G_BAL,
-     tooltip="Every other profile in this script is anchored to a CLOCK — the UTC day, the week. Real auctions ignore calendars. Balance forms and breaks when it wants to.\n\nThis finds balance by its signature instead: volatility contracting. When ADX falls through its threshold the market has stopped trending and started rotating, so a box opens, builds, and gets its own volume profile. The POC and edges of THAT box are the levels that matter for the break.\n\nConcept from Low Volatility Profiles [BigBeluga], CC BY-NC-SA 4.0 — reimplemented, not copied.")
+     tooltip="Every other profile in this script is anchored to a CLOCK - the UTC day, the week. Real auctions ignore calendars. Balance forms and breaks when it wants to.\n\nThis finds balance by its signature instead: volatility contracting. When ADX falls through its threshold the market has stopped trending and started rotating, so a box opens, builds, and gets its own volume profile. The POC and edges of THAT box are the levels that matter for the break.\n\nConcept from Low Volatility Profiles [BigBeluga], CC BY-NC-SA 4.0 - reimplemented, not copied.")
 int   balAdxLen  = input.int(14, "ADX Length", minval=2, maxval=100, group=G_BAL)
 int   balAdxTh   = input.int(30, "ADX Threshold", minval=5, maxval=80, group=G_BAL,
      tooltip="ADX falling through this is the contraction signal. Higher = only deep contractions qualify.")
@@ -322,22 +322,22 @@ color cBalFill   = input.color(color.new(#2196f3, 90), "Box Fill", group=G_BAL)
 color cBalPoc    = input.color(#ff9800, "Balance POC", group=G_BAL)
 color cBalLo     = input.color(color.new(#2196f3, 30), "Low Volume Shade", group=G_BAL)
 
-string G_HTF = "18 · HIGHER TIMEFRAME VALUE"
+string G_HTF = "18 - HIGHER TIMEFRAME VALUE"
 string htfMode = input.string("Weekly", "HTF Value Area",
      options=["Off", "Daily", "Weekly", "Monthly"], group=G_HTF,
-     tooltip="A second, slower volume profile running alongside the main one. Your period profile answers 'where is value today'. This answers 'where is value this week', which is what decides whether today's balance is itself sitting high or low in a bigger auction.\n\nBuilt from chart bars rather than intrabar data — a week of 15m bars is already 672 points, far more than a profile needs, and it keeps the script fast.")
+     tooltip="A second, slower volume profile running alongside the main one. Your period profile answers 'where is value today'. This answers 'where is value this week', which is what decides whether today's balance is itself sitting high or low in a bigger auction.\n\nBuilt from chart bars rather than intrabar data - a week of 15m bars is already 672 points, far more than a profile needs, and it keeps the script fast.")
 color cHtfPoc  = input.color(#ffee58, "HTF POC", group=G_HTF)
 color cHtfVa   = input.color(color.new(#ef5350, 25), "HTF VAH / VAL", group=G_HTF)
 
-string G_OI = "17 · OPEN INTEREST & FUNDING  (perps)"
+string G_OI = "17 - OPEN INTEREST & FUNDING  (perps)"
 bool   oiOn_in      = input.bool(true, "Enable Open Interest", group=G_OI,
-     tooltip="OI is the count of contracts still open. Combined with price direction it tells you WHO is doing the moving:\n\nPrice up + OI up      new longs opening — real buying, but risk is building\nPrice up + OI down    shorts covering — a squeeze, not demand; tends to stall\nPrice down + OI up    new shorts opening — real selling\nPrice down + OI down  longs closing or being liquidated — a flush\n\nA squeeze into resistance and genuine buying into resistance look identical on price. They are opposite trades. This is the only thing that separates them.")
+     tooltip="OI is the count of contracts still open. Combined with price direction it tells you WHO is doing the moving:\n\nPrice up + OI up      new longs opening - real buying, but risk is building\nPrice up + OI down    shorts covering - a squeeze, not demand; tends to stall\nPrice down + OI up    new shorts opening - real selling\nPrice down + OI down  longs closing or being liquidated - a flush\n\nA squeeze into resistance and genuine buying into resistance look identical on price. They are opposite trades. This is the only thing that separates them.")
 bool   liqOn_in     = input.bool(true, "Mark Liquidation Cascades", group=G_OI,
      tooltip="A wide-range bar where open interest COLLAPSES is forced closing, not fresh conviction. These flushes tend to overshoot and mean-revert, which is why they so often print the excess tail at the extreme.")
 bool   oiProofOn = input.bool(true, "Count OI as Signal Proof", group=G_OI,
-     tooltip="Adds open interest to the PROOF gate.\n\nInto support, price falling on FALLING open interest is longs being closed or liquidated — a flush, not fresh supply. That is what you want to be buying into.\n\nInto resistance, price rising on FALLING open interest is shorts covering — a squeeze, not demand. That is what you want to be selling into.")
+     tooltip="Adds open interest to the PROOF gate.\n\nInto support, price falling on FALLING open interest is longs being closed or liquidated - a flush, not fresh supply. That is what you want to be buying into.\n\nInto resistance, price rising on FALLING open interest is shorts covering - a squeeze, not demand. That is what you want to be selling into.")
 bool   oiVetoOn  = input.bool(true, "Veto Signals Against Real Positioning", group=G_OI,
-     tooltip="The more important half. Price rising on RISING open interest is new longs opening — genuine demand — and fading it is how you get run over. Price falling on rising OI is new shorts opening, genuine supply, and catching it is how you get run over the other way.\n\nWith this ON, a sell signal into real buying and a buy signal into real selling are both suppressed. A squeeze and genuine demand look identical on price; this is the only thing that separates them.")
+     tooltip="The more important half. Price rising on RISING open interest is new longs opening - genuine demand - and fading it is how you get run over. Price falling on rising OI is new shorts opening, genuine supply, and catching it is how you get run over the other way.\n\nWith this ON, a sell signal into real buying and a buy signal into real selling are both suppressed. A squeeze and genuine demand look identical on price; this is the only thing that separates them.")
 float  liqOiZ    = input.float(1.5, "Liquidation OI Drop (std dev)", minval=0.5, maxval=5.0, group=G_OI)
 float  liqSprZ   = input.float(1.2, "Liquidation Spread (std dev)", minval=0.3, maxval=5.0, group=G_OI)
 string fundSym   = input.string("", "Funding Symbol (optional)", group=G_OI,
@@ -346,9 +346,9 @@ color  cOiUp     = input.color(#26a69a, "OI Rising Color", group=G_OI)
 color  cOiDn     = input.color(#ef5350, "OI Falling Color", group=G_OI)
 color  cLiq      = input.color(#ffea00, "Liquidation Color", group=G_OI)
 
-string G_STR = "15 · MARKET STRUCTURE"
+string G_STR = "15 - MARKET STRUCTURE"
 bool  strOn_in      = input.bool(true, "Show Structure (BOS / CHoCH)", group=G_STR,
-     tooltip="Swing labels and structure breaks. This is the ONE part of SMC that is not already covered by the auction layer — everything else it offers you already measure better.\n\nBOS  = break in the SAME direction as the trend. Continuation.\nCHoCH = break AGAINST the trend. The first warning of a turn.")
+     tooltip="Swing labels and structure breaks. This is the ONE part of SMC that is not already covered by the auction layer - everything else it offers you already measure better.\n\nBOS  = break in the SAME direction as the trend. Continuation.\nCHoCH = break AGAINST the trend. The first warning of a turn.")
 int   strLen     = input.int(10, "Swing Strength", minval=2, maxval=50, group=G_STR)
 bool  strSwings  = input.bool(true, "Label Swings (HH / HL / LH / LL)", group=G_STR)
 int   strMaxDraw = input.int(12, "Max Structure Marks", minval=2, maxval=40, group=G_STR)
@@ -356,12 +356,12 @@ color cBos       = input.color(#26a69a, "BOS Color", group=G_STR)
 color cChoch     = input.color(#ff9800, "CHoCH Color", group=G_STR)
 color cSwing     = input.color(color.new(#b2b5be, 25), "Swing Label Color", group=G_STR)
 
-string G_CSIG = "16 · CHART SIGNALS  (location-gated)"
+string G_CSIG = "16 - CHART SIGNALS  (location-gated)"
 bool  csigOn_in     = input.bool(true, "Show Buy / Sell on Price Chart", group=G_CSIG,
-     tooltip="These are NOT the pane's A/B/C grades. A pane signal only needs momentum. A chart signal needs all four layers to agree:\n\n1 CONTEXT  — regime permits the direction\n2 LOCATION — price at a value area edge or an untested POC\n3 TRIGGER  — WaveTrend cross in the extreme zone\n4 PROOF    — real money flow, absorption, or a delta divergence\n\nYou will see far fewer of these. That is the point.")
+     tooltip="These are NOT the pane's A/B/C grades. A pane signal only needs momentum. A chart signal needs all four layers to agree:\n\n1 CONTEXT  - regime permits the direction\n2 LOCATION - price at a value area edge or an untested POC\n3 TRIGGER  - WaveTrend cross in the extreme zone\n4 PROOF    - real money flow, absorption, or a delta divergence\n\nYou will see far fewer of these. That is the point.")
 string csigSens  = input.string("Strict (all 4)", "Sensitivity",
      options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)"], group=G_CSIG,
-     tooltip="How many of the four gates must pass. Location and trigger are always required — sensitivity only relaxes context and proof.\n\nIf you are seeing no signals at all, this is the dial to turn first.")
+     tooltip="How many of the four gates must pass. Location and trigger are always required - sensitivity only relaxes context and proof.\n\nIf you are seeing no signals at all, this is the dial to turn first.")
 bool  csigZoneOnly = input.bool(false, "Cross Must Be In Extreme Zone", group=G_CSIG,
      tooltip="ON is the purist reading, but on ranging days WaveTrend may never reach +/-53 and you will see nothing for days. OFF accepts any cross that clears the other gates.")
 bool  csigNeedBody = input.bool(false, "Rejection Must Close In Direction", group=G_CSIG,
@@ -369,36 +369,36 @@ bool  csigNeedBody = input.bool(false, "Rejection Must Close In Direction", grou
 bool  csigVwap   = input.bool(true, "Count VWAP Bands as Location", group=G_CSIG,
      tooltip="Adds the VWAP standard deviation bands to the list of valid locations. These exist on every bar, unlike the developing value area.")
 int   csigCool   = input.int(20, "Cooldown (bars between signals)", minval=1, maxval=200, group=G_CSIG,
-     tooltip="Minimum bars before the same side can signal again. Six was far too short — one genuine swing re-fired over and over.")
+     tooltip="Minimum bars before the same side can signal again. Six was far too short - one genuine swing re-fired over and over.")
 int   csigWindow = input.int(3, "Trigger Window (bars)", minval=1, maxval=10, group=G_CSIG,
      tooltip="How many bars the cross and the location touch may be apart and still count as the same event.")
 float csigTol    = input.float(0.12, "Location Tolerance (%)", minval=0.01, maxval=2.0, group=G_CSIG)
 bool  csigOneTrade = input.bool(true, "One Trade At A Time", group=G_CSIG,
-     tooltip="Nothing used to stop a BUY firing while a SELL was still open, so the chart could show you a long and a short at once with their stop and target boxes overlapping — two contradictory instructions, which is worse than none.\n\nWith this ON no new signal is drawn while a trade is still live.")
+     tooltip="Nothing used to stop a BUY firing while a SELL was still open, so the chart could show you a long and a short at once with their stop and target boxes overlapping - two contradictory instructions, which is worse than none.\n\nWith this ON no new signal is drawn while a trade is still live.")
 string csigFlipMode = input.string("Opposite setup completes", "Reversal Close Trigger",
      options=["Opposite setup completes", "Opposite momentum cross"], group=G_CSIG,
-     tooltip="WHEN a reversal close fires.\n\nSETUP COMPLETES — the moment the opposite side satisfies all its gates. This is the behaviour every measurement so far was taken on.\n\nMOMENTUM CROSS — additionally requires the opposite WaveTrend cross on that exact bar. Far rarer, so more trades run to their stop or target instead.\n\nWhich is better is an open question, not a settled one. Read your own R rows: divide R-from-flat by the flat count, and R-from-wins-plus-losses by the resolved count. Whichever bucket has the higher per-trade R is where you want trades ending up. On the 297-trade sample that produced this input, flats returned +0.03R each against resolved trades at -0.035R each — so cutting early was marginally the better of the two, and the stricter setting would have sent more trades into the worse bucket.")
+     tooltip="WHEN a reversal close fires.\n\nSETUP COMPLETES - the moment the opposite side satisfies all its gates. This is the behaviour every measurement so far was taken on.\n\nMOMENTUM CROSS - additionally requires the opposite WaveTrend cross on that exact bar. Far rarer, so more trades run to their stop or target instead.\n\nWhich is better is an open question, not a settled one. Read your own R rows: divide R-from-flat by the flat count, and R-from-wins-plus-losses by the resolved count. Whichever bucket has the higher per-trade R is where you want trades ending up. On the 297-trade sample that produced this input, flats returned +0.03R each against resolved trades at -0.035R each - so cutting early was marginally the better of the two, and the stricter setting would have sent more trades into the worse bucket.")
 bool  csigFlip     = input.bool(true, "Opposite Signal Closes Open Trade", group=G_CSIG,
-     tooltip="If a long is open and the sell side fully qualifies, the reason you were long is gone. The trade is closed at market and counted at whatever R it actually made, instead of being left to drift to its stop.\n\nIt does NOT immediately reverse — you go flat and wait for the next clean signal.")
+     tooltip="If a long is open and the sell side fully qualifies, the reason you were long is gone. The trade is closed at market and counted at whatever R it actually made, instead of being left to drift to its stop.\n\nIt does NOT immediately reverse - you go flat and wait for the next clean signal.")
 int   csigConfMin = input.int(1, "Minimum Level Confluence", minval=1, maxval=6, group=G_CSIG,
-     tooltip="How many independent levels must sit together at the rejection price.\n\nLocation is otherwise a BINARY test: a wick off a lone VWAP band counts exactly the same as a wick off a price where prior VAL, the POC, an untested POC and the weekly value low all coincide. Those are not the same trade.\n\n1 keeps the current behaviour — any single level qualifies. 2 or 3 demands a genuine cluster and will cut your signal count substantially.\n\nThe live count for both sides is shown after the gate letters in the dashboard, so you can watch what your instrument actually produces before raising this.")
+     tooltip="How many independent levels must sit together at the rejection price.\n\nLocation is otherwise a BINARY test: a wick off a lone VWAP band counts exactly the same as a wick off a price where prior VAL, the POC, an untested POC and the weekly value low all coincide. Those are not the same trade.\n\n1 keeps the current behaviour - any single level qualifies. 2 or 3 demands a genuine cluster and will cut your signal count substantially.\n\nThe live count for both sides is shown after the gate letters in the dashboard, so you can watch what your instrument actually produces before raising this.")
 bool  csigNoiseOn = input.bool(false, "Require Efficient Price Movement", group=G_CSIG,
-     tooltip="A NOISE gate. None of the other four gates asks whether the market is currently smooth enough for a target to be reachable — context measures the SIZE of the range, not how cleanly price moves through it.\n\nEfficiency ratio is the straight-line distance price covered divided by the total distance it actually travelled. Near 1 is a clean directional move; near 0 is chop that happens to end up somewhere.\n\nThis matters most when your targets are far away. A 3R target needs price to travel efficiently — in chop the stop is reached first, every time.\n\nOFF by default so it cannot disturb a measurement already in progress. Turn it on, gather a fresh sample, and compare expectancy against your baseline.")
+     tooltip="A NOISE gate. None of the other four gates asks whether the market is currently smooth enough for a target to be reachable - context measures the SIZE of the range, not how cleanly price moves through it.\n\nEfficiency ratio is the straight-line distance price covered divided by the total distance it actually travelled. Near 1 is a clean directional move; near 0 is chop that happens to end up somewhere.\n\nThis matters most when your targets are far away. A 3R target needs price to travel efficiently - in chop the stop is reached first, every time.\n\nOFF by default so it cannot disturb a measurement already in progress. Turn it on, gather a fresh sample, and compare expectancy against your baseline.")
 int   csigErLen  = input.int(20, "Efficiency Lookback (bars)", minval=5, maxval=200, group=G_CSIG)
 float csigErMin  = input.float(0.25, "Minimum Efficiency", minval=0.0, maxval=1.0, step=0.05, group=G_CSIG,
      tooltip="Below this, no signal. Trending markets typically run 0.3 to 0.6; heavy chop sits under 0.15. Start at 0.25 and read the Efficiency row in the dashboard for a while before moving it.")
 bool  csigStrict = input.bool(true, "Require Regime Agreement", group=G_CSIG,
-     tooltip="ON — no counter-trend buys while value is migrating down, and vice versa. This is the filter that stops you fading a trend day.")
+     tooltip="ON - no counter-trend buys while value is migrating down, and vice versa. This is the filter that stops you fading a trend day.")
 color cBuySig    = input.color(#00e676, "Buy Color", group=G_CSIG)
 color cSellSig   = input.color(#ff1744, "Sell Color", group=G_CSIG)
 
 string G_VIS = "MARKET CIPHER B: VISUALS (LOWER PANE)"
 color cFastWave = input.color(color.new(#4a4e57, 12), "Fast Wave", group=G_VIS,
-     tooltip="WaveTrend 1 — the faster of the two momentum waves.")
+     tooltip="WaveTrend 1 - the faster of the two momentum waves.")
 color cSlowWave = input.color(color.new(#22262f, 5), "Slow Wave", group=G_VIS,
-     tooltip="WaveTrend 2 — the signal line the fast wave crosses.")
+     tooltip="WaveTrend 2 - the signal line the fast wave crosses.")
 color cVwapUp   = input.color(color.new(#00c8f0, 30), "VWAP Wave Up", group=G_VIS,
-     tooltip="Cyan in the original, one colour for both directions. It is a magnitude reading, not a direction reading — direction is already carried by the green/red money flow underneath it.")
+     tooltip="Cyan in the original, one colour for both directions. It is a magnitude reading, not a direction reading - direction is already carried by the green/red money flow underneath it.")
 color cVwapDn   = input.color(color.new(#00c8f0, 30), "VWAP Wave Down", group=G_VIS)
 color cMfiBull  = input.color(color.new(#2eb872, 15), "MFI Bullish Ribbon", group=G_VIS)
 color cMfiBear  = input.color(color.new(#e8384f, 15), "MFI Bearish Ribbon", group=G_VIS)
@@ -417,24 +417,24 @@ color cCvdDn    = input.color(#ff4040, "CVD Falling", group=G_VIS)
 string dotsFilter = input.string("None (show all)", "MCB Dots Filter",
      options=["None (show all)", "Extreme Waves (< -20 / > +20)", "Money Flow Direction", "Extreme Waves + Money Flow"],
      group=G_VIS,
-     tooltip="Filters the cross dots.\nNone — every WaveTrend cross.\nOB/OS only — crosses in the extreme zones.\nMoney flow agreement — crosses where real money flow points the same way.\nGrade A only — cross + zone + flow + divergence.")
+     tooltip="Filters the cross dots.\nNone - every WaveTrend cross.\nOB/OS only - crosses in the extreme zones.\nMoney flow agreement - crosses where real money flow points the same way.\nGrade A only - cross + zone + flow + divergence.")
 float cvdLineScale = input.float(60.0, "CVD Line Scale", minval=5.0, maxval=200.0, group=G_VIS,
      tooltip="The CVD line is normalised to span roughly plus and minus this value, so it sits sensibly against the waves.")
 
-string G_VW = "5 · VWAP WAVE"
-bool showVwap = input.bool(true, "Show VWAP Wave (wt1 − wt2)", group=G_VW)
+string G_VW = "5 - VWAP WAVE"
+bool showVwap = input.bool(true, "Show VWAP Wave (wt1 - wt2)", group=G_VW)
 float vwScale = input.float(1.0, "VWAP Height", minval=0.1, maxval=10.0, group=G_VW)
 
-string G_HID = "6 · HIDDEN LINES"
+string G_HID = "6 - HIDDEN LINES"
 bool showRsi   = input.bool(false, "Show RSI", group=G_HID)
 int  rsiLen    = input.int(14, "RSI Length", minval=2, group=G_HID)
 
-string G_CVD = "7 · CVD"
+string G_CVD = "7 - CVD"
 bool   cvdShow  = input.bool(true, "Show CVD Line", group=G_CVD)
 string cvdReset = input.string("Daily", "CVD Anchor", options=["Daily", "Weekly", "Session", "None (rolling)"], group=G_CVD)
 int    cvdRoll  = input.int(200, "Rolling Length", minval=10, group=G_CVD)
 
-string G_DIV = "8 · DIVERGENCES"
+string G_DIV = "8 - DIVERGENCES"
 bool divWt      = input.bool(true,  "WaveTrend Divergences", group=G_DIV)
 bool divCvd     = input.bool(true,  "CVD Divergences (absorption)", group=G_DIV,
      tooltip="Price lower low while CVD makes a higher low: sellers pressing and not being paid. OG Market Cipher cannot see this.")
@@ -451,7 +451,7 @@ int  divRangeMin= input.int(5,  "Min Bars Between Pivots", minval=1, group=G_DIV
 // The pane's own graded markers were removed so it can never contradict the
 // chart. buyA / sellA remain as ALERT conditions only.
 
-string G_TBL = "10 · DASHBOARD"
+string G_TBL = "10 - DASHBOARD"
 bool   showTable = input.bool(true, "Show Dashboard", group=G_TBL)
 string tblPos    = input.string("Top Right", "Position",
      options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_TBL)
@@ -511,7 +511,7 @@ bool statOn = P_CUST ? statOn_in : P_SPLUS
 // ============================================================================
 // 1c. INSTRUMENT PROFILE
 // ----------------------------------------------------------------------------
-// A script cannot write to its own inputs — Pine has no mechanism for it. What
+// A script cannot write to its own inputs - Pine has no mechanism for it. What
 // it can do is resolve an EFFECTIVE value, which is how the chart preset above
 // already works. So the settings dialog still shows whatever you typed; these
 // are what the script actually runs on.
@@ -540,7 +540,7 @@ bool acGold = instrProf == "Gold (XAU / GC)" or (instrProf == "Auto-detect" and 
 // The damage was not cosmetic. inPeriod is false outside the session, and
 // inPeriod gates profile accumulation, the running period range, and the VWAP
 // sums. So on a spot gold chart for roughly nineteen hours out of every
-// twenty-four the volume profile stopped taking data — the histogram, the value
+// twenty-four the volume profile stopped taking data - the histogram, the value
 // area and the POC simply froze in place and stayed frozen while price walked
 // away from them. Nothing on the chart said why.
 //
@@ -696,7 +696,7 @@ bool ltfOk = false
 if intrabarUseful and ltfPresent
     ltfOk := true
 
-// ---- signed volume, two ways
+// --- signed volume, two ways
 // Primary: TradingView's official requestVolumeDelta. It splits volume inside
 // each intrabar rather than judging a whole bar by its direction, which is what
 // the original Volume Bubbles and Volume DNA scripts both rely on.
@@ -704,7 +704,7 @@ if intrabarUseful and ltfPresent
 // profile, used only when the library returns nothing (deep history).
 float buyVol  = 0.0
 float sellVol = 0.0
-// RUNTIME: this loop walks every intrabar of every bar — 48 iterations a bar on
+// RUNTIME: this loop walks every intrabar of every bar - 48 iterations a bar on
 // a 4h chart at 5m resolution. It only ever feeds fbDelta, which is only used
 // when the official delta is missing, so on any chart where the library returns
 // data it was pure waste. Now it only runs when it is actually the source.
@@ -725,7 +725,7 @@ if na(dLast)
 
 // The denominator has to be the bar's TOTAL traded volume. Summing only the
 // intrabars that closed up or down silently drops every flat intrabar, so the
-// ratio came out too large — and when the official delta was in use the two
+// ratio came out too large - and when the official delta was in use the two
 // halves came from different sources entirely, which could put the ratio past
 // 100%. Bar volume is exact whenever the feed provides it.
 float totVol   = nz(volume) > 0 ? nz(volume) : buyVol + sellVol
@@ -764,7 +764,7 @@ else
 //
 // Pine re-executes the whole script on every tick of the unconfirmed bar.
 // Plain variables are rolled back to their last committed value before each
-// re-run, so counters look after themselves — but objects pushed into arrays
+// re-run, so counters look after themselves - but objects pushed into arrays
 // and drawings created with line.new / box.new / label.new are NOT reliably
 // rolled back. On a live chart that meant one forming bar could push hundreds
 // of duplicate samples into the volume profile, stack a fresh naked-POC line
@@ -774,7 +774,7 @@ else
 // went wrong in real time.
 //
 // Every block that appends to an array or creates a drawing is gated on this.
-// Plots, markers and the dashboard stay live — they hold no state.
+// Plots, markers and the dashboard stay live - they hold no state.
 bool barClosed = barstate.isconfirmed
 
 // ---------------------------------------------------------------------------
@@ -858,7 +858,7 @@ if isNewPeriod and aucOn and barClosed
         // statistics for poor highs and lows never accumulated at all.
         float fMax = fBins.max()
         if fMax > 0
-            // average the outer BAND, not one bin — see the Extreme Band tooltip
+            // average the outer BAND, not one bin - see the Extreme Band tooltip
             int fEdge = math.max(1, int(profRows * excBand / 100))
             float fTopSum = 0.0
             float fBotSum = 0.0
@@ -928,7 +928,7 @@ while curH.size() > 20000
     curV.shift()
 
 // ============================================================================
-// 8. DEVELOPING PROFILE  (last bar only — the loop is heavy at 250 rows)
+// 8. DEVELOPING PROFILE  (last bar only - the loop is heavy at 250 rows)
 // ============================================================================
 float devPoc = na
 float devVah = na
@@ -951,10 +951,10 @@ if barstate.islast and aucOn
 // ============================================================================
 // 9. EXCESS vs POOR EXTREMES
 // ----------------------------------------------------------------------------
-// EXCESS — thin volume in the outermost bin. Price went there, found nobody and
+// EXCESS - thin volume in the outermost bin. Price went there, found nobody and
 //          left. The auction is finished at that price. This is what a genuine
 //          rejection looks like when you can see the volume behind it.
-// POOR   — heavy volume right at the extreme. It stopped without being
+// POOR   - heavy volume right at the extreme. It stopped without being
 //          rejected, leaving unfinished business. Poor extremes get revisited.
 // ============================================================================
 string highQual = "n/a"
@@ -1043,7 +1043,7 @@ if npocPrice.size() > 0
                 npocDn := na(npocDn) ? p : math.max(npocDn, p)
 
 // ============================================================================
-// 12. REGIME · VALUE · DAY TYPE · OPEN TYPE
+// 12. REGIME - VALUE - DAY TYPE - OPEN TYPE
 // ============================================================================
 string posVsValue = "n/a"
 if not na(priorVah) and not na(priorVal)
@@ -1072,7 +1072,7 @@ if rangeHist.size() > 0
     avgRange := rangeHist.avg()
 
 // ---------------------------------------------------------------------------
-// LIVE CONTEXT — computed on every bar
+// LIVE CONTEXT - computed on every bar
 // The displayed regime depends on the developing profile, which for speed is
 // only built on the last bar. That meant the signal's context gate was blank on
 // every historical bar and therefore always open. This version uses only values
@@ -1080,8 +1080,8 @@ if rangeHist.size() > 0
 // ---------------------------------------------------------------------------
 var float runHi = na
 var float runLo = na
-// SESSION LEAK: this used to extend on EVERY bar. In RTH mode — which the gold
-// profile now selects by default — that meant the running range absorbed the
+// SESSION LEAK: this used to extend on EVERY bar. In RTH mode - which the gold
+// profile now selects by default - that meant the running range absorbed the
 // whole overnight session while avgRange, which it is measured against, is
 // built only from RTH profiles. runRange was therefore inflated against a
 // yardstick that excluded the same hours, and regimeLive read IMBALANCE far
@@ -1115,14 +1115,14 @@ bool imbUp = regimeLive == "IMBALANCE" and acceptedAbove
 bool imbDn = regimeLive == "IMBALANCE" and acceptedBelow
 
 // ---------------------------------------------------------------------------
-// EFFICIENCY RATIO — is the market smooth enough for a distant target?
+// EFFICIENCY RATIO - is the market smooth enough for a distant target?
 // ---------------------------------------------------------------------------
 // Straight-line distance covered, divided by the total distance actually
 // travelled to get there. 1.0 is a move in one direction with no retracement;
 // 0.0 is pure chop that happens to finish where it started.
 //
 // The idea is borrowed from a D-RSI script that fits a polynomial to RSI and
-// refuses to signal when the fit is poor — a good instinct wrapped in a QR
+// refuses to signal when the fit is poor - a good instinct wrapped in a QR
 // decomposition running every bar. This measures the same thing, "is the data
 // smooth enough to act on", as a running sum. Kaufman's ratio, and it costs
 // nothing.
@@ -1185,10 +1185,10 @@ if not na(periodOpen) and not na(ibH) and not na(ibL)
             openType := "Test-Drive"
 
 // ============================================================================
-// 12b. VOLUME DNA — effort vs result
+// 12b. VOLUME DNA - effort vs result
 // ----------------------------------------------------------------------------
 // Wyckoff's effort-versus-result read, expressed as two z-scores. Concept from
-// Volume DNA: Heatmap [BigBeluga], MPL 2.0 — reimplemented here rather than
+// Volume DNA: Heatmap [BigBeluga], MPL 2.0 - reimplemented here rather than
 // copied, and restored to all four quadrants.
 //
 // The quadrant that matters most to an auction trader is ABSORPTION: heavy
@@ -1197,7 +1197,7 @@ if not na(periodOpen) and not na(ibH) and not na(ibL)
 // middle of value it is just ordinary two-way trade, which is what the
 // "only at value area edges" filter is for.
 //
-// EXHAUSTION — light volume with a wide spread — is the one Gemini's rebuild
+// EXHAUSTION - light volume with a wide spread - is the one Gemini's rebuild
 // dropped, and it is the live version of what the profile later shows as
 // excess: a move travelling on no participation.
 // ============================================================================
@@ -1234,7 +1234,7 @@ bool dnaEffortS = dnaOn and dnaEffOn and rawEffort and close < open and atEdge
 bool dnaExhaust = dnaOn and dnaExhOn and rawExhaust and atEdge
 bool dnaStagn   = dnaOn and dnaStgOn and rawStagn and atEdge
 
-string dnaState = "—"
+string dnaState = "-"
 color  dnaCol = C_NE
 if rawAbsorb
     dnaState := "ABSORPTION"
@@ -1251,7 +1251,7 @@ else if rawStagn
 
 
 // ============================================================================
-// 12c. VOLUME DNA VISUALS  —  glow candles, absorption clouds, circles, tape
+// 12c. VOLUME DNA VISUALS  -  glow candles, absorption clouds, circles, tape
 // ----------------------------------------------------------------------------
 // Visual language modelled on Volume DNA: Heatmap [BigBeluga] (MPL 2.0).
 // Reimplemented rather than copied.
@@ -1266,7 +1266,7 @@ f_volShort(float v) =>
         outv := str.tostring(math.round(v / 1000, 1), "#.#") + "K"
     outv
 
-// THREE MORE UNBOUNDED LEAKS FOUND — same class as the divergence lines and the
+// THREE MORE UNBOUNDED LEAKS FOUND - same class as the divergence lines and the
 // balance boxes. Absorption clouds, DNA circles and bubble labels were each
 // created with no array and no deletion. Pine evicts the OLDEST drawing when
 // the 500-object cap fills, so on a long chart these were silently pushing out
@@ -1317,7 +1317,7 @@ plotcandle(dnaGlow and dnaAny ? glowTop : na, dnaGlow and dnaAny ? glowTop : na,
 // off by default, and it overrode your chart colours. The ghost glow above
 // carries the same information additively for the same price.
 
-// Absorption cloud — a zone projected forward from where absorption happened.
+// Absorption cloud - a zone projected forward from where absorption happened.
 if dnaCloud and dnaAbsorb and barClosed
     f_pushAbsCloud(box.new(bar_index, bodyMax + (high - low) * 0.1, bar_index + dnaCloudEx, bodyMin - (high - low) * 0.1,
          bgcolor=color.new(cAbs, 85), border_color=color.new(cAbs, 60), border_width=0,
@@ -1344,7 +1344,7 @@ if dnaDots and dnaAny and barClosed
          textcolor=chart.fg_color, style=label.style_label_center, size=size.tiny,
          force_overlay=true))
 
-// ---- barcode heatmap tape
+// --- barcode heatmap tape
 var array<int>   dnaHist = array.new<int>(dnaTapeRow, 0)
 var array<float> dnaVolHist = array.new<float>(dnaTapeRow, 0.0)
 int dnaCode = 0
@@ -1379,7 +1379,7 @@ f_dnaCol(int c) =>
     outc
 
 f_dnaName(int c) =>
-    string outn = "—"
+    string outn = "-"
     if c == 1
         outn := "ABS"
     else if c == 2
@@ -1412,19 +1412,19 @@ if dnaTape and barstate.islast
              text_size=size.tiny, bgcolor=color.new(#1e2735, 55))
 
 // ============================================================================
-// 12d. VOLUME BUBBLES — percentile volume clusters
+// 12d. VOLUME BUBBLES - percentile volume clusters
 // ----------------------------------------------------------------------------
 // Concept from Volume Bubbles [QuantAlgo] (CC BY-NC-SA 4.0), reimplemented.
 // A bar qualifies when its volume (and/or absolute delta) clears a percentile
 // threshold in enough of three lookback windows. Three tiers, three windows,
-// and a consensus vote — the point is that "high volume" should be high
+// and a consensus vote - the point is that "high volume" should be high
 // relative to short, medium AND long history, not just one of them.
 // ============================================================================
 float absDelta = math.abs(barDelta)
 
 // RUNTIME: each of these sorts its whole lookback window on every bar, and
 // there are eighteen of them across three windows and two sources. They ran
-// unconditionally — including for everyone with Volume Bubbles switched OFF,
+// unconditionally - including for everyone with Volume Bubbles switched OFF,
 // which is the default. On a long chart that was the single largest block of
 // wasted work in the script and the main reason for the "Heavy script" warning.
 //
@@ -1557,7 +1557,7 @@ if bubAny and bubLabels and barClosed
     f_pushBubLbl(label.new(bar_index, bubY, bTxt, style=label.style_label_center,
          color=color.new(chart.fg_color, 100), textcolor=chart.fg_color, size=size.small,
          force_overlay=true,
-         tooltip="── " + tier + " " + side + " ──\nVolume: " + fv + "\nDelta: " + fd +
+         tooltip="-- " + tier + " " + side + " --\nVolume: " + fv + "\nDelta: " + fd +
               "\nRatio: " + str.tostring(volRatio, "#.##") + "x" +
               "\nMethod: " + bubDetect + "\nDNA: " + dnaState))
 
@@ -1567,7 +1567,7 @@ if bubAny and bubLabels and barClosed
 // 12d2. HIGHER TIMEFRAME VALUE
 // ----------------------------------------------------------------------------
 // A slower profile running beside the main one. The period profile answers
-// "where is value today". This answers "where is value this week" — which is
+// "where is value today". This answers "where is value this week" - which is
 // what tells you whether today's balance is itself sitting high or low inside
 // a larger auction. Balance at the top of weekly value is a very different
 // trade from balance at the bottom of it.
@@ -1630,15 +1630,15 @@ var line lnHVah = na
 var line lnHVal = na
 
 // THE LINES MUST BE THE LEVELS THE ENGINE USES. The signal gate was moved to
-// htfVah / htfVal — the last COMPLETED higher-timeframe value area, the only
-// version that exists on every bar — but the lines and their labels were still
+// htfVah / htfVal - the last COMPLETED higher-timeframe value area, the only
+// version that exists on every bar - but the lines and their labels were still
 // drawing htfDevVah / htfDevVal, the developing one. Those are different
 // prices. You would watch price reject a line marked "Weekly VAL" and get no
 // signal, because the engine was testing a level that was never drawn.
 //
 // The completed value area is also the conventional reference: it is to the
 // week what prior VAH / VAL is to the day. The developing read still has a
-// home — the dashboard row, which says so explicitly.
+// home - the dashboard row, which says so explicitly.
 if htfOn and barstate.islast and not na(htfPoc)
     int htL = na(periodStart) ? time : periodStart
     // same degenerate-line guard as the auction block below
@@ -1669,7 +1669,7 @@ if htfOn and not na(htfDevVah) and not na(htfDevVal)
 // ============================================================================
 // 12e. VWAP  (anchored, with standard deviation bands)
 // ----------------------------------------------------------------------------
-// VWAP asks the same question the POC does — where was the bulk of trade — but
+// VWAP asks the same question the POC does - where was the bulk of trade - but
 // continuously rather than once per period. Anchoring it to the auction period
 // makes VWAP and POC directly comparable: when they diverge, value is still
 // moving; when they converge, the auction has settled.
@@ -1691,7 +1691,7 @@ var float vwSumPV2 = 0.0
 // Same session leak as the running range above. Anchored to the auction period
 // in RTH mode, this was still adding every overnight bar, so what the chart
 // called the session VWAP was really a rolling 24-hour VWAP wearing a session
-// label — and its bands are signal LOCATIONS, so the error reached the trades.
+// label - and its bands are signal LOCATIONS, so the error reached the trades.
 // The other anchors mean what they say and are left alone: if you asked for a
 // daily VWAP on an RTH chart, overnight volume belongs in it.
 bool vwapAccum = vwapAnchor != "Auction Period" or inPeriod
@@ -1721,18 +1721,18 @@ plot(vwapOn and vwapBands ? vwapU1 : na, "VWAP +1sd", color=cVwapBand, force_ove
 plot(vwapOn and vwapBands ? vwapL1 : na, "VWAP -1sd", color=cVwapBand, force_overlay=true)
 // The 2-sigma bands were removed. Every force_overlay plot costs TWO of the 64
 // slots (one in the pane, one on the price chart), so these two were worth four
-// — more than the profile histogram — for the least-used levels on the chart.
+// - more than the profile histogram - for the least-used levels on the chart.
 // vwapU2 / vwapL2 still exist and still feed the risk layer's target list.
 
 // ============================================================================
-// 12f. FIB LEVELS  —  golden pockets and custom targets
+// 12f. FIB LEVELS  -  golden pockets and custom targets
 // ----------------------------------------------------------------------------
 // Drawn with line objects rather than plots, so the whole section costs zero of
 // the 64 plot slots.
 //
 // Worth being clear about what these are: fib levels are geometry, not auction
 // evidence. They carry no volume information at all. Where they earn their
-// place is confluence — a 0.618 that lands on the POC or on a naked POC is
+// place is confluence - a 0.618 that lands on the POC or on a naked POC is
 // worth more than either alone, and a 0.618 sitting in empty space is just a
 // line. Judge them against the profile, not instead of it.
 // ============================================================================
@@ -1896,7 +1896,7 @@ if barstate.islast
 
     // draw in ascending price order, nudging apart anything that would collide
     if qY.size() > 0
-        // NOT named "order" — that is a reserved Pine namespace (order.ascending)
+        // NOT named "order" - that is a reserved Pine namespace (order.ascending)
         array<int> sortIdx = qY.sort_indices(order.ascending)
         float minGap = atr14 * 0.45
         float lastY = na
@@ -1918,7 +1918,7 @@ if barstate.islast
 
             // if it had to move, draw a hairline back to the real level
             if math.abs(drawY - trueY) > syminfo.mintick
-                lvlLabels.push(label.new(bar_index + lblOffset, trueY, "▬",
+                lvlLabels.push(label.new(bar_index + lblOffset, trueY, "-",
                      xloc=xloc.bar_index, style=label.style_none,
                      textcolor=color.new(qC.get(idx), 45), size=size.tiny,
                      force_overlay=true))
@@ -1930,7 +1930,7 @@ if barstate.islast and aucOn
     int tR = time
     int tL = na(periodStart) ? time : periodStart
 
-    // THE VERTICAL GREY LINE — FOUND.
+    // THE VERTICAL GREY LINE - FOUND.
     // Every one of these levels is drawn with extend=extend.right. When x1 and
     // x2 are the SAME timestamp the line has no slope, and Pine renders a
     // zero-length extended line VERTICALLY, straight down the chart.
@@ -2023,7 +2023,7 @@ bool wtCrossUp = ta.crossover(wt1, wt2)
 bool wtCrossDn = ta.crossunder(wt1, wt2)
 
 // ============================================================================
-// 15. MONEY FLOW — all four computed every bar
+// 15. MONEY FLOW - all four computed every bar
 // ----------------------------------------------------------------------------
 // Stateful ta.* functions inside a conditional branch do not accumulate
 // history correctly, so the selection happens after the maths, not around it.
@@ -2037,7 +2037,7 @@ float mfvSum  = math.sum(mfm * nz(volume), mfLength)
 float volSum  = math.sum(nz(volume), mfLength)
 float mfCmf   = ta.sma(volSum != 0 ? mfvSum / volSum * 100.0 : 0.0, mfSmooth)
 
-// the original — note that volume appears nowhere in this line
+// the original - note that volume appears nowhere in this line
 float ogBody = hlRange != 0 ? (close - open) / hlRange : 0.0
 float mfOg   = ta.sma(ogBody * ogMult, mfLength) - ogPosY
 
@@ -2150,9 +2150,9 @@ bool wtBearDiv = divWt and (wtBear or (divHidden and wtBearH))
 bool cvBullDiv = divCvd and (cvBull or (divHidden and cvBullH))
 bool cvBearDiv = divCvd and (cvBear or (divHidden and cvBearH))
 
-// ---- divergence LINES connecting the two pivots on the oscillator
+// --- divergence LINES connecting the two pivots on the oscillator
 // BUDGET BUG FOUND: these were created with no bookkeeping at all. Pine caps
-// drawings at max_lines_count and silently deletes the OLDEST when it fills —
+// drawings at max_lines_count and silently deletes the OLDEST when it fills -
 // which on a long chart means the value area, naked POC and IB lines get thrown
 // away to make room for old divergence lines. The important levels were being
 // evicted by decoration.
@@ -2177,8 +2177,8 @@ if divLines and barClosed
 // 19. GRADED SIGNALS
 // ----------------------------------------------------------------------------
 // The original fires its "gold dot" on a fixed RSI level plus a cross. Here the
-// grade reflects how many independent things agree — momentum, real money flow
-// and absorption — so a weak setup looks weak instead of looking gold.
+// grade reflects how many independent things agree - momentum, real money flow
+// and absorption - so a weak setup looks weak instead of looking gold.
 // ============================================================================
 bool inOS = wt2 <= wtOS1
 bool inOB = wt2 >= wtOB1
@@ -2195,19 +2195,19 @@ bool sellA = sellB and divRecentBear
 
 
 // ============================================================================
-// 19b. MARKET STRUCTURE  —  BOS / CHoCH
+// 19b. MARKET STRUCTURE  -  BOS / CHoCH
 // ----------------------------------------------------------------------------
 // The one piece of SMC worth keeping. Everything else it sells you is already
 // in this script under a measured name: naked POC instead of unmitigated order
 // block, low volume node instead of fair value gap, excess instead of liquidity
 // sweep, acceptance outside value instead of break of structure.
 //
-// What structure genuinely adds is a visual skeleton — where the swings are and
+// What structure genuinely adds is a visual skeleton - where the swings are and
 // which break mattered. It is drawn with lines and labels, so it costs nothing
 // from the plot budget.
 //
-//   BOS   — break in the same direction as the prevailing trend. Continuation.
-//   CHoCH — break against it. The first evidence the trend may be over.
+//   BOS   - break in the same direction as the prevailing trend. Continuation.
+//   CHoCH - break against it. The first evidence the trend may be over.
 // ============================================================================
 var array<line>  strLines  = array.new<line>()
 var array<label> strLabels = array.new<label>()
@@ -2223,7 +2223,7 @@ var int   sLoIdx = na
 var float sLoPrev = na
 var int   trendDir = 0
 
-// Two helpers rather than one taking na — Pine cannot infer a parameter type
+// Two helpers rather than one taking na - Pine cannot infer a parameter type
 // from a bare na literal.
 f_pushStrLine(line ln) =>
     strLines.push(ln)
@@ -2293,7 +2293,7 @@ if strOn and barClosed
 
 
 // ============================================================================
-// 19e. BALANCE AREAS  —  auto-detected, clock-independent
+// 19e. BALANCE AREAS  -  auto-detected, clock-independent
 // ----------------------------------------------------------------------------
 // A balance area is not a calendar event. It starts when the market stops
 // trending and begins rotating, and it ends when someone forces it out. ADX
@@ -2324,7 +2324,7 @@ var array<line> balPocLn = array.new<line>()
 // REAL BUG FOUND: broken balance boxes were never deleted. Every contraction
 // left two boxes on the chart permanently. Pine evicts the OLDEST drawing when
 // the 500-object cap fills, so these were quietly pushing out the value area
-// and naked POC lines — exactly the leak already fixed for divergence lines.
+// and naked POC lines - exactly the leak already fixed for divergence lines.
 var array<box>  balOldBx = array.new<box>()
 
 bool balContract = ta.crossunder(adxVal, balAdxTh)
@@ -2334,7 +2334,7 @@ f_clearBalBars() =>
         box.delete(b)
     balBars.clear()
 
-// ---- open a new balance area
+// --- open a new balance area
 if balOn and balContract and not balActive and barClosed
     balStart := bar_index
     balHi := high
@@ -2348,7 +2348,7 @@ if balOn and balContract and not balActive and barClosed
     balFillBx := box.new(bar_index, high, bar_index, low, border_color=color(na),
          bgcolor=cBalFill, force_overlay=true)
 
-// ---- build it out
+// --- build it out
 if balOn and balActive
     if bar_index - balStart < balBuild
         balHi := math.max(balHi, high)
@@ -2363,7 +2363,7 @@ if balOn and balActive
         box.set_bottom(balFillBx, balLo)
         box.set_right(balFillBx, bar_index)
 
-// ---- profile the balance area (last bar only; the loop is not cheap)
+// --- profile the balance area (last bar only; the loop is not cheap)
 if balOn and balActive and balArmed and barstate.islast and balHi > balLo
     f_clearBalBars()
     float step = (balHi - balLo) / balBins
@@ -2397,7 +2397,7 @@ if balOn and balActive and balArmed and barstate.islast and balHi > balLo
         box.set_text_halign(balBody, text.align_right)
         box.set_text_valign(balBody, text.align_top)
 
-// ---- break it
+// --- break it
 bool balBreakUp = false
 bool balBreakDn = false
 if balOn and balActive and balArmed
@@ -2434,11 +2434,11 @@ if (balBreakUp or balBreakDn) and barClosed
 // 19f. CME GAP
 // ----------------------------------------------------------------------------
 // CME Bitcoin futures shut for the weekend; spot and perps do not. Whatever
-// range price covers while CME is closed is untraded ON THE FUTURES BOOK — a
+// range price covers while CME is closed is untraded ON THE FUTURES BOOK - a
 // genuine single print, and the cleanest real-world example of one.
 // ============================================================================
 // The session timestamp comes along in the same request so a weekend gap can be
-// told apart from an ordinary daily open gap — one request, not two.
+// told apart from an ordinary daily open gap - one request, not two.
 // RUNTIME: a security request costs whether or not you look at the result, so
 // it is skipped entirely when the layer is switched off.
 float cmeO = na
@@ -2461,7 +2461,7 @@ var array<box>   gapBox = array.new<box>()
 
 bool cmeNewDay = not na(cmeO) and cmeO != cmeO[1]
 // Testing "was the previous CME day a Friday" breaks on any holiday that shuts
-// the book on a Friday — Good Friday most obviously. The last session before
+// the book on a Friday - Good Friday most obviously. The last session before
 // that weekend is a Thursday and a genuine multi-day gap goes unrecorded.
 //
 // Measuring the actual time between consecutive CME sessions has no such
@@ -2544,7 +2544,7 @@ bool a3 = sessOn and f_sessActive(sess3)
 // script was missing entirely.
 //
 // Stops here are STRUCTURAL, not an ATR multiple. A long taken off value fails
-// if the low that produced it is taken out — so the stop sits below that low
+// if the low that produced it is taken out - so the stop sits below that low
 // plus a buffer. The target is the next real level the auction must visit: the
 // opposite value edge, or the nearest untested POC.
 //
@@ -2556,7 +2556,7 @@ bool a3 = sessOn and f_sessActive(sess3)
 // The target used to be the NEAREST level in the trade's direction. In a rally
 // the levels above are close (price is walking into them) while the levels
 // below are far away. So a long got a tiny R and was filtered out, and a short
-// got a huge R and passed — the minimum-R filter was quietly forcing the whole
+// got a huge R and passed - the minimum-R filter was quietly forcing the whole
 // system to trade counter-trend.
 //
 // Now every candidate level is collected and the nearest one that ACTUALLY
@@ -2570,8 +2570,8 @@ f_pushCand(array<float> arr, float v) =>
 f_pickUp(float e, float risk) =>
     array<float> c = array.new<float>()
     // devVah and htfDevVah are computed on the last bar only. Including them
-    // gave the live bar a target list that no historical bar ever had, so R —
-    // and therefore whether a signal passed the minimum-R filter — differed
+    // gave the live bar a target list that no historical bar ever had, so R -
+    // and therefore whether a signal passed the minimum-R filter - differed
     // between live and reload. Only every-bar levels are used.
     f_pushCand(c, priorVah)
     // The plain-English read tells you to rotate back to the POC, but the POC
@@ -2637,7 +2637,7 @@ float rkRiskS = rkStopS - rkEntry
 float rkTgtL  = f_pickUp(rkEntry, rkRiskL)
 float rkTgtS  = f_pickDn(rkEntry, rkRiskS)
 
-// ---- optional cap on how far the structural target may sit
+// --- optional cap on how far the structural target may sit
 // math.max keeps the cap at or beyond Minimum R: capping below it would draw a
 // target that fails the script's own filter on the bar it appears.
 if riskTgtCap > 0
@@ -2653,13 +2653,13 @@ float rkRL = rkRiskL > 0 and not na(rkTgtL) ? (rkTgtL - rkEntry) / rkRiskL : na
 float rkRS = rkRiskS > 0 and not na(rkTgtS) ? (rkEntry - rkTgtS) / rkRiskS : na
 
 // ---------------------------------------------------------------------------
-// FLOATING-POINT BOUNDARY — introduced by the target cap
+// FLOATING-POINT BOUNDARY - introduced by the target cap
 // ---------------------------------------------------------------------------
-// The cap sets the target to entry + risk × capMult, and R is then recovered
-// as (target − entry) / risk. In exact arithmetic that returns capMult. In
+// The cap sets the target to entry + risk x capMult, and R is then recovered
+// as (target - entry) / risk. In exact arithmetic that returns capMult. In
 // binary floating point it can return 1.4999999999999998, and with the natural
 // setting of cap 1.5 against Minimum R 1.5 the filter below would then reject
-// its own target — silently, on some price values and not others, so roughly
+// its own target - silently, on some price values and not others, so roughly
 // half the signals would vanish for no visible reason.
 //
 // One part per million of slack. Far below any price move that could matter,
@@ -2712,7 +2712,7 @@ var float pendStop  = na
 var float pendTgt   = na
 
 // What is live right now, as of the close of the previous bar. A pending
-// signal counts as a commitment — otherwise a second one could fire in the
+// signal counts as a commitment - otherwise a second one could fire in the
 // gap between the signal and its fill.
 bool anyLongOpen  = pendLong
 bool anyShortOpen = pendShort
@@ -2728,14 +2728,14 @@ if opDir.size() > 0
 // ----------------------------------------------------------------------------
 // The last thing this system could not see, and for perpetuals it is the most
 // important. Price alone cannot distinguish a short squeeze from genuine
-// buying — both go up. Open interest can:
+// buying - both go up. Open interest can:
 //
 //   price up   + OI up     new longs opening. Real demand, risk building.
 //   price up   + OI down   shorts covering. A squeeze. Tends to stall.
 //   price down + OI up     new shorts opening. Real supply.
 //   price down + OI down   longs closing or liquidated. A flush.
 //
-// ignore_invalid_symbol keeps this safe on instruments with no OI feed — it
+// ignore_invalid_symbol keeps this safe on instruments with no OI feed - it
 // returns na instead of killing the script.
 // ============================================================================
 string oiTicker = syminfo.prefix + ":" + syminfo.ticker + "_OI"
@@ -2743,7 +2743,7 @@ float oiClose = na
 if oiOn
     oiClose := request.security(oiTicker, timeframe.period, close, ignore_invalid_symbol=true)
 
-// This used to request syminfo.tickerid whenever the funding field was blank —
+// This used to request syminfo.tickerid whenever the funding field was blank -
 // a whole security call fetching the chart's own close, so it could then be
 // discarded by the fundOk test below. Blank now means no request at all.
 float fundVal = na
@@ -2759,7 +2759,7 @@ float oiChgZ = oiChgSd > 0 ? (oiChg - oiChgMean) / oiChgSd : 0.0
 
 float priceChg = close - close[1]
 
-string oiState = "—"
+string oiState = "-"
 color  oiCol = C_NE
 if oiOk
     if oiChg > 0 and priceChg > 0
@@ -2791,7 +2791,7 @@ plotshape(liqCascade ? high : na, "Liquidation Cascade", shape.xcross, location.
      color=cLiq, size=size.small, force_overlay=true)
 
 // ---------------------------------------------------------------------------
-// OPEN INTEREST AS EVIDENCE  —  measured over the APPROACH, not one bar
+// OPEN INTEREST AS EVIDENCE  -  measured over the APPROACH, not one bar
 // ---------------------------------------------------------------------------
 // The single-bar reading above is what the dashboard shows. It is the wrong
 // thing to gate a signal with: a buy signal fires on a REJECTION bar, which
@@ -2804,8 +2804,8 @@ plotshape(liqCascade ? high : na, "Liquidation Cascade", shape.xcross, location.
 //
 //   price down + OI down   longs flushed out. Buy proof.
 //   price up   + OI down   shorts squeezed out. Sell proof.
-//   price up   + OI up     new longs. REAL demand — do not fade it.
-//   price down + OI up     new shorts. REAL supply — do not catch it.
+//   price up   + OI up     new longs. REAL demand - do not fade it.
+//   price down + OI up     new shorts. REAL supply - do not catch it.
 float oiChgW    = oiOk ? oiClose - nz(oiClose[csigWindow], oiClose) : 0.0
 float priceChgW = close - close[csigWindow]
 
@@ -2821,7 +2821,7 @@ bool oiVetoBuy   = oiVetoOn  and oiRealOffer
 bool oiVetoSell  = oiVetoOn  and oiRealBid
 
 // ============================================================================
-// 19c. CHART SIGNALS  —  all four layers must agree
+// 19c. CHART SIGNALS  -  all four layers must agree
 // ----------------------------------------------------------------------------
 // The pane's A/B/C grades are momentum only: a WaveTrend cross with money flow
 // agreeing. That is a trigger, not a trade. On the price chart a signal has to
@@ -2843,13 +2843,13 @@ float locTol = close * csigTol / 100.0
 //
 //   LOCATION was "price is beyond the level". In a downtrend price sits under
 //   VWAP -1sd for days, so that gate was permanently open. A level only means
-//   something when price REACHES it and gets REJECTED — reached and rejected,
+//   something when price REACHES it and gets REJECTED - reached and rejected,
 //   not merely passed.
 //
 //   PROOF for a sell was "not mfBull". Money flow is negative roughly half the
 //   time, so that gate was open on a coin flip. The absence of the opposite is
 //   not evidence. Proof now requires something that actually happened: a
-//   divergence, absorption, or money flow CROSSING zero — an event, not a state.
+//   divergence, absorption, or money flow CROSSING zero - an event, not a state.
 //
 //   COOLDOWN was six bars, so even a genuine setup re-fired repeatedly through
 //   one swing.
@@ -2858,7 +2858,7 @@ float locTol = close * csigTol / 100.0
 // regime is a rare combination. It should be.
 // ============================================================================
 
-// ---- LOCATION: touched and rejected on this bar
+// --- LOCATION: touched and rejected on this bar
 f_rejUp(float lvl) =>
     bool outr = false
     if not na(lvl)
@@ -2897,7 +2897,7 @@ if csigVwap
         rejHighNow := true
 // The developing value area is deliberately NOT used as a signal location. It
 // is computed on the last bar only, so including it gives the live bar a way to
-// trigger that no historical bar ever had — live signals would appear that a
+// trigger that no historical bar ever had - live signals would appear that a
 // reloaded chart could not reproduce.
 //
 // THE COMMENT HERE USED TO CLAIM HTF VALUE WAS SAFE. IT WAS NOT. htfDevVah and
@@ -2907,7 +2907,7 @@ if csigVwap
 // signal this section exists to prevent, and it was sitting under a comment
 // asserting the opposite.
 //
-// htfVah / htfVal — the last COMPLETED higher-timeframe value area — are set at
+// htfVah / htfVal - the last COMPLETED higher-timeframe value area - are set at
 // each HTF rollover and do exist on every bar. They were computed and then
 // never used. They are the correct levels for a gate.
 if htfOn
@@ -2925,7 +2925,7 @@ if balUseLoc and balActive
 // ALL FOUR GATES SHARE ONE WINDOW
 // ---------------------------------------------------------------------------
 // Location used to sit on the tight csigWindow while trigger and proof were
-// widened to alignWin. The reasoning was "price must be at the level NOW" —
+// widened to alignWin. The reasoning was "price must be at the level NOW" -
 // and it was wrong, because the rejection and the oscillator pivot are the
 // SAME swing low. Price wicks the level at bar N; the divergence measuring
 // that same low cannot confirm until bar N+divLbR. With location closing after
@@ -2938,7 +2938,7 @@ if balUseLoc and balActive
 int alignWin = csigWindow + divLbR
 
 // ---------------------------------------------------------------------------
-// CONFLUENCE — how many levels agree on this price?
+// CONFLUENCE - how many levels agree on this price?
 // ---------------------------------------------------------------------------
 // Every level counted here exists on EVERY bar, the same discipline the
 // location test itself follows. The developing value area is excluded for the
@@ -2950,7 +2950,7 @@ f_near(float a, float b, float tol) =>
 f_confluence(float px) =>
     // SATURATION: this used twice the location tolerance. On BTC at 79,800
     // with the default 0.12% that is a 190-point band, and roughly half the
-    // tracked level set falls inside it during any ordinary range — the count
+    // tracked level set falls inside it during any ordinary range - the count
     // sat at 5 or 6 on both sides at once and discriminated nothing.
     //
     // It is now exactly locTol, which halves the band AND preserves a
@@ -2960,7 +2960,7 @@ f_confluence(float px) =>
     // would close the gate on the very setup that opened it.
     //
     // If the count is still saturated on your instrument, lower Location
-    // Tolerance itself — that tightens the rejection test and this band
+    // Tolerance itself - that tightens the rejection test and this band
     // together, which is the coherent way to do it.
     float tol = locTol
     int n = 0
@@ -2988,7 +2988,7 @@ f_confluence(float px) =>
 int confLow  = f_confluence(low)
 int confHigh = f_confluence(high)
 
-// scored at the REJECTION bar, not now — the cluster that mattered is the one
+// scored at the REJECTION bar, not now - the cluster that mattered is the one
 // price actually wicked into, which may be several bars back
 int confAtLowRej  = int(ta.valuewhen(rejLowNow,  confLow,  0))
 int confAtHighRej = int(ta.valuewhen(rejHighNow, confHigh, 0))
@@ -2996,13 +2996,13 @@ int confAtHighRej = int(ta.valuewhen(rejHighNow, confHigh, 0))
 bool atLowEdge  = ta.barssince(rejLowNow) <= alignWin and confAtLowRej >= csigConfMin
 bool atHighEdge = ta.barssince(rejHighNow) <= alignWin and confAtHighRej >= csigConfMin
 
-// ---- TRIGGER
+// --- TRIGGER
 bool crossUpOk = csigZoneOnly ? (wtCrossUp and wt2 <= wtOS1) : wtCrossUp
 bool crossDnOk = csigZoneOnly ? (wtCrossDn and wt2 >= wtOB1) : wtCrossDn
 // ---------------------------------------------------------------------------
 // THE GATES HAVE TO AGREE ON WHAT "RECENTLY" MEANS
 // ---------------------------------------------------------------------------
-// A divergence is only KNOWN divLbR bars after the pivot that formed it — that
+// A divergence is only KNOWN divLbR bars after the pivot that formed it - that
 // delay is unavoidable, it is what makes the divergence non-repainting. With
 // the defaults that is 5 bars, against a 3-bar trigger window. So by the time
 // the divergence confirmed, the WaveTrend cross that belongs to the same event
@@ -3013,12 +3013,12 @@ bool crossDnOk = csigZoneOnly ? (wtCrossDn and wt2 >= wtOB1) : wtCrossDn
 bool trigBuy  = ta.barssince(crossUpOk) <= alignWin
 bool trigSell = ta.barssince(crossDnOk) <= alignWin
 
-// ---- PROOF: an event, never a state
+// --- PROOF: an event, never a state
 bool mfTurnUp = ta.crossover(mfRaw, 0)
 bool mfTurnDn = ta.crossunder(mfRaw, 0)
 // LOGIC ERROR FOUND: dnaAbsorb appeared in BOTH proofs. Absorption as computed
 // is directionless, so it satisfied the evidence gate for a buy and a sell at
-// the same time — a free pass to whichever side happened to have the other
+// the same time - a free pass to whichever side happened to have the other
 // three gates open. Absorption on an up bar supports buying, on a down bar
 // supports selling; it cannot support both.
 bool absorbUp = dnaAbsorb and close >= open
@@ -3032,11 +3032,11 @@ bool proofSellNow = cvBearDiv or wtBearDiv or absorbDn or mfTurnDn or oiProofSel
 bool proofBuy  = ta.barssince(proofBuyNow)  <= alignWin
 bool proofSell = ta.barssince(proofSellNow) <= alignWin
 
-// ---- CONTEXT
+// --- CONTEXT
 bool ctxBuy  = true
 bool ctxSell = true
 if csigStrict
-    // regimeLive, not regime — the displayed one is blank on historical bars
+    // regimeLive, not regime - the displayed one is blank on historical bars
     ctxBuy  := not imbDn
     ctxSell := not imbUp
 
@@ -3063,7 +3063,7 @@ if sigConflict
     rawBuySig := false
     rawSellSig := false
 // NOISE GATE. A target three times the risk away is unreachable while price is
-// travelling three units to net one. This blocks both sides equally — chop is
+// travelling three units to net one. This blocks both sides equally - chop is
 // not directional.
 if csigNoiseOn and effRatio < csigErMin
     rawBuySig := false
@@ -3106,7 +3106,7 @@ bool wantSell = rawSellSig
 // wantSell is built from gates that all sit on alignWin, so once the sell side
 // qualifies it STAYS qualified for the whole window. When location was widened
 // from csigWindow to alignWin so divergences could complete, that window
-// doubled — and both sides now overlap constantly. The consequence is visible
+// doubled - and both sides now overlap constantly. The consequence is visible
 // in the statistics: reversal closes went from 8 of 120 trades, averaging
 // +1.12R and carrying the whole result, to 150 of 297 averaging +0.03R. The
 // exit stopped being selective and became churn.
@@ -3115,7 +3115,7 @@ bool wantSell = rawSellSig
 // one bar is too much to ask. An EXIT does not: "the opposite side has been
 // qualified for the last eight bars" is not news, it is the same fact being
 // re-read. Requiring the opposite TRIGGER to fire on this bar turns the close
-// back into a genuine event — the cross that says the move has turned, not the
+// back into a genuine event - the cross that says the move has turned, not the
 // lingering memory of one.
 // I hardcoded the momentum-cross requirement last round and called it a fix.
 // It was a hypothesis, and the arithmetic did not support it: 150 flats
@@ -3149,7 +3149,7 @@ if rawSellSig and bar_index - lastSellBar > csigCool
     lastSellBar := bar_index
 
 
-// ---- draw the trade
+// --- draw the trade
 // The boxes used to be kept on a rolling queue of twelve, so a trade that had
 // already hit its target or stop kept showing its risk/reward zones for another
 // eleven signals. They are now tied to the trade and deleted the moment it
@@ -3172,8 +3172,8 @@ f_drawTrade(bool isLong, float e, float st, float tg, float rr) =>
 // ============================================================================
 // 19i. STATISTICS
 // ----------------------------------------------------------------------------
-// Every claim this script makes — poor highs get revisited, excess holds,
-// balance breaks follow through, signals work — is a CLAIM until it is counted
+// Every claim this script makes - poor highs get revisited, excess holds,
+// balance breaks follow through, signals work - is a CLAIM until it is counted
 // on YOUR instrument. This counts them.
 //
 // Read the sample size before the percentage. Under about 20 occurrences these
@@ -3181,7 +3181,7 @@ f_drawTrade(bool isLong, float e, float st, float tg, float rr) =>
 // worse than no number.
 // ============================================================================
 
-// ---- a fully qualified opposite signal invalidates the open thesis. Close it
+// --- a fully qualified opposite signal invalidates the open thesis. Close it
 // at market and book whatever R it actually made, rather than leaving it to
 // drift to a stop the setup no longer supports.
 // A pending order is a commitment the gate already counts, but it is not in
@@ -3225,15 +3225,15 @@ if closeOnReversal and barClosed and opEntry.size() > 0
 
 bool fillNextOpen = riskFill == "Next bar open (realistic)"
 
-// ---- fill whatever was pending, at THIS bar's open. The stop and target are
-// structural levels chosen by the auction, so they do not move with the fill —
+// --- fill whatever was pending, at THIS bar's open. The stop and target are
+// structural levels chosen by the auction, so they do not move with the fill -
 // but R does, and R computed from a price you could actually get is the only
 // honest one.
 //
 // Long and short are filled by SEPARATE blocks. To be accurate about why: the
 // two can never currently both be pending, because a same-bar conflict is
 // suppressed upstream and the fill always clears the flag before a new signal
-// can set one. So this is not fixing an observed bug — it is removing a shared
+// can set one. So this is not fixing an observed bug - it is removing a shared
 // pendStop / pendTgt trap that a single shared block depended on, which would
 // have silently dropped one of the two the moment that upstream guard changed.
 float fillSlip = riskSlipT * syminfo.mintick
@@ -3346,7 +3346,7 @@ if opEntry.size() > 0 and barClosed
         // MEASUREMENT ERROR FOUND: a trade that reached neither target nor stop
         // within the horizon used to be deleted silently. It disappeared from
         // the denominator entirely, so the win rate was computed only over
-        // trades that resolved — systematically overstating it. Expired trades
+        // trades that resolved - systematically overstating it. Expired trades
         // are now counted and shown.
         if not done and bar_index - opBar.get(i) > statHorizon
             sigExpired += 1
@@ -3354,7 +3354,7 @@ if opEntry.size() > 0 and barClosed
             outc  := 3
             done := true
         if done
-            // remove the drawings with the trade — this is the cleanup that was
+            // remove the drawings with the trade - this is the cleanup that was
             // missing, which is why finished trades kept showing their boxes
             if riskOn and opDraw.size() > i
                 TradeDraw td = opDraw.get(i)
@@ -3381,7 +3381,7 @@ if opEntry.size() > 0 and barClosed
 sigOpen := opEntry.size()
 
 // ---------------------------------------------------------------------------
-// UNREALISED R ON THE OPEN TRADE — the one number live trading needs and the
+// UNREALISED R ON THE OPEN TRADE - the one number live trading needs and the
 // table did not have.
 // ---------------------------------------------------------------------------
 // Everything here reports on trades that have ALREADY closed. While a trade is
@@ -3406,7 +3406,7 @@ if opEntry.size() > 0
 float expectR = nClosed > 0 ? sumRealR / nClosed : na
 float avgPlanR = nClosed > 0 ? sumPlanR / nClosed : na
 
-// ---- does a POOR extreme really get revisited?
+// --- does a POOR extreme really get revisited?
 var int poorHiTotal = 0
 var int poorHiHit = 0
 var int poorLoTotal = 0
@@ -3438,7 +3438,7 @@ if not na(poorLoLvl)
     else if bar_index - poorLoBar > statHorizon
         poorLoLvl := na
 
-// ---- does a balance break actually follow through?
+// --- does a balance break actually follow through?
 var int balTotal = 0
 var int balHold = 0
 var float balBrkLvl = na
@@ -3470,13 +3470,13 @@ f_pct(int hit, int tot) =>
     // INT DIVISION BUG: hit and tot are both int, so hit / tot truncated to 0
     // or 1 BEFORE the multiply. Every percentage in this table could therefore
     // only ever read 0% or 100%. Multiplying first keeps it in floating point.
-    tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "—"
+    tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "-"
 
 var table stat = table.new(f_tablePos(statPos), 2, 14, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
-// Pine requires functions at global scope — this cannot live inside the if
+// Pine requires functions at global scope - this cannot live inside the if
 // block that uses it.
 f_pair2(int r, string k, string v, color c) =>
     table.cell(stat, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
@@ -3495,9 +3495,9 @@ if statOn and barstate.islast
          str.tostring(sigExpired) + "/" + str.tostring(sigFlat), C_NE)
     // THE row. Under 20 closed trades it is grey, because it means nothing yet.
     color expCol = nClosed < 20 ? C_NE : (nz(expectR) > 0 ? C_UP : C_DN)
-    f_pair2(4, "Expectancy  R/trade", na(expectR) ? "—" : str.tostring(expectR, "#.##") + "R", expCol)
-    f_pair2(5, "Total R", na(expectR) ? "—" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
-    f_pair2(6, "Avg R targeted", na(avgPlanR) ? "—" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
+    f_pair2(4, "Expectancy  R/trade", na(expectR) ? "-" : str.tostring(expectR, "#.##") + "R", expCol)
+    f_pair2(5, "Total R", na(expectR) ? "-" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
+    f_pair2(6, "Avg R targeted", na(avgPlanR) ? "-" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
     // WHERE the R went. If wins minus losses is positive while the total is
     // not, the entries are finding an edge and the EXITS are handing it back.
     f_pair2(7, "R  win / loss",
@@ -3531,23 +3531,23 @@ plotshape(chartSell ? high : na, "CHART SELL", shape.labeldown, location.aboveba
 // 19j. THE PLAIN-ENGLISH READ
 // ----------------------------------------------------------------------------
 // Moved here deliberately. It reports chartBuy / chartSell, which are not
-// computed until the signal section above — reading them from section 12g meant
+// computed until the signal section above - reading them from section 12g meant
 // referencing variables that did not exist yet. Pine resolves strictly top to
 // bottom, so anything that summarises the whole picture has to come last.
 // ============================================================================
-// ---- the plain-English read
+// --- the plain-English read
 var label guideLbl = na
 if guideOn and barstate.islast
     label.delete(guideLbl)
 
-    string headline = "WAITING — not enough data yet"
+    string headline = "WAITING - not enough data yet"
     color  headCol = C_NE
 
     // ---------------------------------------------------------------------
     // THE READ MUST NOT CONTRADICT THE LINE BELOW IT
     // ---------------------------------------------------------------------
     // regime is built from the value areas overlapping; dayType is built from
-    // the range against the initial balance. Both can be true at once — a day
+    // the range against the initial balance. Both can be true at once - a day
     // that travels 1.8x its IB and still finishes overlapping prior value is a
     // trend day inside balance. But the ADVICE that followed only ever read
     // regime, so the script printed "fade the edges back to POC" directly above
@@ -3560,18 +3560,18 @@ if guideOn and barstate.islast
     bool fadeUnsafe = dayType == "Trend day" or regimeLive == "IMBALANCE"
 
     if regime == "BALANCE" and not fadeUnsafe
-        headline := "BALANCE — two-way auction. Fade the edges back to POC."
+        headline := "BALANCE - two-way auction. Fade the edges back to POC."
         headCol := C_UP
     else if regime == "BALANCE"
         headline := "BALANCE by value, but " +
              (dayType == "Trend day" ? "a TREND DAY is running" : "the live range says IMBALANCE") +
-             " — do NOT fade."
+             " - do NOT fade."
         headCol := C_WN
     else if regime == "IMBALANCE"
-        headline := "IMBALANCE — value is moving. Go with it, do not fade."
+        headline := "IMBALANCE - value is moving. Go with it, do not fade."
         headCol := C_WN
     else if regime == "TRANSITION"
-        headline := "TRANSITION — the auction has not decided. Stand down."
+        headline := "TRANSITION - the auction has not decided. Stand down."
         headCol := C_NE
 
     string whereTxt = "inside value"
@@ -3589,9 +3589,9 @@ if guideOn and barstate.islast
         else if posVsValue == "BELOW value"
             doTxt := "\nBUY side favoured back toward POC " + (devOk ? str.tostring(devPoc, format.mintick) : "")
         else
-            doTxt := "\nMid-value. Wait for an edge — VAH or VAL."
+            doTxt := "\nMid-value. Wait for an edge - VAH or VAL."
     else if regime == "IMBALANCE"
-        doTxt := "\nTarget the untested POC: " + (na(npocUp) ? "—" : str.tostring(npocUp, format.mintick)) + " up / " + (na(npocDn) ? "—" : str.tostring(npocDn, format.mintick)) + " down"
+        doTxt := "\nTarget the untested POC: " + (na(npocUp) ? "-" : str.tostring(npocUp, format.mintick)) + " up / " + (na(npocDn) ? "-" : str.tostring(npocDn, format.mintick)) + " down"
 
     string htfLine = ""
     if htfOn and htfPos != "n/a"
@@ -3599,34 +3599,34 @@ if guideOn and barstate.islast
 
     string extremes = ""
     if highQual == "POOR"
-        extremes += "\nHigh is POOR — unfinished, expect a revisit up."
+        extremes += "\nHigh is POOR - unfinished, expect a revisit up."
     else if highQual == "EXCESS"
-        extremes += "\nHigh is EXCESS — finished, rejection was real."
+        extremes += "\nHigh is EXCESS - finished, rejection was real."
     if lowQual == "POOR"
-        extremes += "\nLow is POOR — unfinished, expect a revisit down."
+        extremes += "\nLow is POOR - unfinished, expect a revisit down."
     else if lowQual == "EXCESS"
-        extremes += "\nLow is EXCESS — finished, rejection was real."
+        extremes += "\nLow is EXCESS - finished, rejection was real."
 
     string dnaTxt = ""
     if dnaAbsorb
-        dnaTxt := "\nABSORPTION now — someone is soaking up this level."
+        dnaTxt := "\nABSORPTION now - someone is soaking up this level."
     else if dnaExhaust
-        dnaTxt := "\nEXHAUSTION now — this move has no volume behind it."
+        dnaTxt := "\nEXHAUSTION now - this move has no volume behind it."
 
     string actLine = ""
     if chartBuy
-        actLine := "\n>>> BUY SIGNAL — all four gates open."
+        actLine := "\n>>> BUY SIGNAL - all four gates open."
     else if chartSell
-        actLine := "\n>>> SELL SIGNAL — all four gates open."
+        actLine := "\n>>> SELL SIGNAL - all four gates open."
 
     guideLbl := label.new(bar_index + lblOffset + guideGap, high + atr14 * 2, headline + actLine +
-         "\nPrice is " + whereTxt + " · day type " + dayType + doTxt + htfLine + extremes + dnaTxt,
+         "\nPrice is " + whereTxt + " - day type " + dayType + doTxt + htfLine + extremes + dnaTxt,
          xloc=xloc.bar_index, style=label.style_label_left,
          color=color.new(#131722, 12), textcolor=headCol, size=f_lblSize(),
          force_overlay=true)
 
 // ============================================================================
-// 20. PANE PLOTS — drawn back to front in the order you described
+// 20. PANE PLOTS - drawn back to front in the order you described
 // ============================================================================
 hline(0, "Zero", color=cZeroLine)
 hOB1 = hline(wtOB1, "Overbought", color=cObOs, linestyle=hline.style_dotted)
@@ -3642,10 +3642,10 @@ fill(hOB1, hOB2, color=color.new(C_DN, 95), title="Overbought Zone")
 fill(hOS1, hOS2, color=color.new(C_UP, 95), title="Oversold Zone")
 
 // --- LAYER 1: momentum waves, behind everything
-// The area plots double as the fill anchors — separate line plots would cost
+// The area plots double as the fill anchors - separate line plots would cost
 // two more of the 64 available.
 // CLASSIC MARKET CIPHER B LAYERING
-// Area style is correct — it is what makes the waves read as waves. The mud
+// Area style is correct - it is what makes the waves read as waves. The mud
 // came from my colours, not the style: two similar-brightness blues at 45%
 // transparency overlapping into soup.
 //
@@ -3653,7 +3653,7 @@ fill(hOS1, hOS2, color=color.new(C_UP, 95), title="Oversold Zone")
 // the FAST wave is bright cyan and sits on top; you read the cross by watching
 // the bright one climb out of the dark one. Drawn slow-first so fast is above.
 //
-// No fill between them either — the original carries direction in the green/red
+// No fill between them either - the original carries direction in the green/red
 // VWAP wave, and a third shaded band between the waves is exactly what made
 // this pane unreadable.
 // THE ORIGINAL'S KEY MOVE: the momentum waves are DARK GREY, almost black.
@@ -3661,13 +3661,13 @@ fill(hOS1, hOS2, color=color.new(C_UP, 95), title="Oversold Zone")
 // near zero read clearly on top of them. Bright blue waves dominated the pane
 // and everything else had to fight them.
 //
-// No outline. The zoomed original has none — the waves are pure dark fill, and
+// No outline. The zoomed original has none - the waves are pure dark fill, and
 // the bright edge I added was pulling the eye back to the thing that is meant
 // to recede.
 plot(wt2, "Slow Wave", style=plot.style_area, color=cSlowWave)
 plot(wt1, "Fast Wave", style=plot.style_area, color=cFastWave)
 
-// --- LAYER 2: VWAP wave (cyan) — BEHIND the money flow
+// --- LAYER 2: VWAP wave (cyan) - BEHIND the money flow
 // The close-up of the original settles the order: cyan is the wider, softer
 // shape underneath, and the green/red money flow sits on top of it almost
 // opaque. I had these reversed, which washed the money flow out.
@@ -3680,7 +3680,7 @@ plot(mfShow ? mfPlot : na, "Money Flow", style=plot.style_area,
 
 // --- LAYER 4 and 5: hidden by default
 plot(showRsi ? rsiPlot : na, "RSI", color=color.new(#ffffff, 45), linewidth=1)
-// Stoch RSI plot removed — redundant with RSI, and both were hidden anyway.
+// Stoch RSI plot removed - redundant with RSI, and both were hidden anyway.
 
 // --- LAYER 6: CVD, in front
 plot(cvdShow ? cvdNorm : na, "CVD", color=cvdCol, linewidth=2)
@@ -3688,11 +3688,11 @@ plot(cvdShow ? cvdNorm : na, "CVD", color=cvdCol, linewidth=2)
 // --- LAYER 7: dots, divergence markers, signals
 // Up and down variants are merged into single plots with a dynamic colour.
 // Six plots became three, which is what keeps the script under the 64 limit.
-// plotshape's "size" argument must be a CONST string — a ternary makes it a
+// plotshape's "size" argument must be a CONST string - a ternary makes it a
 // series string and the script will not compile. So the two sizes are two
 // separate plots rather than one plot with a computed size.
 
-// The MCB Dots Filter setting was declared but never consumed — changing it did
+// The MCB Dots Filter setting was declared but never consumed - changing it did
 // nothing. It now actually filters which crosses get a dot.
 bool dotsPass = true
 if dotsFilter == "Extreme Waves (< -20 / > +20)"
@@ -3705,12 +3705,12 @@ else if dotsFilter == "Extreme Waves + Money Flow"
 
 // The original plots dots as CIRCLES on the slow wave, sized by linewidth.
 // linewidth must be a constant, so a big and a small version are separate
-// plots — which is also how the size ends up carrying meaning.
+// plots - which is also how the size ends up carrying meaning.
 bool dotBuy  = wtCrossUp and dotsPass
 bool dotSell = wtCrossDn and dotsPass
 // ta.barssince COUNTS BARS, so it has to run on every one of them. Sitting on
 // the right of an `or` it can be short-circuited away, and the count silently
-// drifts. Hoisted to global scope — the same mistake that was in f_inRange.
+// drifts. Hoisted to global scope - the same mistake that was in f_inRange.
 //
 // The leading "wtBullDiv or cvBullDiv" was also redundant: barssince returns 0
 // on the bar the divergence fires, which <= 3 already covers.
@@ -3738,10 +3738,10 @@ plot(dotSell and not dotSellBig ? wt2 : na, "Sell Dot", color=cSellDot, style=pl
 plot(dotBuyBig ? wt2 : na, "Buy Dot BIG (divergence)", color=cBuyDot, style=plot.style_circles, linewidth=9)
 plot(dotSellBig ? wt2 : na, "Sell Dot BIG (divergence)", color=cSellDot, style=plot.style_circles, linewidth=9)
 
-// A cross inside an extreme zone is the one worth seeing — drawn large, so the
+// A cross inside an extreme zone is the one worth seeing - drawn large, so the
 // size itself carries the meaning.
 
-// Yellow for divergence, as in the original — the one marker that should catch
+// Yellow for divergence, as in the original - the one marker that should catch
 // your eye in the pane.
 plotshape(wtBullDiv or wtBearDiv ? wt2[divLbR] : na, "WT Divergence", shape.circle, location.absolute,
      color=#ffea00, size=size.tiny, offset=-divLbR)
@@ -3751,7 +3751,7 @@ plotshape(cvBullDiv or cvBearDiv ? cvdNorm[divLbR] : na, "CVD Absorption", shape
 // Grade A keeps its own labelled marker. B and C share one plot, separated by
 // colour depth rather than by shape.
 // The pane's own A/B/C verdicts have been REMOVED. They judged momentum alone,
-// so they routinely said "buy" while the chart correctly said nothing — and you
+// so they routinely said "buy" while the chart correctly said nothing - and you
 // were left choosing between two of my own opinions.
 //
 // The pane now describes. The chart decides. One BUY label, one SELL label,
@@ -3762,13 +3762,13 @@ plotshape(dnaAbsorb or dnaExhaust ? 1 : na, "Absorption / Exhaustion", shape.squ
      location.abovebar, color=dnaAbsorb ? cAbs : cExh, size=size.tiny, force_overlay=true)
 // Circles, not triangles. These describe VOLUME BEHAVIOUR, they are not calls
 // to act, and they were being confused with the buy/sell markers.
-// Merged into one plot with a dynamic price and colour — saves two slots.
+// Merged into one plot with a dynamic price and colour - saves two slots.
 plotshape(dnaEffortB or dnaEffortS ? (dnaEffortB ? low : high) : na, "Effort",
      shape.circle, location.absolute, color=dnaEffortB ? cEffB : cEffS,
      size=size.tiny, force_overlay=true)
-// Exhaustion shares the marker above, coloured differently — see the dashboard
+// Exhaustion shares the marker above, coloured differently - see the dashboard
 // DNA row and the barcode tape to tell them apart at a glance.
-// Stagnation is the "nothing happening" quadrant — it still appears in the tape
+// Stagnation is the "nothing happening" quadrant - it still appears in the tape
 // and the dashboard, but it does not earn a chart marker or a plot slot.
 
 // ============================================================================
@@ -3795,7 +3795,7 @@ if showTable and barstate.islast
 
     // BROKEN CHAIN: the "if not useLtf" started a SECOND if/else, so on a 1m
     // chart the tag read "chart delta (no LTF)" even when the source was MFI or
-    // Chaikin — neither of which uses lower-timeframe data at all. And the MFI
+    // Chaikin - neither of which uses lower-timeframe data at all. And the MFI
     // and Chaikin branches were unreachable whenever useLtf was false. One
     // chain, keyed on the source first, then qualified by data availability.
     string srcTag = "OG (no vol)"
@@ -3857,7 +3857,7 @@ if showTable and barstate.islast
     if wt2 <= wtOS1
         zoneCol := C_UP
 
-    string divTxt = "—"
+    string divTxt = "-"
     color divCol = C_NE
     if divRecentBull
         divTxt := "Bullish"
@@ -3870,7 +3870,7 @@ if showTable and barstate.islast
     // A stale feed belongs at the top, not buried in a row. Everything below it
     // is describing a market that has already moved on.
     table.cell(dash, 1, 0,
-         feedStale ? "⚠ DELAYED " + str.tostring(feedAgeMin) + "m" : acProfTag + " · " + modeTag,
+         feedStale ? "! DELAYED " + str.tostring(feedAgeMin) + "m" : acProfTag + " - " + modeTag,
          text_color=feedStale ? #ff1744 : color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_right)
 
     // The gate uses regimeLive (available on every bar); the row used to show
@@ -3888,19 +3888,19 @@ if showTable and barstate.islast
     f_pair(4, 2, "Flow",     str.tostring(mfRaw, "#.##") + "  " + srcTag, mfBull ? C_UP : C_DN)
     f_pair(5, 0, "Vs prior", vaRelation, relCol)
     f_pair(5, 2, "Delta",    str.tostring(deltaRatio * 100, "#.#") + "%", deltaRatio > 0 ? C_UP : C_DN)
-    f_pair(6, 0, "POC",      devOk ? str.tostring(devPoc, format.mintick) : "—", cPoc)
+    f_pair(6, 0, "POC",      devOk ? str.tostring(devPoc, format.mintick) : "-", cPoc)
     f_pair(6, 2, "CVD",      str.tostring(cvdNorm, "#.#"), cvdNorm > 0 ? C_UP : C_DN)
-    f_pair(7, 0, "VAH",      devOk ? str.tostring(devVah, format.mintick) : "—", cVa)
+    f_pair(7, 0, "VAH",      devOk ? str.tostring(devVah, format.mintick) : "-", cVa)
     f_pair(7, 2, "Diverge",  divTxt, divCol)
-    f_pair(8, 0, "VAL",      devOk ? str.tostring(devVal, format.mintick) : "—", cVa)
+    f_pair(8, 0, "VAL",      devOk ? str.tostring(devVal, format.mintick) : "-", cVa)
     f_pair(8, 2, "IB ext",   ibExt, C_NE)
     f_pair(9, 0, "High",     highQual + (na(topPct) ? "" : "  " + str.tostring(topPct, "#") + "%"), hiCol)
     f_pair(9, 2, "Low",      lowQual  + (na(botPct) ? "" : "  " + str.tostring(botPct, "#") + "%"), loCol)
-    f_pair(10, 0, "nPOC up", na(npocUp) ? "—" : str.tostring(npocUp, format.mintick), cNpoc)
-    f_pair(10, 2, "nPOC dn", na(npocDn) ? "—" : str.tostring(npocDn, format.mintick), cNpoc)
+    f_pair(10, 0, "nPOC up", na(npocUp) ? "-" : str.tostring(npocUp, format.mintick), cNpoc)
+    f_pair(10, 2, "nPOC dn", na(npocDn) ? "-" : str.tostring(npocDn, format.mintick), cNpoc)
     f_pair(11, 0, "DNA",     dnaState, dnaCol)
     f_pair(11, 2, "Vol z",   str.tostring(volZ, "#.#") + " / spr " + str.tostring(spreadZ, "#.#"), volZ > dnaVolTh ? C_WN : C_NE)
-    string vwTxt = "—"
+    string vwTxt = "-"
     color  vwCol = C_NE
     if not na(vwapVal)
         vwTxt := str.tostring(vwapVal, format.mintick)
@@ -3910,15 +3910,15 @@ if showTable and barstate.islast
     bool tooCoarse = barsPer < 10
     // A frozen profile has to announce itself. Outside the session inPeriod is
     // false and nothing is being added, so every level on the chart is a
-    // snapshot of the last close — true when it was drawn, stale now.
-    string profTxt = not inPeriod ? "DORMANT · outside session" :
+    // snapshot of the last close - true when it was drawn, stale now.
+    string profTxt = not inPeriod ? "DORMANT - outside session" :
          tooCoarse ? "TOO FEW BARS" : (ltfOk ? ltfEff + " intra" : "chart bars")
     f_pair(12, 2, "Profile", profTxt, not inPeriod ? C_WN : tooCoarse ? C_DN : C_UP)
     f_pair(13, 0, "Open int", oiOk ? oiState : "no OI feed", oiCol)
-    f_pair(13, 2, "OI z", oiOk ? str.tostring(oiChgZ, "#.#") : "—", math.abs(oiChgZ) > 1.5 ? C_WN : C_NE)
-    f_pair(14, 0, "Structure", trendDir > 0 ? "Bullish" : trendDir < 0 ? "Bearish" : "—",
+    f_pair(13, 2, "OI z", oiOk ? str.tostring(oiChgZ, "#.#") : "-", math.abs(oiChgZ) > 1.5 ? C_WN : C_NE)
+    f_pair(14, 0, "Structure", trendDir > 0 ? "Bullish" : trendDir < 0 ? "Bearish" : "-",
          trendDir > 0 ? C_UP : trendDir < 0 ? C_DN : C_NE)
-    f_pair(14, 2, "Funding", fundOk ? str.tostring(fundVal, "#.####") : "—", C_NE)
+    f_pair(14, 2, "Funding", fundOk ? str.tostring(fundVal, "#.####") : "-", C_NE)
     color htfCol = C_NE
     if str.contains(htfPos, "above")
         htfCol := C_UP
@@ -3926,23 +3926,23 @@ if showTable and barstate.islast
         htfCol := C_DN
     // labelled "dev" because it IS the developing week, unlike the drawn lines
     f_pair(15, 0, "HTF value (dev)", htfPos, htfCol)
-    f_pair(15, 2, "prior " + (htfOn ? htfMode : "HTF") + " POC", na(htfPoc) ? "—" : str.tostring(htfPoc, format.mintick), cHtfPoc)
+    f_pair(15, 2, "prior " + (htfOn ? htfMode : "HTF") + " POC", na(htfPoc) ? "-" : str.tostring(htfPoc, format.mintick), cHtfPoc)
 
     // Which gates are currently open, so a silent chart is explainable
-    // C context · L location · T trigger · P proof, then the OI verdict:
+    // C context - L location - T trigger - P proof, then the OI verdict:
     // OK = open interest backs this side, NO = open interest vetoes it.
-    string gBuy = (ctxBuy ? "C" : "·") + (atLowEdge ? "L" : "·") + (trigBuy ? "T" : "·") + (proofBuy ? "P" : "·") +
-         "×" + str.tostring(confAtLowRej) + (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "")
-    string gSell = (ctxSell ? "C" : "·") + (atHighEdge ? "L" : "·") + (trigSell ? "T" : "·") + (proofSell ? "P" : "·") +
-         "×" + str.tostring(confAtHighRej) + (oiVetoSell ? " NO" : oiProofSell ? " OK" : "")
+    string gBuy = (ctxBuy ? "C" : "-") + (atLowEdge ? "L" : "-") + (trigBuy ? "T" : "-") + (proofBuy ? "P" : "-") +
+         "x" + str.tostring(confAtLowRej) + (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "")
+    string gSell = (ctxSell ? "C" : "-") + (atHighEdge ? "L" : "-") + (trigSell ? "T" : "-") + (proofSell ? "P" : "-") +
+         "x" + str.tostring(confAtHighRej) + (oiVetoSell ? " NO" : oiProofSell ? " OK" : "")
     f_pair(16, 0, "Buy gates", gBuy + "  " + str.tostring(gatesBuy) + "/" + str.tostring(needGates),
          gatesBuy >= needGates ? C_UP : C_NE)
-    // ACTION — the single authoritative line. Everything else on both surfaces
+    // ACTION - the single authoritative line. Everything else on both surfaces
     // is description; this is the only thing that says trade.
     string actTxt = "WAIT"
     color  actCol = C_NE
     if sigConflict
-        actTxt := "CONFLICT — both sides qualified"
+        actTxt := "CONFLICT - both sides qualified"
         actCol := C_WN
     else if chartBuy
         actTxt := "BUY  " + (na(rkRL) ? "" : str.tostring(rkRL, "#.#") + "R")
@@ -3960,7 +3960,7 @@ if showTable and barstate.islast
 
     string balTxt = balActive ? (balArmed ? "ARMED " + str.tostring(balLo, format.mintick) + "-" + str.tostring(balHi, format.mintick) : "forming") : "none"
     f_pair(17, 0, "Balance area", balTxt, balActive and balArmed ? C_WN : C_NE)
-    f_pair(17, 2, "ADX / Eff", str.tostring(adxVal, "#.#") + " · " + str.tostring(effRatio, "0.00"),
+    f_pair(17, 2, "ADX / Eff", str.tostring(adxVal, "#.#") + " - " + str.tostring(effRatio, "0.00"),
          csigNoiseOn and effRatio < csigErMin ? C_DN : effRatio >= csigErMin ? C_UP : C_NE)
     f_pair(16, 2, "Sell gates", gSell + "  " + str.tostring(gatesSell) + "/" + str.tostring(needGates),
          gatesSell >= needGates ? C_DN : C_NE)
@@ -3984,7 +3984,7 @@ if not na(priorVal)
 
 // ----------------------------------------------------------------------------
 // These use alert() rather than alertcondition(). alertcondition costs one of
-// the 64 plot slots EACH — thirteen of them were quietly consuming a fifth of
+// the 64 plot slots EACH - thirteen of them were quietly consuming a fifth of
 // the budget. alert() costs nothing.
 //
 // Setup differs slightly: create ONE alert on this indicator and choose
@@ -3994,33 +3994,33 @@ if not na(priorVal)
 string alertMsg = ""
 
 if buyA
-    alertMsg += "GRADE A BUY — cross up in oversold, money flow positive, divergence present. "
+    alertMsg += "GRADE A BUY - cross up in oversold, money flow positive, divergence present. "
 if sellA
-    alertMsg += "GRADE A SELL — cross down in overbought, money flow negative, divergence present. "
+    alertMsg += "GRADE A SELL - cross down in overbought, money flow negative, divergence present. "
 if buyB and not buyA
-    alertMsg += "Grade B buy — cross up in oversold with money flow agreement. "
+    alertMsg += "Grade B buy - cross up in oversold with money flow agreement. "
 if sellB and not sellA
-    alertMsg += "Grade B sell — cross down in overbought with money flow agreement. "
+    alertMsg += "Grade B sell - cross down in overbought with money flow agreement. "
 if acceptAbove
-    alertMsg += "ACCEPTANCE ABOVE VALUE — three closes above prior VAH, balance to imbalance. "
+    alertMsg += "ACCEPTANCE ABOVE VALUE - three closes above prior VAH, balance to imbalance. "
 if acceptBelow
-    alertMsg += "ACCEPTANCE BELOW VALUE — three closes below prior VAL, balance to imbalance. "
+    alertMsg += "ACCEPTANCE BELOW VALUE - three closes below prior VAL, balance to imbalance. "
 if backInValue
     alertMsg += "Rotation back into prior value area. "
 if cvBullDiv
-    alertMsg += "CVD ABSORPTION BULL — price lower low, CVD higher low, sellers not being paid. "
+    alertMsg += "CVD ABSORPTION BULL - price lower low, CVD higher low, sellers not being paid. "
 if cvBearDiv
-    alertMsg += "CVD ABSORPTION BEAR — price higher high, CVD lower high, buyers not being paid. "
+    alertMsg += "CVD ABSORPTION BEAR - price higher high, CVD lower high, buyers not being paid. "
 if dnaAbsorb
-    alertMsg += "VOLUME DNA ABSORPTION — high volume, narrow spread" + (dnaAtEdge ? " at a value area edge" : "") + ". "
+    alertMsg += "VOLUME DNA ABSORPTION - high volume, narrow spread" + (dnaAtEdge ? " at a value area edge" : "") + ". "
 if dnaExhaust
-    alertMsg += "VOLUME DNA EXHAUSTION — low volume, wide spread, the move is running on empty. "
+    alertMsg += "VOLUME DNA EXHAUSTION - low volume, wide spread, the move is running on empty. "
 if balBreakUp
-    alertMsg += "BALANCE BREAK UP — the rotation resolved higher. "
+    alertMsg += "BALANCE BREAK UP - the rotation resolved higher. "
 if balBreakDn
-    alertMsg += "BALANCE BREAK DOWN — the rotation resolved lower. "
+    alertMsg += "BALANCE BREAK DOWN - the rotation resolved lower. "
 if liqCascade
-    alertMsg += "LIQUIDATION CASCADE — open interest collapsing on a wide bar, forced closing not conviction. "
+    alertMsg += "LIQUIDATION CASCADE - open interest collapsing on a wide bar, forced closing not conviction. "
 // The fill model says the entry is the NEXT bar's open, so the alert has to say
 // so. An instruction that does not name its entry price is not an instruction.
 // THE ALERT AND THE LEDGER MUST GIVE THE SAME INSTRUCTION.
@@ -4032,17 +4032,17 @@ if liqCascade
 // instruction.
 string standDown = " Stand down if the open leaves less than " + str.tostring(riskMinR, "#.#") + "R. "
 if chartBuy
-    alertMsg += "CHART BUY — context, location, trigger and proof all agree. Entry at the NEXT bar open" +
+    alertMsg += "CHART BUY - context, location, trigger and proof all agree. Entry at the NEXT bar open" +
          (na(rkStopL) ? "" : ", stop " + str.tostring(rkStopL, format.mintick)) +
          (na(rkTgtL) ? "" : ", target " + str.tostring(rkTgtL, format.mintick)) + "." + standDown
 if chartSell
-    alertMsg += "CHART SELL — context, location, trigger and proof all agree. Entry at the NEXT bar open" +
+    alertMsg += "CHART SELL - context, location, trigger and proof all agree. Entry at the NEXT bar open" +
          (na(rkStopS) ? "" : ", stop " + str.tostring(rkStopS, format.mintick)) +
          (na(rkTgtS) ? "" : ", target " + str.tostring(rkTgtS, format.mintick)) + "." + standDown
 if chochUp
-    alertMsg += "CHoCH up — structure shifted bullish. "
+    alertMsg += "CHoCH up - structure shifted bullish. "
 if chochDn
-    alertMsg += "CHoCH down — structure shifted bearish. "
+    alertMsg += "CHoCH down - structure shifted bearish. "
 if qBig
     alertMsg += "BIG volume cluster. "
 else if qMed
