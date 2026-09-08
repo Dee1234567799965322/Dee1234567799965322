@@ -90,8 +90,12 @@ bool  showHist_in   = input.bool(true,  "Profile Histogram", group=G_AUC)
 float histWidthPct = input.float(34.0, "Histogram Width (%)", minval=2.0, maxval=100.0, group=G_AUC,
      tooltip="Width of the widest histogram row, as a percentage of the number of bars in the current period.\n\nThis used to be a fixed bar count, which meant the profile was the wrong size on every timeframe except the one it was tuned for - 50 bars is most of a 4h chart's day and a sliver of a 1m chart's day. A percentage scales itself.\n\nThe drawn width is clamped to 2..300 bars.")
 bool  histSplitUD = input.bool(true, "Split Up / Down Volume", group=G_AUC,
-     tooltip="Draw each row as buying volume and selling volume side by side instead of one solid bar.\n\nUp volume is intrabar volume that closed above its open, down volume is volume that closed below. On a chart with no usable lower timeframe this falls back to whole chart bars, which is much coarser - the readout in the dashboard tells you which one is in use.\n\nCosts two drawing objects per row instead of one, which halves how many rows can be drawn. See the note on the row budget below.")
+     tooltip="Draws a second, shorter bar OVER each row showing the dominant side's volume, in green when buyers traded more of that price and red when sellers did.\n\nSo the grey bar is the total traded at that price, the colored bar is how much of it was one-sided, and the gap between the two tips is how balanced that price was. A long red bar reaching almost to the grey tip is one-way selling; a short colored bar under a long grey one is two-way trade.\n\nUp volume is intrabar volume that closed above its open, down volume is volume that closed below. With no usable lower timeframe this falls back to whole chart bars, which is much coarser - the dashboard Profile row says which is in use.")
 bool  histVaColor = input.bool(true, "Color Value Area Rows Differently", group=G_AUC)
+float histRowFill = input.float(80.0, "Row Fill (%)", minval=20.0, maxval=100.0, step=5.0, group=G_AUC,
+     tooltip="How much of each row's price slot the bar actually fills. Below 100 leaves a gap between rows, which is what makes a 250-row profile read as 250 separate prices instead of one solid blob. 100 makes them touch.")
+int   histOvW     = input.int(2, "Dominant-side Thickness (px)", minval=1, maxval=4, group=G_AUC,
+     tooltip="Pixel thickness of the colored bar drawn over each row. 1 or 2 at 200+ rows, 3 or 4 if you run a coarse profile.")
 bool  histVaExt   = input.bool(true, "Value Area Extremities", group=G_AUC,
      tooltip="Marks the top and bottom of the value area across the histogram itself, so you can see where the 70% band sits inside the shape rather than only as a line out on the price chart.")
 bool  histBgOn    = input.bool(false, "Range Background", group=G_AUC,
@@ -117,10 +121,12 @@ float excBand    = input.float(5.0, "Extreme Band (% of range)", minval=1.0, max
 float poorMult   = input.float(2.5,  "Poor Multiplier", minval=1.2, maxval=6.0, group=G_AUC)
 
 string G_AC = "2b - AUCTION COLORS"
-color cHistUp   = input.color(color.new(#26a69a, 72), "Up Volume", group=G_AC)
-color cHistDn   = input.color(color.new(#ef5350, 72), "Down Volume", group=G_AC)
-color cHistVaUp = input.color(color.new(#26a69a, 45), "VA Up Volume", group=G_AC)
-color cHistVaDn = input.color(color.new(#ef5350, 45), "VA Down Volume", group=G_AC)
+color cHistTot   = input.color(color.new(#b2b5be, 62), "Total Volume", group=G_AC)
+color cHistVaTot = input.color(color.new(#d1d4dc, 38), "VA Total Volume", group=G_AC)
+color cHistUp   = input.color(color.new(#26a69a, 25), "Up Volume", group=G_AC)
+color cHistDn   = input.color(color.new(#ef5350, 25), "Down Volume", group=G_AC)
+color cHistVaUp = input.color(color.new(#26a69a, 0), "VA Up Volume", group=G_AC)
+color cHistVaDn = input.color(color.new(#ef5350, 0), "VA Down Volume", group=G_AC)
 color cHistPoc  = input.color(color.new(#ffb300, 25), "Profile POC Row", group=G_AC)
 color cVaExt    = input.color(color.new(#26c6da, 40), "VA Extremities", group=G_AC)
 color cHistBg   = input.color(color.new(#787b86, 93), "Range Background", group=G_AC)
@@ -2079,25 +2085,35 @@ if barstate.islast and aucOn
         int histWidth = math.max(10, math.min(300, int(math.round(perBars * histWidthPct / 100.0))))
 
         // --- how many rows can actually be DRAWN
-        // Pine allows 500 boxes for the entire script and silently deletes the
-        // OLDEST when that fills, so a profile that asks for more than its share
-        // does not fail loudly - it eats the balance areas, CME gaps, session
-        // boxes and trade boxes drawn before it. HIST_BUDGET is what is left
-        // after the worst case of all of those (15 absorption + 42 balance +
-        // 20 gap + 12 session + a handful of trade boxes, rounded up).
+        // Pine gives the whole script 500 boxes and, separately, 500 lines, and
+        // silently deletes the OLDEST of a type when its pool fills. A profile
+        // that overruns does not fail loudly - it eats the balance areas, CME
+        // gaps, session boxes, naked POCs and divergence lines drawn before it.
         //
-        // Rows beyond the budget are MERGED for drawing only. The profile itself
-        // is still computed at full resolution, so the POC, value area and LVNs
-        // are unaffected - only the visual granularity is capped, and at 180+
-        // rows each row is already thinner than a pixel on most screens.
-        int HIST_BUDGET = 360
-        int perRow      = histSplitUD ? 2 : 1
-        int drawRows    = math.min(profRows, int(HIST_BUDGET / perRow))
-        int merge       = int(math.ceil(profRows / float(drawRows)))
-        drawRows       := int(math.ceil(profRows / float(merge)))
+        // So the row is a BOX (total volume) and the dominant side drawn over it
+        // is a LINE. Two different pools, one object each, and 250 rows fits in
+        // both with room to spare. The reserves below are the real caps of every
+        // other feature rather than a guessed number, so raising Max Naked POCs
+        // or Max Divergence Lines correctly takes rows away from the profile
+        // instead of quietly evicting them.
+        int boxReserve  = 15 + balBins + 2 + cmeKeep + sessKeep * 3 + 20
+        int lineReserve = maxNpoc + maxLvn + divMaxLines + 60
+        int boxRoom     = math.max(60, 500 - boxReserve)
+        int lineRoom    = math.max(60, 500 - lineReserve)
+        int cap         = histSplitUD ? math.min(boxRoom, lineRoom) : boxRoom
+
+        // Rows beyond that are MERGED for drawing only. The profile is still
+        // COMPUTED at full resolution, so the POC, value area and LVNs never
+        // change with this.
+        int drawRows = math.min(profRows, cap)
+        int merge    = int(math.ceil(profRows / float(drawRows)))
+        drawRows    := int(math.ceil(profRows / float(merge)))
 
         float step  = (devHi - devLo) / profRows
         float dStep = step * merge
+        // The empty sliver above and below each bar. This is what separates the
+        // rows visually - without it 250 rows render as one solid mass.
+        float pad   = dStep * (1.0 - histRowFill / 100.0) / 2.0
 
         // --- merge the computed bins down to the drawn rows
         array<float> dTot = array.new<float>(drawRows, 0.0)
@@ -2109,9 +2125,10 @@ if barstate.islast and aucOn
 
         float mx = dTot.max()
         if mx > 0
-            int   xL   = histExtR ? bar_index + histOffset : bar_index - histWidth - histOffset
-            int   xEnd = histExtR ? bar_index + histOffset + histWidth : bar_index - histOffset
-            int   pocRow = dTot.indexof(mx)
+            int xL     = histExtR ? bar_index + histOffset : bar_index - histWidth - histOffset
+            int xEnd   = histExtR ? bar_index + histOffset + histWidth : bar_index - histOffset
+            int xAnch  = histExtR ? xL : xEnd
+            int pocRow = dTot.indexof(mx)
 
             // --- range background, behind everything else
             if histBgOn
@@ -2123,41 +2140,43 @@ if barstate.islast and aucOn
                 if tot > 0
                     int wid = int(math.round(tot / mx * histWidth))
                     if wid > 0
-                        float bot = devLo + d * dStep
-                        float top = math.min(devHi, bot + dStep)
+                        float slotLo = devLo + d * dStep
+                        float bot = slotLo + pad
+                        // The top slot can overshoot devHi when merging does not
+                        // divide the rows evenly; clamping it can invert the box,
+                        // so the row is skipped rather than drawn upside down.
+                        float top = math.min(devHi, slotLo + dStep - pad)
                         // A row is "in value" when its own centre is inside the
                         // value area, not when it merely overlaps it - otherwise
                         // the two rows straddling VAH and VAL both light up and
                         // the band reads two rows too wide.
-                        float mid   = (top + bot) / 2
+                        float mid   = slotLo + dStep / 2
                         bool  inVa  = histVaColor and not na(devVah) and not na(devVal) and mid <= devVah and mid >= devVal
                         bool  isPoc = d == pocRow
 
-                        if histSplitUD
-                            // buying on the inside, selling stacked beyond it,
-                            // so the two always start from the same edge and the
-                            // ratio is readable as a single bar.
-                            float upFrac = math.min(1.0, math.max(0.0, dUp.get(d) / tot))
-                            int   wUp    = int(math.round(wid * upFrac))
-                            int   wDn    = wid - wUp
-                            color cU = isPoc ? cHistPoc : inVa ? cHistVaUp : cHistUp
-                            color cD = isPoc ? cHistPoc : inVa ? cHistVaDn : cHistDn
-                            if wUp > 0
-                                int ux1 = histExtR ? xL : xEnd - wUp
-                                int ux2 = histExtR ? xL + wUp : xEnd
-                                histBoxes.push(box.new(ux1, top, ux2, bot, bgcolor=cU,
-                                     border_color=color(na), force_overlay=true))
-                            if wDn > 0
-                                int dx1 = histExtR ? xL + wUp : xEnd - wid
-                                int dx2 = histExtR ? xL + wid : xEnd - wUp
-                                histBoxes.push(box.new(dx1, top, dx2, bot, bgcolor=cD,
-                                     border_color=color(na), force_overlay=true))
-                        else
-                            color c1 = isPoc ? cHistPoc : inVa ? cHistVaUp : cHistUp
-                            int sx1 = histExtR ? xL : xEnd - wid
-                            int sx2 = histExtR ? xL + wid : xEnd
-                            histBoxes.push(box.new(sx1, top, sx2, bot, bgcolor=c1,
+                        if top > bot
+                            // --- the row itself: TOTAL volume traded at this price
+                            color cRow = isPoc ? cHistPoc : inVa ? cHistVaTot : cHistTot
+                            int rx1 = histExtR ? xAnch : xAnch - wid
+                            int rx2 = histExtR ? xAnch + wid : xAnch
+                            histBoxes.push(box.new(rx1, top, rx2, bot, bgcolor=cRow,
                                  border_color=color(na), force_overlay=true))
+
+                            // --- over it: the DOMINANT side, from the same edge
+                            // Same origin as the row, so the two tips can be read
+                            // against each other - how far the colour reaches into
+                            // the grey is how one-sided that price was.
+                            if histSplitUD
+                                float uv  = math.min(tot, math.max(0.0, dUp.get(d)))
+                                float dv  = tot - uv
+                                bool  buyDom = uv >= dv
+                                int   wOv = int(math.round((buyDom ? uv : dv) / mx * histWidth))
+                                if wOv > 0
+                                    color cOv = buyDom ? (inVa ? cHistVaUp : cHistUp) : (inVa ? cHistVaDn : cHistDn)
+                                    int ox1 = histExtR ? xAnch : xAnch - wOv
+                                    int ox2 = histExtR ? xAnch + wOv : xAnch
+                                    histLines.push(line.new(ox1, mid, ox2, mid, xloc=xloc.bar_index,
+                                         color=cOv, width=histOvW, force_overlay=true))
 
             // --- value area extremities, drawn across the profile itself
             if histVaExt and not na(devVah) and not na(devVal)
