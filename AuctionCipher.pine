@@ -88,6 +88,8 @@ int   profRows   = input.int(100, "Profile Rows", minval=8, maxval=180, group=G_
 float vaPct      = input.float(70.0, "Value Area %", minval=50.0, maxval=95.0, group=G_AUC) / 100.0
 bool  showHist_in   = input.bool(true,  "Profile Histogram", group=G_AUC)
 int   histWidth  = input.int(50, "Histogram Width (bars)", minval=10, maxval=200, group=G_AUC)
+int   histOffset = input.int(8, "Histogram Offset (bars right)", minval=0, maxval=100, group=G_AUC,
+     tooltip="How far right of the last bar the profile is drawn.\n\nThis was hardcoded at 30. Together with a width of 50 that put the histogram between 30 and 80 bars into the future, which is further right than most charts leave empty — so on a normally scrolled chart the whole profile sat outside the visible area and looked like it was not being drawn at all.\n\n8 keeps it clear of the last candles while staying on screen. Raise it if it crowds price.")
 bool  showPrior_in  = input.bool(true,  "Prior POC / VAH / VAL", group=G_AUC)
 bool  showPrHL_in   = input.bool(false, "Prior High / Low", group=G_AUC)
 bool  showIB_in     = input.bool(true,  "Initial Balance Lines", group=G_AUC)
@@ -2003,7 +2005,7 @@ if barstate.islast and aucOn
                 if wid > 0
                     float top = devLo + (lvl + 1) * step
                     float bot = devLo + lvl * step
-                    histBoxes.push(box.new(bar_index + 30, top, bar_index + 30 + wid, bot,
+                    histBoxes.push(box.new(bar_index + histOffset, top, bar_index + histOffset + wid, bot,
                          bgcolor=cHist, border_color=color(na), force_overlay=true))
 
 // ============================================================================
