@@ -62,6 +62,15 @@ type TradeDraw
     box   stopBox
     label info
 
+// A naked POC: the price, and the line drawn at it. These were two parallel
+// arrays that every site had to push, shift and remove from in step - three
+// sites, six calls, and one missed call silently mismatches every level with
+// somebody else's line. The arrays happened to be in step, but that was upkeep,
+// not a guarantee. One object per level makes it a guarantee.
+type Npoc
+    float price
+    line  ln
+
 // ============================================================================
 // 1. INPUTS
 // ============================================================================
@@ -238,6 +247,14 @@ string lblStyle  = input.string("Name + Price", "Label Content",
      options=["Name Only", "Name + Price", "Price Only"], group=G_LBL)
 string lblSizeIn = input.string("Small", "Label Size", options=["Tiny", "Small", "Normal"], group=G_LBL)
 int    lblOffset = input.int(3, "Label Offset (bars right)", minval=0, maxval=40, group=G_LBL)
+int    labSpacing = input.int(14, "Gap Between Side-by-side Labels (bars)", minval=4, maxval=60, group=G_LBL,
+     tooltip="When two levels sit at almost the same price their labels are placed SIDE BY SIDE instead of stacked, this many bars apart. Increase it if they still overlap on your chart.\n\nThis replaced nudging the label up the price axis. Nudging had to move the label by a whole label height to clear anything, which at 250 rows on a 1m chart is many times the distance between the levels themselves - so either the nudge was too small to help or the label ended up pointing at a price the level is not at. Sideways there is unlimited room and the label keeps its true price.")
+float  labTolATR  = input.float(0.5, "Label Collision Tolerance (x ATR)", minval=0.05, maxval=3.0, step=0.05, group=G_LBL,
+     tooltip="How close two levels have to be before their labels are treated as colliding. Raise it if labels still overlap, lower it if they are being spread out when they did not need to be.")
+int    labMaxCols = input.int(4, "Maximum Side-by-side Columns", minval=2, maxval=8, group=G_LBL,
+     tooltip="How far the staggering is allowed to march to the right before it starts over. It takes this many levels within the collision tolerance to fill them, which is rare.")
+bool   labSolid   = input.bool(true, "Solid Background Behind Labels", group=G_LBL,
+     tooltip="Gives the label an opaque background in the chart's own colour so the level line passes BEHIND the text instead of striking through it. Turn it off for see-through labels.")
 int    guideGap  = input.int(28, "Read Offset (bars right of labels)", minval=0, maxval=120, group=G_LBL,
      tooltip="Pushes the plain-English read clear of the level labels so the two do not overlap.")
 bool   guideOn   = input.bool(true, "Show Plain-English Read", group=G_LBL,
@@ -891,8 +908,7 @@ var string priorHighQual = "n/a"
 var string priorLowQual  = "n/a"
 var float  priorHiLvl = na
 var float  priorLoLvl = na
-var array<float> npocPrice = array.new<float>()
-var array<line>  npocLine  = array.new<line>()
+var array<Npoc> npocs = array.new<Npoc>()
 
 var line lnPoc  = na
 var line lnVah  = na
@@ -947,11 +963,10 @@ if isNewPeriod and aucOn and barClosed
             int npocX1 = na(time[1]) ? time - 60000 : time[1]
             line nl = line.new(npocX1, fPoc, time, fPoc, xloc=xloc.bar_time, color=cNpoc,
                  style=line.style_dotted, width=1, extend=extend.right, force_overlay=true)
-            npocPrice.push(fPoc)
-            npocLine.push(nl)
-            if npocPrice.size() > maxNpoc
-                line.delete(npocLine.shift())
-                npocPrice.shift()
+            npocs.push(Npoc.new(price = fPoc, ln = nl))
+            if npocs.size() > maxNpoc
+                Npoc dropped = npocs.shift()
+                line.delete(dropped.ln)
 
     firstPeriodDone := true
     curH.clear()
@@ -1098,19 +1113,18 @@ if barstate.islast and aucOn
 // 11. NAKED POC MAINTENANCE
 // ============================================================================
 if showNpoc and aucOn and barClosed
-    if npocPrice.size() > 0
-        for i = npocPrice.size() - 1 to 0
-            float p = npocPrice.get(i)
-            if high >= p and low <= p
-                line.delete(npocLine.get(i))
-                npocLine.remove(i)
-                npocPrice.remove(i)
+    if npocs.size() > 0
+        for i = npocs.size() - 1 to 0
+            Npoc n = npocs.get(i)
+            if high >= n.price and low <= n.price
+                line.delete(n.ln)
+                npocs.remove(i)
 
 float npocUp = na
 float npocDn = na
-if npocPrice.size() > 0
-    for i = 0 to npocPrice.size() - 1
-        float p = npocPrice.get(i)
+if npocs.size() > 0
+    for i = 0 to npocs.size() - 1
+        float p = npocs.get(i).price
         if math.abs(p - close) / close * 100 <= npocMaxDist
             if p > close
                 npocUp := na(npocUp) ? p : math.min(npocUp, p)
@@ -1901,6 +1915,9 @@ if barstate.islast
 // it from a dashboard.
 // ============================================================================
 var array<label> lvlLabels = array.new<label>()
+// Widest stagger column actually used this bar. The plain-English read sits to
+// the right of the labels, so it has to clear however far they spread.
+var int labMaxColUsed = 0
 
 // Labels are queued first, then drawn in one pass sorted by price. That lets
 // clustered levels be nudged apart instead of stacking on top of each other,
@@ -1954,9 +1971,9 @@ if barstate.islast
         if showIB and not na(ibH)
             f_queue(ibH, "IB high  initial balance", cIB)
             f_queue(ibL, "IB low  initial balance", cIB)
-        if showNpoc and npocPrice.size() > 0
-            for i = 0 to npocPrice.size() - 1
-                float np = npocPrice.get(i)
+        if showNpoc and npocs.size() > 0
+            for i = 0 to npocs.size() - 1
+                float np = npocs.get(i).price
                 if math.abs(np - close) / close * 100 <= npocMaxDist
                     f_queue(np, "nPOC  untested", cNpoc)
         if showLvn and devOk and lvnLines.size() > 0
@@ -1969,34 +1986,46 @@ if barstate.islast
         f_queue(htfPoc, "prior " + htfMode + " POC", cHtfPoc)
         f_queue(htfVal, "prior " + htfMode + " VAL", cHtfVa)
 
-    // draw in ascending price order, nudging apart anything that would collide
+    // Draw in ascending price order, stepping colliding labels SIDEWAYS.
+    //
+    // This used to nudge them up the price axis instead, and that could not
+    // work: to clear its neighbour a label has to move a whole label HEIGHT,
+    // which is a pixel quantity, while the nudge was 0.45 ATR, which is a price
+    // quantity. On a 1m gold chart 0.45 ATR is a few cents - invisible - so the
+    // labels still sat on top of each other, which is exactly what IB low,
+    // prior POC and VWAP were doing. Raising it would have fixed the overlap by
+    // pointing the label at a price the level is not at.
+    //
+    // Sideways has unlimited room and never lies about the price, so the
+    // hairline marker that used to point back at the true level is gone too -
+    // every label now sits exactly on its own level.
+    labMaxColUsed := 0
     if qY.size() > 0
         // NOT named "order" - that is a reserved Pine namespace (order.ascending)
         array<int> sortIdx = qY.sort_indices(order.ascending)
-        float minGap = atr14 * 0.45
+        float labTol = atr14 * labTolATR
         float lastY = na
+        int   col   = 0
         for k = 0 to sortIdx.size() - 1
             int idx = sortIdx.get(k)
-            float trueY = qY.get(idx)
-            float drawY = trueY
-            if not na(lastY)
-                if drawY - lastY < minGap
-                    drawY := lastY + minGap
-            lastY := drawY
+            float y = qY.get(idx)
+            // Compared against the PREVIOUS label's price, not the previous
+            // column's, so a run of three tight levels keeps stepping right.
+            if not na(lastY) and y - lastY < labTol
+                col := col >= labMaxCols - 1 ? 0 : col + 1
+            else
+                col := 0
+            lastY := y
+            labMaxColUsed := math.max(labMaxColUsed, col)
 
-            // style_label_lower_left seats the box ABOVE its anchor, so the
-            // line no longer runs through the middle of the text.
-            lvlLabels.push(label.new(bar_index + lblOffset, drawY, qT.get(idx),
-                 xloc=xloc.bar_index, style=label.style_label_lower_left,
-                 color=color.new(qC.get(idx), 88), textcolor=qC.get(idx),
+            // style_label_left seats the box to the RIGHT of its anchor, so the
+            // anchor is the level itself. The opaque background is what keeps
+            // the line from striking through the text.
+            lvlLabels.push(label.new(bar_index + lblOffset + col * labSpacing, y, qT.get(idx),
+                 xloc=xloc.bar_index, style=label.style_label_left,
+                 color=labSolid ? chart.bg_color : color.new(qC.get(idx), 88),
+                 textcolor=qC.get(idx),
                  size=f_lblSize(), force_overlay=true))
-
-            // if it had to move, draw a hairline back to the real level
-            if math.abs(drawY - trueY) > syminfo.mintick
-                lvlLabels.push(label.new(bar_index + lblOffset, trueY, "-",
-                     xloc=xloc.bar_index, style=label.style_none,
-                     textcolor=color.new(qC.get(idx), 45), size=size.tiny,
-                     force_overlay=true))
 
 // ============================================================================
 // 13. AUCTION DRAWING  (force_overlay puts these on the PRICE chart)
@@ -3898,7 +3927,7 @@ if guideOn and barstate.islast
     else if chartSell
         actLine := "\n>>> SELL SIGNAL - all four gates open."
 
-    guideLbl := label.new(bar_index + lblOffset + guideGap, high + atr14 * 2, headline + actLine +
+    guideLbl := label.new(bar_index + lblOffset + labMaxColUsed * labSpacing + guideGap, high + atr14 * 2, headline + actLine +
          "\nPrice is " + whereTxt + " - day type " + dayType + doTxt + htfLine + extremes + dnaTxt,
          xloc=xloc.bar_index, style=label.style_label_left,
          color=color.new(#131722, 12), textcolor=headCol, size=f_lblSize(),
