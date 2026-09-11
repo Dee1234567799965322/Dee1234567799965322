@@ -95,6 +95,11 @@ bool  aucOn_in      = input.bool(true,  "Enable Auction Layer", group=G_AUC)
 int   profRows   = input.int(250, "Profile Rows", minval=8, maxval=300, group=G_AUC,
      tooltip="How many price buckets the period's volume is sorted into. This is the COMPUTE resolution - it sets how precisely the POC, value area and low volume nodes are located.\n\n250 matches the TradingView volume profile default. It is finer than the old default of 100 and costs more per bar, so if the script reports 'heavy', this is the first number to bring down.\n\nNote that the DRAWN histogram may use fewer rows than this - see the Histogram Width tooltip. The levels are always computed at full resolution regardless.")
 float vaPct      = input.float(70.0, "Value Area %", minval=50.0, maxval=95.0, group=G_AUC) / 100.0
+string profRange = input.string("Auction Period", "Profile Range",
+     options=["Auction Period", "Rolling Lookback"], group=G_AUC,
+     tooltip="WHAT THE PROFILE MEASURES, and the answer to 'the profile does not move with price'.\n\nAUCTION PERIOD (default) - everything traded since the period started: the UTC day, the RTH session, whichever Period Mode selects. Its top and bottom only change when the PERIOD makes a new high or low, so once the day has set its range the shape stays put while price wanders around inside it. That is not a fault, it is what a period profile is, and it is why the POC and value area are levels worth trading against - they do not move under you.\n\nROLLING LOOKBACK - the last N bars, recomputed every bar. The window slides with price, so the profile follows it and the POC is always the busiest price of the recent past rather than of the session. Closer to the TradingView visible-range profile.\n\nThis switches the DEVELOPING profile only - the histogram, its value area, and the excess/poor read. Prior period value, naked POCs, initial balance and the higher-timeframe value area stay on the period clock either way, because those are levels from a finished auction and a sliding window has no finished auction to take them from.")
+int    profLook  = input.int(300, "Rolling Lookback (bars)", minval=20, maxval=480, group=G_AUC,
+     tooltip="How many bars the rolling profile covers. Capped at 480 because Pine will not reach further back than the script's max_bars_back, and asking for more would fail at runtime rather than simply showing less.")
 bool  showHist_in   = input.bool(true,  "Profile Histogram", group=G_AUC)
 float histWidthPct = input.float(34.0, "Histogram Width (%)", minval=2.0, maxval=100.0, group=G_AUC,
      tooltip="Width of the widest histogram row, as a percentage of the number of bars in the current period.\n\nThis used to be a fixed bar count, which meant the profile was the wrong size on every timeframe except the one it was tuned for - 50 bars is most of a 4h chart's day and a sliver of a 1m chart's day. A percentage scales itself.\n\nThe drawn width is clamped to 2..300 bars.")
@@ -275,7 +280,10 @@ color  cVwapBand = input.color(color.new(#ff9800, 70), "Band Color", group=G_VWA
 string G_FIB = "14 - FIB LEVELS"
 bool  gpOn_in      = input.bool(true, "Golden Pockets (retracement)", group=G_FIB,
      tooltip="0.5 / 0.618 / 0.786 / 0.886 measured from the most recent confirmed swing. Drawn as lines, so they cost no plot slots.")
-int   gpLookback= input.int(50, "Swing Lookback", minval=10, maxval=200, group=G_FIB)
+int   gpLookback= input.int(120, "Maximum Leg Age (bars)", minval=10, maxval=1000, group=G_FIB,
+     tooltip="If the leg the fibs are measured from is older than this, they are not drawn.\n\nThis input previously did NOTHING. It was named Swing Lookback, it sat in the menu looking adjustable, and the only place it appeared was as a fallback that could never be reached. Now it does the job the fibs actually needed: a retracement of a leg that finished two hundred bars ago is not a level, it is a leftover, and it is the main reason fibs appear to sit still while price moves away from them.")
+bool  gpConf    = input.bool(false, "Count the Golden Pocket as Confluence", group=G_FIB,
+     tooltip="Adds 0.618 and 0.786 to the level confluence count, so a fib that lands on the POC or a naked POC raises the score of that price the way any other stacked level does.\n\nOFF by default and deliberately so: turning it on changes how many signals pass the location gate, and that is a change you should MEASURE rather than assume. The section header has always said confluence is where fibs earn their place - until now the code did not actually do it, so the claim was decoration.")
 int   gpPivotLen= input.int(15, "Pivot Strength", minval=3, maxval=50, group=G_FIB)
 int   gpExtend  = input.int(20, "Extend Right (bars)", minval=0, maxval=200, group=G_FIB)
 bool  fibTgtOn_in  = input.bool(false, "Custom Target Fibs (extension)", group=G_FIB,
@@ -1047,8 +1055,32 @@ bool  devOk  = false
 array<float> devBins   = array.new<float>(profRows, 0.0)
 array<float> devBinsUp = array.new<float>(profRows, 0.0)
 
+bool profRolling = profRange == "Rolling Lookback"
+
 if barstate.islast and aucOn
-    [dP, dVah, dVal, dHi, dLo, dOk, dBins, dBinsU] = f_profile(curH, curL, curV, curU, profRows, vaPct)
+    // Period mode profiles the accumulated lower-timeframe samples. Rolling
+    // mode rebuilds from the last N CHART bars instead - coarser than the
+    // intrabar samples, but it is one pass on one bar and it needs no second
+    // set of persistent arrays competing with the period ones, so it cannot
+    // disturb prior value, the naked POCs or the excess classification.
+    array<float> pfH = curH
+    array<float> pfL = curL
+    array<float> pfV = curV
+    array<float> pfU = curU
+    if profRolling
+        pfH := array.new<float>()
+        pfL := array.new<float>()
+        pfV := array.new<float>()
+        pfU := array.new<float>()
+        int look = math.min(profLook, bar_index)
+        for i = 0 to look
+            float bv = nz(volume[i])
+            if bv > 0
+                pfH.push(high[i])
+                pfL.push(low[i])
+                pfV.push(bv)
+                pfU.push(close[i] > open[i] ? bv : close[i] < open[i] ? 0.0 : bv * 0.5)
+    [dP, dVah, dVal, dHi, dLo, dOk, dBins, dBinsU] = f_profile(pfH, pfL, pfV, pfU, profRows, vaPct)
     devPoc := dP
     devVah := dVah
     devVal := dVal
@@ -2016,17 +2048,77 @@ var array<label> fibLabels = array.new<label>()
 float swHi = ta.pivothigh(high, gpPivotLen, gpPivotLen)
 float swLo = ta.pivotlow(low, gpPivotLen, gpPivotLen)
 
-var float lastSwHi = na
-var float lastSwLo = na
-var int   lastSwHiIdx = na
-var int   lastSwLoIdx = na
+// WHY THE FIBS DID NOT MOVE.
+// These used to be two independent "most recent pivot high" and "most recent
+// pivot low" values. ta.pivothigh and ta.pivotlow do NOT alternate: in a trend
+// you get pivot high after pivot high with no qualifying low between them, so
+// one of the two anchors goes stale and stays stale for hundreds of bars. The
+// range then spanned the whole trend instead of the current leg, and every new
+// pivot moved the levels by a fraction of a percent. They looked frozen because
+// in every way that matters they were.
+//
+// Worse, the draw was guarded by `if rng > 0` with rng = lastSwHi - lastSwLo.
+// A pivot low ABOVE the last pivot high - an ordinary higher low after a gap
+// up - made that negative and the entire fib set silently vanished.
+//
+// This is a proper alternating leg instead. Two highs in a row do not make a
+// leg, they EXTEND one, so the more extreme of the two is kept and the pairing
+// stays high-to-low.
+var float legHi    = na
+var float legLo    = na
+var int   legHiIdx = na
+var int   legLoIdx = na
+var int   lastPivDir = 0
 
 if not na(swHi)
-    lastSwHi := swHi
-    lastSwHiIdx := bar_index - gpPivotLen
+    int hIdx = bar_index - gpPivotLen
+    if lastPivDir == 1
+        if na(legHi) or swHi > legHi
+            legHi := swHi
+            legHiIdx := hIdx
+    else
+        legHi := swHi
+        legHiIdx := hIdx
+    lastPivDir := 1
+
 if not na(swLo)
-    lastSwLo := swLo
-    lastSwLoIdx := bar_index - gpPivotLen
+    int lIdx = bar_index - gpPivotLen
+    if lastPivDir == -1
+        if na(legLo) or swLo < legLo
+            legLo := swLo
+            legLoIdx := lIdx
+    else
+        legLo := swLo
+        legLoIdx := lIdx
+    lastPivDir := -1
+
+// The leg runs from the OLDER pivot to the NEWER one, and the pullback comes
+// back from the newer one towards the older. Expressed that way a single
+// formula covers both directions - level = to + (from - to) * ratio - and the
+// inverted case that used to draw nothing now draws correctly instead.
+//
+// Computed on EVERY bar, not inside the last-bar drawing block, so these levels
+// exist on historical bars too. That is what makes them legal to feed into the
+// confluence count: a level that only exists on the live bar would let the live
+// bar pass a gate no historical bar could ever have passed.
+float gpFrom = na
+float gpTo   = na
+int   gpAge  = na
+bool  gpLive = false
+if not na(legHi) and not na(legLo) and not na(legHiIdx) and not na(legLoIdx)
+    bool hiIsNewer = legHiIdx > legLoIdx
+    gpFrom := hiIsNewer ? legLo : legHi
+    gpTo   := hiIsNewer ? legHi : legLo
+    gpAge  := bar_index - math.max(legHiIdx, legLoIdx)
+    gpLive := math.abs(gpTo - gpFrom) > syminfo.mintick and gpAge <= gpLookback
+
+f_fibAt(float ratio) =>
+    gpLive ? gpTo + (gpFrom - gpTo) * ratio : na
+
+float gpF5   = f_fibAt(0.5)
+float gpF618 = f_fibAt(0.618)
+float gpF786 = f_fibAt(0.786)
+float gpF886 = f_fibAt(0.886)
 
 // A 2.64 extension of a large swing can land tens of thousands of points away,
 // or below zero. Drawing it forces the price scale to include it and the chart
@@ -2053,42 +2145,30 @@ if barstate.islast
         label.delete(lb)
     fibLabels.clear()
 
-    if not na(lastSwHi) and not na(lastSwLo)
-        float rng = lastSwHi - lastSwLo
-        if rng > 0
-            int x1 = math.min(nz(lastSwHiIdx, bar_index - gpLookback), nz(lastSwLoIdx, bar_index - gpLookback))
-            int x2 = bar_index + gpExtend
-            // upLegDone = the swing HIGH is the more recent pivot, so the leg
-            // just completed was upward and the pullback comes DOWN from that
-            // high. A 0.618 retracement of a 100->200 leg lands at 138.2, i.e.
-            // high - range*0.618. Verified numerically; the previous variable
-            // name ("downLeg") described the coming pullback, not the leg, and
-            // made the maths look inverted when it was not.
-            bool upLegDone = nz(lastSwHiIdx, 0) > nz(lastSwLoIdx, 0)
+    if gpLive
+        int x1 = math.max(bar_index - 480, math.min(legHiIdx, legLoIdx))
+        int x2 = bar_index + gpExtend
 
-            if gpOn
-                float f5   = upLegDone ? lastSwHi - rng * 0.5   : lastSwLo + rng * 0.5
-                float f618 = upLegDone ? lastSwHi - rng * 0.618 : lastSwLo + rng * 0.618
-                float f786 = upLegDone ? lastSwHi - rng * 0.786 : lastSwLo + rng * 0.786
-                float f886 = upLegDone ? lastSwHi - rng * 0.886 : lastSwLo + rng * 0.886
-                f_fibLine(f5,   cGp5,   "0.5",   x1, x2, false)
-                f_fibLine(f618, cGp618, "0.618", x1, x2, false)
-                f_fibLine(f786, cGp786, "0.786", x1, x2, false)
-                f_fibLine(f886, cGp886, "0.886", x1, x2, true)
+        if gpOn
+            f_fibLine(gpF5,   cGp5,   "0.5",   x1, x2, false)
+            f_fibLine(gpF618, cGp618, "0.618", x1, x2, false)
+            f_fibLine(gpF786, cGp786, "0.786", x1, x2, false)
+            f_fibLine(gpF886, cGp886, "0.886", x1, x2, true)
 
-            if fibTgtOn
-                float base = upLegDone ? lastSwHi : lastSwLo
-                float dir  = upLegDone ? -1.0 : 1.0
-                f_fibLine(base + dir * rng * 1.47,  cFibTgt, "1.47",  x1, x2, true)
-                f_fibLine(base + dir * rng * 1.55,  cFibTgt, "1.55",  x1, x2, true)
-                f_fibLine(base + dir * rng * 2.56,  cFibTgt, "2.56",  x1, x2, true)
-                // 2.60 and -0.23 are named in the input tooltip but were never
-                // drawn, so the documented set and the actual set disagreed.
-                f_fibLine(base + dir * rng * 2.60,  cFibTgt, "2.60",  x1, x2, true)
-                f_fibLine(base + dir * rng * 2.64,  cFibTgt, "2.64",  x1, x2, true)
-                f_fibLine(base + dir * rng * -0.20, cFibTgt, "-0.20", x1, x2, true)
-                f_fibLine(base + dir * rng * -0.23, cFibTgt, "-0.23", x1, x2, true)
-                f_fibLine(base + dir * rng * -0.29, cFibTgt, "-0.29", x1, x2, true)
+        if fibTgtOn
+            // Same to/from formula. A ratio above 1 lands beyond the far side of
+            // the leg, a negative ratio beyond the near side - which is what the
+            // original set was reaching for.
+            f_fibLine(f_fibAt(1.47),  cFibTgt, "1.47",  x1, x2, true)
+            f_fibLine(f_fibAt(1.55),  cFibTgt, "1.55",  x1, x2, true)
+            f_fibLine(f_fibAt(2.56),  cFibTgt, "2.56",  x1, x2, true)
+            // 2.60 and -0.23 are named in the input tooltip but were never
+            // drawn, so the documented set and the actual set disagreed.
+            f_fibLine(f_fibAt(2.60),  cFibTgt, "2.60",  x1, x2, true)
+            f_fibLine(f_fibAt(2.64),  cFibTgt, "2.64",  x1, x2, true)
+            f_fibLine(f_fibAt(-0.20), cFibTgt, "-0.20", x1, x2, true)
+            f_fibLine(f_fibAt(-0.23), cFibTgt, "-0.23", x1, x2, true)
+            f_fibLine(f_fibAt(-0.29), cFibTgt, "-0.29", x1, x2, true)
 
 
 // ============================================================================
@@ -2292,7 +2372,7 @@ if barstate.islast and aucOn
         // --- how wide, in bars
         // Percent of the period's own bar count, so the profile is the same
         // visual size on a 1m chart as on a 4h one.
-        int perBars = math.max(1, bar_index - periodStartBar + 1)
+        int perBars = profRolling ? profLook : math.max(1, bar_index - periodStartBar + 1)
         // Floored at 10 bars: on a high timeframe a period is only a handful of
         // bars, and 34% of six bars is two bars wide - correct by the formula and
         // useless on screen.
@@ -3404,6 +3484,11 @@ f_confluence(float px) =>
         n += f_near(px, balHi,  tol) ? 1 : 0
         n += f_near(px, balLo,  tol) ? 1 : 0
         n += f_near(px, balPoc, tol) ? 1 : 0
+    // The golden pocket, and only if asked for. These are geometry, not volume,
+    // so they are the one entry here that is opt-in - see the input tooltip.
+    if gpConf
+        n += f_near(px, gpF618, tol) ? 1 : 0
+        n += f_near(px, gpF786, tol) ? 1 : 0
     n
 
 int confLow  = f_confluence(low)
