@@ -983,16 +983,13 @@ var float  priorHiLvl = na
 var float  priorLoLvl = na
 var array<Npoc> npocs = array.new<Npoc>()
 
-var line lnPoc  = na
-var line lnVah  = na
-var line lnVal  = na
-var line lnPPoc = na
-var line lnPVah = na
-var line lnPVal = na
-var line lnPrH  = na
-var line lnPrL  = na
-var line lnIbH  = na
-var line lnIbL  = na
+// The auction level lines. These were ten separate handles created once and
+// then nudged with line.set_xy on every last bar. They are one array now,
+// cleared and rebuilt, for a mechanical reason: a Pine function cannot reassign
+// a global, and the block that draws them had to become a function to keep the
+// script's main body under its size cap. Mutating an array IS legal there, and
+// rebuilding costs nothing because it only ever runs on the last bar.
+var array<line> aucLn = array.new<line>()
 var array<box>  histBoxes = array.new<box>()
 var array<line> histLines = array.new<line>()
 var array<line> lvnLines  = array.new<line>()
@@ -1921,7 +1918,8 @@ if htfcOn
             hcHiBar   := bar_index
             hcLoBar   := bar_index
 
-if barstate.islast
+// Moved into a function to keep the main body under Pine's size cap.
+f_drawHtfCandles() =>
     for b in hcBoxes
         box.delete(b)
     hcBoxes.clear()
@@ -2006,6 +2004,9 @@ if barstate.islast
                  color=color.new(chart.bg_color, 15),
                  textcolor=close >= hcLiveO ? cHtfcUp : cHtfcDn,
                  size=size.tiny, force_overlay=true))
+
+if barstate.islast
+    f_drawHtfCandles()
 
 // where does today's value sit inside the bigger auction?
 string htfPos = "n/a"
@@ -2182,7 +2183,8 @@ f_fibLine(float y, color c, string txt, int x1, int x2, bool dashed) =>
         fibLabels.push(label.new(x2, y, txt, xloc=xloc.bar_index, style=label.style_label_left,
              color=color.new(c, 100), textcolor=c, size=size.tiny, force_overlay=true))
 
-if barstate.islast
+// Moved into a function to keep the main body under Pine's size cap.
+f_drawFibs() =>
     for l in fibLines
         line.delete(l)
     fibLines.clear()
@@ -2214,6 +2216,9 @@ if barstate.islast
             f_fibLine(f_fibAt(-0.20), cFibTgt, "-0.20", x1, x2, true)
             f_fibLine(f_fibAt(-0.23), cFibTgt, "-0.23", x1, x2, true)
             f_fibLine(f_fibAt(-0.29), cFibTgt, "-0.29", x1, x2, true)
+
+if barstate.islast
+    f_drawFibs()
 
 
 // ============================================================================
@@ -2258,7 +2263,8 @@ f_queue(float y, string nm, color c) =>
 // each declared its own, so the whole calculation ran twice per bar.
 float atr14 = ta.atr(14)
 
-if barstate.islast
+// Moved into a function to keep the main body under Pine's size cap.
+f_drawLabels() =>
     for lb in lvlLabels
         label.delete(lb)
     lvlLabels.clear()
@@ -2309,7 +2315,7 @@ if barstate.islast
     // Sideways has unlimited room and never lies about the price, so the
     // hairline marker that used to point back at the true level is gone too -
     // every label now sits exactly on its own level.
-    labMaxColUsed := 0
+    int maxCol = 0
     if qY.size() > 0
         // NOT named "order" - that is a reserved Pine namespace (order.ascending)
         array<int> sortIdx = qY.sort_indices(order.ascending)
@@ -2326,7 +2332,7 @@ if barstate.islast
             else
                 col := 0
             lastY := y
-            labMaxColUsed := math.max(labMaxColUsed, col)
+            maxCol := math.max(maxCol, col)
 
             // style_label_left seats the box to the RIGHT of its anchor, so the
             // anchor is the level itself. The opaque background is what keeps
@@ -2336,11 +2342,16 @@ if barstate.islast
                  color=labSolid ? chart.bg_color : color.new(qC.get(idx), 88),
                  textcolor=qC.get(idx),
                  size=f_lblSize(), force_overlay=true))
+    maxCol
+
+if barstate.islast
+    labMaxColUsed := f_drawLabels()
 
 // ============================================================================
 // 13. AUCTION DRAWING  (force_overlay puts these on the PRICE chart)
 // ============================================================================
-if barstate.islast and aucOn
+// Moved into a function to keep the main body under Pine's size cap.
+f_drawAuction() =>
     int tR = time
     int tL = na(periodStart) ? time : periodStart
 
@@ -2360,51 +2371,27 @@ if barstate.islast and aucOn
     if tL >= tR
         tL := na(time[1]) ? time - 60000 : time[1]
 
+    for l in aucLn
+        line.delete(l)
+    aucLn.clear()
+
     if devOk
-        if na(lnPoc)
-            lnPoc := line.new(tL, devPoc, tR, devPoc, xloc=xloc.bar_time, color=cPoc, width=2, extend=extend.right, force_overlay=true)
-            lnVah := line.new(tL, devVah, tR, devVah, xloc=xloc.bar_time, color=cVa, style=line.style_dashed, extend=extend.right, force_overlay=true)
-            lnVal := line.new(tL, devVal, tR, devVal, xloc=xloc.bar_time, color=cVa, style=line.style_dashed, extend=extend.right, force_overlay=true)
-        else
-            line.set_xy1(lnPoc, tL, devPoc)
-            line.set_xy2(lnPoc, tR, devPoc)
-            line.set_xy1(lnVah, tL, devVah)
-            line.set_xy2(lnVah, tR, devVah)
-            line.set_xy1(lnVal, tL, devVal)
-            line.set_xy2(lnVal, tR, devVal)
+        aucLn.push(line.new(tL, devPoc, tR, devPoc, xloc=xloc.bar_time, color=cPoc, width=2, extend=extend.right, force_overlay=true))
+        aucLn.push(line.new(tL, devVah, tR, devVah, xloc=xloc.bar_time, color=cVa, style=line.style_dashed, extend=extend.right, force_overlay=true))
+        aucLn.push(line.new(tL, devVal, tR, devVal, xloc=xloc.bar_time, color=cVa, style=line.style_dashed, extend=extend.right, force_overlay=true))
 
     if showPrior and not na(priorPoc)
-        if na(lnPPoc)
-            lnPPoc := line.new(tL, priorPoc, tR, priorPoc, xloc=xloc.bar_time, color=cPrior, width=2, extend=extend.right, force_overlay=true)
-            lnPVah := line.new(tL, priorVah, tR, priorVah, xloc=xloc.bar_time, color=cPrior, style=line.style_dotted, extend=extend.right, force_overlay=true)
-            lnPVal := line.new(tL, priorVal, tR, priorVal, xloc=xloc.bar_time, color=cPrior, style=line.style_dotted, extend=extend.right, force_overlay=true)
-        else
-            line.set_xy1(lnPPoc, tL, priorPoc)
-            line.set_xy2(lnPPoc, tR, priorPoc)
-            line.set_xy1(lnPVah, tL, priorVah)
-            line.set_xy2(lnPVah, tR, priorVah)
-            line.set_xy1(lnPVal, tL, priorVal)
-            line.set_xy2(lnPVal, tR, priorVal)
+        aucLn.push(line.new(tL, priorPoc, tR, priorPoc, xloc=xloc.bar_time, color=cPrior, width=2, extend=extend.right, force_overlay=true))
+        aucLn.push(line.new(tL, priorVah, tR, priorVah, xloc=xloc.bar_time, color=cPrior, style=line.style_dotted, extend=extend.right, force_overlay=true))
+        aucLn.push(line.new(tL, priorVal, tR, priorVal, xloc=xloc.bar_time, color=cPrior, style=line.style_dotted, extend=extend.right, force_overlay=true))
 
     if showPrHL and not na(priorHi)
-        if na(lnPrH)
-            lnPrH := line.new(tL, priorHi, tR, priorHi, xloc=xloc.bar_time, color=cPrHL, extend=extend.right, force_overlay=true)
-            lnPrL := line.new(tL, priorLo, tR, priorLo, xloc=xloc.bar_time, color=cPrHL, extend=extend.right, force_overlay=true)
-        else
-            line.set_xy1(lnPrH, tL, priorHi)
-            line.set_xy2(lnPrH, tR, priorHi)
-            line.set_xy1(lnPrL, tL, priorLo)
-            line.set_xy2(lnPrL, tR, priorLo)
+        aucLn.push(line.new(tL, priorHi, tR, priorHi, xloc=xloc.bar_time, color=cPrHL, extend=extend.right, force_overlay=true))
+        aucLn.push(line.new(tL, priorLo, tR, priorLo, xloc=xloc.bar_time, color=cPrHL, extend=extend.right, force_overlay=true))
 
     if showIB and not na(ibH) and not na(ibL)
-        if na(lnIbH)
-            lnIbH := line.new(tL, ibH, tR, ibH, xloc=xloc.bar_time, color=cIB, extend=extend.right, force_overlay=true)
-            lnIbL := line.new(tL, ibL, tR, ibL, xloc=xloc.bar_time, color=cIB, extend=extend.right, force_overlay=true)
-        else
-            line.set_xy1(lnIbH, tL, ibH)
-            line.set_xy2(lnIbH, tR, ibH)
-            line.set_xy1(lnIbL, tL, ibL)
-            line.set_xy2(lnIbL, tR, ibL)
+        aucLn.push(line.new(tL, ibH, tR, ibH, xloc=xloc.bar_time, color=cIB, extend=extend.right, force_overlay=true))
+        aucLn.push(line.new(tL, ibL, tR, ibL, xloc=xloc.bar_time, color=cIB, extend=extend.right, force_overlay=true))
 
     for b in histBoxes
         box.delete(b)
@@ -2545,6 +2532,9 @@ if barstate.islast and aucOn
                      color=cVaExt, style=line.style_dotted, width=1, force_overlay=true))
                 histLines.push(line.new(vx1, devVal, vx2, devVal, xloc=xloc.bar_index,
                      color=cVaExt, style=line.style_dotted, width=1, force_overlay=true))
+
+if barstate.islast and aucOn
+    f_drawAuction()
 
 // ============================================================================
 // 14. MOMENTUM WAVES  (WaveTrend)
@@ -3440,7 +3430,8 @@ bool  ofBear = ofOn and ofBig and close < open and barDelta > 0
 float ofSwing = not na(dHiIn) and not na(dLoIn) ? dHiIn - dLoIn : na
 
 // --- absorption candidates from this bar's own rows
-if ofOn and barClosed and high > low and ltfOk
+// Moved into a function to keep the main body under Pine's size cap.
+f_ofRows() =>
     float ofStep = (high - low) / ofRows
     if ofStep > 0
         array<float> ofBuy = array.new<float>(ofRows, 0.0)
@@ -3487,6 +3478,9 @@ if ofOn and barClosed and high > low and ltfOk
             while ofLvls.size() > ofAbsKeep
                 OfLvl gone = ofLvls.shift()
                 line.delete(gone.ln)
+
+if ofOn and barClosed and high > low and ltfOk
+    f_ofRows()
 
 // --- confirm what held, delete what broke
 float ofTol = atr14 * 0.15
@@ -4007,7 +4001,8 @@ if closeOnReversal and barClosed
         pendShort := false
         sigSkip   += 1
 
-if closeOnReversal and barClosed and opEntry.size() > 0
+// Moved into a function to keep the main body under Pine's size cap.
+f_closeReversals() =>
     for i = opEntry.size() - 1 to 0
         int d = opDir.get(i)
         bool invalid = (d == 1 and wantSell) or (d == -1 and wantBuy)
@@ -4033,6 +4028,9 @@ if closeOnReversal and barClosed and opEntry.size() > 0
             opBar.remove(i)
             opRisk.remove(i)
             opRPlan.remove(i)
+
+if closeOnReversal and barClosed and opEntry.size() > 0
+    f_closeReversals()
 
 bool fillNextOpen = riskFill == "Next bar open (realistic)"
 
@@ -4116,7 +4114,10 @@ if chartSell and not na(rkTgtS) and barClosed
 // trade that was never actually taken.
 bool tpHit = false
 
-if opEntry.size() > 0 and barClosed
+// Moved into a function to keep the main body under Pine's size cap. tpHit
+// comes back as a return value because a function may not write a global.
+f_manageTrades() =>
+    bool hit = false
     for i = opEntry.size() - 1 to 0
         int d = opDir.get(i)
         float st = opStop.get(i)
@@ -4138,7 +4139,7 @@ if opEntry.size() > 0 and barClosed
                 done := true
             else if high >= tg
                 sigWin += 1
-                tpHit  := true
+                hit := true
                 realR := opRPlan.get(i)
                 outc  := 1
                 done := true
@@ -4150,7 +4151,7 @@ if opEntry.size() > 0 and barClosed
                 done := true
             else if low <= tg
                 sigWin += 1
-                tpHit  := true
+                hit := true
                 realR := opRPlan.get(i)
                 outc  := 1
                 done := true
@@ -4189,6 +4190,11 @@ if opEntry.size() > 0 and barClosed
             opBar.remove(i)
             opRisk.remove(i)
             opRPlan.remove(i)
+    hit
+
+if opEntry.size() > 0 and barClosed
+    tpHit := f_manageTrades()
+
 sigOpen := opEntry.size()
 
 // ---------------------------------------------------------------------------
@@ -4293,7 +4299,8 @@ f_pair2(int r, string k, string v, color c) =>
     table.cell(stat, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
     table.cell(stat, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
 
-if statOn and barstate.islast
+// Moved into a function to keep the main body under Pine's size cap.
+f_drawStats() =>
     table.cell(stat, 0, 0, "MEASURED ON THIS CHART", text_color=cTxt, text_size=size.tiny, text_halign=text.align_left)
     table.cell(stat, 1, 0, str.tostring(statHorizon) + "b" + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
          text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
@@ -4325,6 +4332,9 @@ if statOn and barstate.islast
          str.tostring(sigOpen) + (na(openR) ? "" : "   " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"),
          na(openR) ? C_NE : (openR > 0 ? C_UP : C_DN))
 
+if statOn and barstate.islast
+    f_drawStats()
+
 // THE ONLY MARKERS THAT MEAN "TRADE". Labelled boxes, not triangles, so they
 // can never be mistaken for the DNA or momentum annotations around them.
 // TP is now set by the trade ledger itself, so it can only ever fire for a
@@ -4347,9 +4357,15 @@ plotshape(chartSell ? high : na, "CHART SELL", shape.labeldown, location.aboveba
 // bottom, so anything that summarises the whole picture has to come last.
 // ============================================================================
 // --- the plain-English read
-var label guideLbl = na
-if guideOn and barstate.islast
-    label.delete(guideLbl)
+// One element, for the same reason aucLn is an array: the block that writes it
+// is a function now, and a function may mutate an array but not reassign a
+// global.
+var array<label> guideArr = array.new<label>()
+// Moved into a function to keep the main body under Pine's size cap.
+f_drawGuide() =>
+    for lb in guideArr
+        label.delete(lb)
+    guideArr.clear()
 
     string headline = "WAITING - not enough data yet"
     color  headCol = C_NE
@@ -4430,11 +4446,14 @@ if guideOn and barstate.islast
     else if chartSell
         actLine := "\n>>> SELL SIGNAL - all four gates open."
 
-    guideLbl := label.new(bar_index + lblOffset + labMaxColUsed * labSpacing + guideGap, high + atr14 * 2, headline + actLine +
+    guideArr.push(label.new(bar_index + lblOffset + labMaxColUsed * labSpacing + guideGap, high + atr14 * 2, headline + actLine +
          "\nPrice is " + whereTxt + " - day type " + dayType + doTxt + htfLine + extremes + dnaTxt,
          xloc=xloc.bar_index, style=label.style_label_left,
          color=color.new(#131722, 12), textcolor=headCol, size=f_lblSize(),
-         force_overlay=true)
+         force_overlay=true))
+
+if guideOn and barstate.islast
+    f_drawGuide()
 
 // ============================================================================
 // 20. PANE PLOTS - drawn back to front in the order you described
@@ -4602,7 +4621,8 @@ f_pair(int r, int c, string k, string v, color vc) =>
     table.cell(dash, c, r, k, text_color=color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_left)
     table.cell(dash, c + 1, r, v, text_color=vc, text_size=size.tiny, text_halign=text.align_right)
 
-if showTable and barstate.islast
+// Moved into a function to keep the main body under Pine's size cap.
+f_drawDash() =>
     string modeTag = "Daily"
     if periodModeEff == "RTH Session (futures)"
         modeTag := "RTH"
@@ -4801,6 +4821,9 @@ if showTable and barstate.islast
          csigNoiseOn and effRatio < csigErMin ? C_DN : effRatio >= csigErMin ? C_UP : C_NE)
     f_pair(16, 2, "Sell gates", gSell + "  " + str.tostring(gatesSell) + "/" + str.tostring(needGates),
          gatesSell >= needGates ? C_DN : C_NE)
+
+if showTable and barstate.islast
+    f_drawDash()
 
 // ============================================================================
 // 22. ALERTS
