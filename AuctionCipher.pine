@@ -4319,7 +4319,7 @@ f_pct(int hit, int tot) =>
     // only ever read 0% or 100%. Multiplying first keeps it in floating point.
     tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "-"
 
-var table stat = table.new(f_tablePos(statPos), 2, 14, bgcolor=cTblBg,
+var table stat = table.new(f_tablePos(statPos), 2, 15, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -4357,6 +4357,18 @@ f_drawStats() =>
     f_pair2(9, "Poor high revisited", f_pct(poorHiHit, poorHiTotal), poorHiTotal < 20 ? C_NE : C_WN)
     f_pair2(10, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
     f_pair2(11, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
+    // THE CAP, STATED RATHER THAN INFERRED.
+    // "Avg R targeted" cannot tell you whether the cap is on, and I spent
+    // several rounds wrongly insisting it could. With next-bar-open fills the R
+    // is recomputed from the FILL, not the signal: an open that gaps against
+    // you shrinks the distance to the stop and stretches the distance to the
+    // target, so the realised R goes UP even though the target price was
+    // capped. And the minimum-R filter then discards the favourable gaps, which
+    // shrink R below the floor, while keeping the adverse ones. The average is
+    // biased upward by construction, so it can sit above the cap with the cap
+    // switched on. This row reads the input itself and settles it.
+    f_pair2(14, "Target cap", riskTgtCap > 0 ? str.tostring(riskTgtCap, "#.#") + "R  ON" : "OFF",
+         riskTgtCap > 0 ? C_UP : C_WN)
     f_pair2(12, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
     f_pair2(13, "Open now  (live R)",
          str.tostring(sigOpen) + (na(openR) ? "" : "   " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"),
