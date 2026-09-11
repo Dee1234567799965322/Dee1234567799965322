@@ -474,15 +474,23 @@ if barstate.islast
                                 drawn += 1
 
                     // --- unfinished auction markers
+                    // An arrow, not the word. "unfinished" is several times
+                    // wider than the column it belongs to, so on a chart
+                    // carrying a dozen of them the labels collided with their
+                    // neighbours and hid the grid they were annotating. The
+                    // arrow says the same thing and takes no horizontal room;
+                    // the sentence is in its tooltip.
                     if unfinOn
                         if f.unfinHi
                             fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPx(f, nR - 1) + f.step,
-                                 "unfinished", xloc=xloc.bar_index, style=label.style_label_down,
-                                 color=color.new(cUnfin, 80), textcolor=cUnfin, size=size.tiny))
+                                 "", xloc=xloc.bar_index, style=label.style_triangledown,
+                                 color=cUnfin, size=size.tiny,
+                                 tooltip="Unfinished auction at the HIGH. Both sides were still trading the top row when the bar closed, so nobody was driven out - this was not a rejection, and price tends to come back and finish it."))
                         if f.unfinLo
                             fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPx(f, 0),
-                                 "unfinished", xloc=xloc.bar_index, style=label.style_label_up,
-                                 color=color.new(cUnfin, 80), textcolor=cUnfin, size=size.tiny))
+                                 "", xloc=xloc.bar_index, style=label.style_triangleup,
+                                 color=cUnfin, size=size.tiny,
+                                 tooltip="Unfinished auction at the LOW. Both sides were still trading the bottom row when the bar closed, so nobody was driven out - this was not a rejection, and price tends to come back and finish it."))
 
                     // --- the bar's own delta, under its column
                     if showBarDelta
@@ -534,16 +542,21 @@ if dashOn and barstate.islast
             quality := "TOO COARSE"
             qCol    := #ff1744
 
-    bool anyClip = false
+    int nClip = 0
     if fpBars.size() > 0
         for f in fpBars
-            anyClip := anyClip or f.clipped
+            nClip += f.clipped ? 1 : 0
 
     f_row(0, "Footprint source", ltfOk ? ltfEff + "m intrabar" : "chart bars only", ltfOk ? cTxt : #ff1744)
     f_row(1, "Samples per bar", str.tostring(nSamples), qCol)
     f_row(2, "Grid quality", quality, qCol)
     f_row(3, "Row height", str.tostring(rowSize, format.mintick), cTxt)
-    f_row(4, "Rows clipped", anyClip ? "YES - coarsen rows" : "no", anyClip ? #ffa726 : color.new(cTxt, 55))
+    // Not an instruction any more. Clipping used to DELETE the top of an
+    // oversized bar and this row told you to go and fix it by hand. The bar is
+    // now coarsened automatically and keeps its whole range, so this reports
+    // what happened instead of asking for something.
+    f_row(4, "Auto-coarsened bars", nClip > 0 ? str.tostring(nClip) + " of " + str.tostring(fpBars.size()) : "none",
+         nClip > 0 ? #ffa726 : color.new(cTxt, 55))
     f_row(5, "Split basis", "candle direction, not bid/ask", color.new(cTxt, 55))
 
 // ============================================================================
