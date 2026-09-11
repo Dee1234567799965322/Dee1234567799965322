@@ -65,6 +65,12 @@ type FpBar
     float        delta
     float        total
     int          pocIdx
+    float        dMax
+    float        dMin
+    int          vaHi
+    int          vaLo
+    bool         absorbUp
+    bool         absorbDn
     bool         unfinHi
     bool         unfinLo
     bool         clipped
@@ -120,7 +126,22 @@ float  unfinMin  = input.float(25.0, "Unfinished Needs Minority Side (%)", minva
 bool   unfinOn   = input.bool(true, "Mark Unfinished Auctions", group=G_LVL,
      tooltip="A bar whose extreme row still has BOTH buying and selling in it. The auction was still two-sided when the bar ended - nobody was driven out - so the high or low was not a rejection and price tends to come back and finish the job.\n\nA finished extreme shows one side only: the last row is all buying at a high, all selling at a low.")
 
-string G_C = "6 - COLOURS"
+string G_OF = "6 - ORDER FLOW READS"
+bool   vaOn      = input.bool(true, "Mark Each Bar's Value Area", group=G_OF,
+     tooltip="The rows holding the middle 70% of that bar's volume - where the bar actually did business, as opposed to where it merely passed through. Rows outside it are the part of the range price covered without trading much, and those are the parts that get revisited fastest.")
+float  vaPct     = input.float(70.0, "Value Area %", minval=40.0, maxval=95.0, step=5.0, group=G_OF)
+bool   absorbOn  = input.bool(true, "Mark Delta Divergence", group=G_OF,
+     tooltip="A bar that closed UP while net flow was SELLING, or DOWN while net flow was BUYING.\n\nThis is the reading a footprint exists for and no candle can show you. Price rose while aggressive sellers were hitting bids: every one of them was absorbed by somebody willing to take the other side, and price went the wrong way for them. That is hidden strength. The mirror - closing down on positive delta - is hidden weakness.\n\nIt is not a signal on its own. It says who is being hurt, and the levels tell you where.")
+float  absorbMin = input.float(10.0, "Divergence Needs Delta Over (% of volume)", minval=1.0, maxval=60.0, step=1.0, group=G_OF,
+     tooltip="A bar closing up on a delta of minus three is not absorbing anything, it is rounding error. The delta has to be this share of the bar's own volume before the divergence counts.")
+
+string G_SUM = "7 - SUMMARY TABLE"
+bool   sumOn     = input.bool(true, "Show Bar Summary Table", group=G_SUM,
+     tooltip="The numbers the grid cannot make legible. A footprint cell is at most a few pixels wide, so the per-bar figures that actually drive a decision - delta, how far delta swung inside the bar, volume - are put in a table you can read at normal zoom instead.")
+int    sumBars   = input.int(6, "Bars in Table", minval=2, maxval=20, group=G_SUM)
+string sumPos    = input.string("Bottom Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_SUM)
+
+string G_C = "6b - COLOURS"
 color cBuy    = input.color(#26a69a, "Buying", inline="c1", group=G_C)
 color cSell   = input.color(#ef5350, "Selling", inline="c1", group=G_C)
 color cCellBg = input.color(color.new(#1e222d, 20), "Cell Background", group=G_C)
@@ -129,6 +150,9 @@ color cImbSell= input.color(color.new(#ff1744, 25), "Sell Imbalance", inline="c2
 color cStack  = input.color(#e040fb, "Stacked Zone", group=G_C)
 color cPocCol = input.color(color.new(#ffb300, 20), "Point of Control", group=G_C)
 color cUnfin  = input.color(#ffea00, "Unfinished Auction", group=G_C)
+color cVaEdge = input.color(color.new(#26c6da, 40), "Value Area Edge", group=G_C)
+color cAbsUp  = input.color(#00e5ff, "Hidden Strength", inline="ab", group=G_C)
+color cAbsDn  = input.color(#ff9100, "Hidden Weakness", inline="ab", group=G_C)
 color cTxt    = input.color(#d1d4dc, "Text", group=G_C)
 
 string G_TBL = "7 - DASHBOARD"
@@ -275,6 +299,23 @@ if fpOn and barClosed and high > low
                 bu.set(r, bu.get(r) + upShare)
                 se.set(r, se.get(r) + (share - upShare))
 
+    // --- how far delta SWUNG inside the bar, not just where it ended
+    // A bar finishing at +2K having never been below +1K is steady one-way
+    // buying. A bar finishing at +2K after being at -8K is a reversal that
+    // happened inside a single candle, and the closing number alone cannot tell
+    // those apart. The samples arrive in time order, so a running total over
+    // them recovers the path.
+    float dRun = 0.0
+    float dMx  = 0.0
+    float dMn  = 0.0
+    if ltfOk
+        for i = 0 to lC.size() - 1
+            float v = lV.get(i)
+            if not na(v) and v > 0
+                dRun += lC.get(i) > lO.get(i) ? v : lC.get(i) < lO.get(i) ? -v : 0.0
+                dMx  := math.max(dMx, dRun)
+                dMn  := math.min(dMn, dRun)
+
     float tot = bu.sum() + se.sum()
     if tot > 0
         int poc = 0
@@ -284,13 +325,37 @@ if fpOn and barClosed and high > low
             if t > best
                 best := t
                 poc := r
+
+        // --- this bar's own value area, grown out from its point of control
+        int vHi = poc
+        int vLo = poc
+        float target = tot * vaPct / 100.0
+        float acc = bu.get(poc) + se.get(poc)
+        while acc < target and (vHi < nR - 1 or vLo > 0)
+            float up = vHi < nR - 1 ? bu.get(vHi + 1) + se.get(vHi + 1) : -1.0
+            float dn = vLo > 0 ? bu.get(vLo - 1) + se.get(vLo - 1) : -1.0
+            if up < 0 and dn < 0
+                break
+            if up >= dn
+                acc += up
+                vHi += 1
+            else
+                acc += dn
+                vLo -= 1
+
+        // --- delta divergence
+        float bd = bu.sum() - se.sum()
+        bool bigEnough = math.abs(bd) >= tot * absorbMin / 100.0
+        bool aUp = absorbOn and bigEnough and close > open and bd < 0
+        bool aDn = absorbOn and bigEnough and close < open and bd > 0
         // An extreme row with BOTH sides still in it is an auction that had not
         // finished when the bar closed.
         float uThr = unfinMin / 100.0
         bool uHi = f_unfin(bu.get(nR - 1), se.get(nR - 1), uThr)
         bool uLo = f_unfin(bu.get(0), se.get(0), uThr)
         fpBars.push(FpBar.new(bi = bar_index, pLo = pLo, step = stepUse, buy = bu, sell = se,
-             delta = bu.sum() - se.sum(), total = tot, pocIdx = poc,
+             delta = bd, total = tot, pocIdx = poc, dMax = dMx, dMin = dMn,
+             vaHi = vHi, vaLo = vLo, absorbUp = aUp, absorbDn = aDn,
              unfinHi = uHi, unfinLo = uLo, clipped = clip))
         while fpBars.size() > fpCount
             fpBars.shift()
@@ -466,9 +531,14 @@ if barstate.islast
                                 else if cellTxt == "Total volume"
                                     txt := f_short(tv)
 
+                                // An imbalance border wins over a value area
+                                // edge: one says somebody had to keep filling
+                                // here, the other only says the bar was busy.
+                                bool vaEdge = vaOn and (i == f.vaHi or i == f.vaLo)
+                                color bc = (bImb or sImb) ? cStack : vaEdge ? cVaEdge : color(na)
                                 fpBoxes.push(box.new(x1, pRowHi, x2, pRowLo, bgcolor=bg,
-                                     border_color=(bImb or sImb) ? cStack : color(na),
-                                     border_width=(bImb or sImb) ? 1 : 0,
+                                     border_color=bc,
+                                     border_width=(bImb or sImb) or vaEdge ? 1 : 0,
                                      text=txt, text_color=cTxt, text_size=f_txtSize(),
                                      text_halign=text.align_center, text_valign=text.align_center))
                                 drawn += 1
@@ -491,6 +561,18 @@ if barstate.islast
                                  "", xloc=xloc.bar_index, style=label.style_triangleup,
                                  color=cUnfin, size=size.tiny,
                                  tooltip="Unfinished auction at the LOW. Both sides were still trading the bottom row when the bar closed, so nobody was driven out - this was not a rejection, and price tends to come back and finish it."))
+
+                    // --- delta divergence
+                    if f.absorbUp or f.absorbDn
+                        fpLabs.push(label.new(int((x1 + x2) / 2),
+                             f.absorbUp ? f_rowPx(f, 0) - f.step * 2.6 : f_rowPx(f, nR - 1) + f.step * 2.0,
+                             f.absorbUp ? "STR" : "WEA", xloc=xloc.bar_index,
+                             style=f.absorbUp ? label.style_label_up : label.style_label_down,
+                             color=color.new(f.absorbUp ? cAbsUp : cAbsDn, 20),
+                             textcolor=#000000, size=size.tiny,
+                             tooltip=f.absorbUp
+                                 ? "HIDDEN STRENGTH. The bar closed UP while net flow was SELLING - every aggressive seller was absorbed by somebody taking the other side, and price went the wrong way for them.\n\nDelta " + f_short(f.delta) + " on " + f_short(f.total) + " volume."
+                                 : "HIDDEN WEAKNESS. The bar closed DOWN while net flow was BUYING - the buyers lifting offers were absorbed and price went the wrong way for them.\n\nDelta +" + f_short(f.delta) + " on " + f_short(f.total) + " volume."))
 
                     // --- the bar's own delta, under its column
                     if showBarDelta
@@ -560,7 +642,64 @@ if dashOn and barstate.islast
     f_row(5, "Split basis", "candle direction, not bid/ask", color.new(cTxt, 55))
 
 // ============================================================================
-// 9. ALERTS
+// 9. SUMMARY TABLE
+// ----------------------------------------------------------------------------
+// The numbers the grid physically cannot make legible. A footprint cell is a
+// few pixels wide at any normal zoom, so the per-bar figures that actually
+// drive a decision go in a table instead and the grid is left to do what it is
+// good at - showing WHERE in the bar the volume sat.
+//
+// Delta swing is the column worth learning. A bar that ends at +2K having never
+// been below +1K is steady one-way buying. A bar that ends at +2K after being
+// at -8K is a reversal that happened inside one candle. The closing delta -
+// which is all any other tool shows you - cannot tell those apart.
 // ============================================================================
+var table sumT = table.new(f_pos(sumPos), 6, 22, bgcolor=color.new(#131722, 10),
+     border_color=color.new(#000000, 60), border_width=1,
+     frame_color=color.new(#000000, 50), frame_width=1)
+
+f_sumCell(int col, int row, string v, color c, color bg) =>
+    table.cell(sumT, col, row, v, text_color=c, text_size=size.tiny,
+         text_halign=col == 0 ? text.align_left : text.align_right, bgcolor=bg)
+
+if sumOn and barstate.islast and fpBars.size() > 0
+    table.clear(sumT, 0, 0, 5, 21)
+    color hdr = color.new(cTxt, 40)
+    f_sumCell(0, 0, "bar",     hdr, color.new(#1e222d, 30))
+    f_sumCell(1, 0, "delta",   hdr, color.new(#1e222d, 30))
+    f_sumCell(2, 0, "d%",      hdr, color.new(#1e222d, 30))
+    f_sumCell(3, 0, "swing",   hdr, color.new(#1e222d, 30))
+    f_sumCell(4, 0, "volume",  hdr, color.new(#1e222d, 30))
+    f_sumCell(5, 0, "read",    hdr, color.new(#1e222d, 30))
+
+    int shown = math.min(sumBars, fpBars.size())
+    for k = 0 to shown - 1
+        FpBar f = fpBars.get(fpBars.size() - 1 - k)
+        int row = k + 1
+        float dPct = f.total > 0 ? f.delta / f.total * 100 : 0.0
+        color dc = f.delta >= 0 ? cBuy : cSell
+        string tag = f.absorbUp ? "STRENGTH" : f.absorbDn ? "WEAKNESS" : f.unfinHi ? "unfin hi" : f.unfinLo ? "unfin lo" : "-"
+        color tc = f.absorbUp ? cAbsUp : f.absorbDn ? cAbsDn : f.unfinHi or f.unfinLo ? cUnfin : color.new(cTxt, 60)
+        f_sumCell(0, row, k == 0 ? "now" : "-" + str.tostring(k), color.new(cTxt, 30), color(na))
+        f_sumCell(1, row, (f.delta > 0 ? "+" : "") + f_short(f.delta), dc, color(na))
+        f_sumCell(2, row, str.tostring(dPct, "#") + "%", dc, color(na))
+        // the path delta took inside the bar, low to high
+        f_sumCell(3, row, f_short(f.dMin) + " " + f_short(f.dMax), color.new(cTxt, 25), color(na))
+        f_sumCell(4, row, f_short(f.total), color.new(cTxt, 35), color(na))
+        f_sumCell(5, row, tag, tc, color(na))
+
+// ============================================================================
+// 10. ALERTS
+// ============================================================================
+bool lastAbsUp = false
+bool lastAbsDn = false
+if fpBars.size() > 0
+    FpBar fz = fpBars.get(fpBars.size() - 1)
+    if fz.bi == bar_index
+        lastAbsUp := fz.absorbUp
+        lastAbsDn := fz.absorbDn
+
 alertcondition(alertStackBuy,  "Stacked buy imbalance",  "Footprint: stacked BUY imbalance")
 alertcondition(alertStackSell, "Stacked sell imbalance", "Footprint: stacked SELL imbalance")
+alertcondition(lastAbsUp, "Hidden strength", "Footprint: bar closed UP on negative delta - sellers absorbed")
+alertcondition(lastAbsDn, "Hidden weakness", "Footprint: bar closed DOWN on positive delta - buyers absorbed")
