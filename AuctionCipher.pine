@@ -508,7 +508,10 @@ bool divCvd     = input.bool(true,  "CVD Divergences (absorption)", group=G_DIV,
 bool divLines   = input.bool(true,  "Draw Divergence Lines", group=G_DIV)
 int  divMaxLines= input.int(20, "Max Divergence Lines Kept", minval=2, maxval=100, group=G_DIV,
      tooltip="Divergence lines used to accumulate without limit. Pine deletes the OLDEST drawing when the 500-object cap fills, so old divergence lines were evicting your value area and naked POC lines.")
-bool divHidden  = input.bool(false, "Include Hidden Divergences", group=G_DIV)
+bool divHidden  = input.bool(false, "Show Hidden Divergences", group=G_DIV,
+     tooltip="Hidden divergence is the CONTINUATION reading, not the reversal one.\n\nHidden bullish: price makes a HIGHER low while the oscillator makes a LOWER low - a pullback inside an uptrend that sold off harder on the oscillator than it did on price. The trend is intact and the dip was bought.\n\nRegular bullish is the opposite situation: price makes a LOWER low, the oscillator makes a HIGHER one, and the DOWNTREND is running out.\n\nThey fire at different places in a move and mean different things, so they are drawn differently - hidden ones print as an X, regular ones as a circle or diamond - and they are counted separately.")
+bool divHidProof = input.bool(false, "Hidden Divergence Counts as Proof", group=G_DIV,
+     tooltip="Whether hidden divergence may satisfy the PROOF gate and produce signals, as opposed to only being drawn.\n\nSeparate from the switch above on purpose: SEEING something and ACTING on it are different decisions, and merging them means turning on a display changes your signal count without telling you.\n\nThink before enabling it. The other three gates are built around a reversal - LOCATION wants price rejecting a value area edge, and a hidden divergence sits at a higher low well inside the range, which is a different setup entirely. Turn it on, measure it, and compare against the expectancy you had without it.")
 int  divLbL     = input.int(5, "Pivot Left Bars",  minval=1, maxval=50, group=G_DIV)
 int  divLbR     = input.int(5, "Pivot Right Bars", minval=1, maxval=50, group=G_DIV,
      tooltip="A pivot is only confirmed this many bars after it forms, so markers appear this many bars back. A delay, not a repaint.")
@@ -2638,10 +2641,35 @@ f_divergence(float osc, int lbL, int lbR) =>
 [wtBull, wtBear, wtBullH, wtBearH, wtPLV, wtPLI, wtPHV, wtPHI] = f_divergence(wt2, divLbL, divLbR)
 [cvBull, cvBear, cvBullH, cvBearH, cvPLV, cvPLI, cvPHV, cvPHI] = f_divergence(cvdNorm, divLbL, divLbR)
 
-bool wtBullDiv = divWt and (wtBull or (divHidden and wtBullH))
-bool wtBearDiv = divWt and (wtBear or (divHidden and wtBearH))
-bool cvBullDiv = divCvd and (cvBull or (divHidden and cvBullH))
-bool cvBearDiv = divCvd and (cvBear or (divHidden and cvBearH))
+// REGULAR and HIDDEN are kept apart from here on.
+//
+// They used to be folded into one flag: wtBullDiv = wtBull or (divHidden and
+// wtBullH). Both are bullish, so the direction was never wrong - but the two
+// describe opposite situations. Regular bullish is a DOWNTREND running out of
+// sellers at a new low. Hidden bullish is an UPTREND holding a higher low. One
+// is a reversal, the other is a continuation.
+//
+// Merged, three things broke. They rendered as the same marker, so you could
+// not tell which one you were looking at. The statistics counted them as one
+// population, so their win rates could never be compared. And switching the
+// display on silently changed the signal count, because the same flag fed the
+// PROOF gate.
+bool wtBullReg = divWt  and wtBull
+bool wtBearReg = divWt  and wtBear
+bool cvBullReg = divCvd and cvBull
+bool cvBearReg = divCvd and cvBear
+
+bool wtBullHid = divWt  and divHidden and wtBullH
+bool wtBearHid = divWt  and divHidden and wtBearH
+bool cvBullHid = divCvd and divHidden and cvBullH
+bool cvBearHid = divCvd and divHidden and cvBearH
+
+// What the GATES see. Regular always; hidden only when explicitly asked for, so
+// turning the drawing on does not move the signals underneath you.
+bool wtBullDiv = wtBullReg or (divHidProof and wtBullHid)
+bool wtBearDiv = wtBearReg or (divHidProof and wtBearHid)
+bool cvBullDiv = cvBullReg or (divHidProof and cvBullHid)
+bool cvBearDiv = cvBearReg or (divHidProof and cvBearHid)
 
 // --- divergence LINES connecting the two pivots on the oscillator
 // BUDGET BUG FOUND: these were created with no bookkeeping at all. Pine caps
@@ -2656,15 +2684,27 @@ f_pushDivLine(line ln) =>
     while divLineArr.size() > divMaxLines
         line.delete(divLineArr.shift())
 
+// Drawn from the DISPLAY flags, not the gate flags, so a hidden divergence is
+// still drawn when it is not allowed to produce a signal - that is the whole
+// point of being able to look at one before trusting it. Hidden legs are
+// dotted; regular ones keep the solid and dashed styles they had.
 if divLines and barClosed
-    if wtBullDiv
+    if wtBullReg
         f_pushDivLine(line.new(wtPLI, wtPLV, bar_index - divLbR, wt2[divLbR], color=C_UP, width=2))
-    if wtBearDiv
+    if wtBearReg
         f_pushDivLine(line.new(wtPHI, wtPHV, bar_index - divLbR, wt2[divLbR], color=C_DN, width=2))
-    if cvBullDiv
+    if wtBullHid
+        f_pushDivLine(line.new(wtPLI, wtPLV, bar_index - divLbR, wt2[divLbR], color=C_UP, width=1, style=line.style_dotted))
+    if wtBearHid
+        f_pushDivLine(line.new(wtPHI, wtPHV, bar_index - divLbR, wt2[divLbR], color=C_DN, width=1, style=line.style_dotted))
+    if cvBullReg
         f_pushDivLine(line.new(cvPLI, cvPLV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdUp, width=1, style=line.style_dashed))
-    if cvBearDiv
+    if cvBearReg
         f_pushDivLine(line.new(cvPHI, cvPHV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdDn, width=1, style=line.style_dashed))
+    if cvBullHid
+        f_pushDivLine(line.new(cvPLI, cvPLV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdUp, width=1, style=line.style_dotted))
+    if cvBearHid
+        f_pushDivLine(line.new(cvPHI, cvPHV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdDn, width=1, style=line.style_dotted))
 
 // ============================================================================
 // 19. GRADED SIGNALS
@@ -4321,10 +4361,17 @@ plot(dotSellBig ? wt2 : na, "Sell Dot BIG (divergence)", color=cSellDot, style=p
 
 // Yellow for divergence, as in the original - the one marker that should catch
 // your eye in the pane.
-plotshape(wtBullDiv or wtBearDiv ? wt2[divLbR] : na, "WT Divergence", shape.circle, location.absolute,
+plotshape(wtBullReg or wtBearReg ? wt2[divLbR] : na, "WT Divergence", shape.circle, location.absolute,
      color=#ffea00, size=size.tiny, offset=-divLbR)
-plotshape(cvBullDiv or cvBearDiv ? cvdNorm[divLbR] : na, "CVD Absorption", shape.diamond, location.absolute,
-     color=cvBullDiv ? C_GLD : #ff7043, size=size.tiny, offset=-divLbR)
+plotshape(cvBullReg or cvBearReg ? cvdNorm[divLbR] : na, "CVD Absorption", shape.diamond, location.absolute,
+     color=cvBullReg ? C_GLD : #ff7043, size=size.tiny, offset=-divLbR)
+
+// HIDDEN divergence gets its own marker - an X - so a continuation reading is
+// never mistaken for a reversal one at a glance. They were the same dot before.
+plotshape(wtBullHid or wtBearHid ? wt2[divLbR] : na, "WT Hidden Divergence", shape.xcross, location.absolute,
+     color=wtBullHid ? C_UP : C_DN, size=size.tiny, offset=-divLbR)
+plotshape(cvBullHid or cvBearHid ? cvdNorm[divLbR] : na, "CVD Hidden Divergence", shape.xcross, location.absolute,
+     color=cvBullHid ? cCvdUp : cCvdDn, size=size.tiny, offset=-divLbR)
 
 // Grade A keeps its own labelled marker. B and C share one plot, separated by
 // colour depth rather than by shape.
