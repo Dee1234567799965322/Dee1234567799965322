@@ -368,6 +368,26 @@ string htfMode = input.string("Weekly", "HTF Value Area",
 color cHtfPoc  = input.color(#ffee58, "HTF POC", group=G_HTF)
 color cHtfVa   = input.color(color.new(#ef5350, 25), "HTF VAH / VAL", group=G_HTF)
 
+string G_HTFC = "18b - HTF CANDLES"
+bool   htfcOn_in = input.bool(false, "Show HTF Candles", group=G_HTFC,
+     tooltip="Draws the higher-timeframe candles beside the chart, with the newest one still forming and updating live.\n\nThe point is not decoration. On a 15m chart you can see that the 4h candle is a long upper wick closing on its low WITHOUT changing timeframe and losing your place - and the wick is the part that matters, because it is where the auction went and got rejected.\n\nBuilt entirely from the chart's own bars. No data request, so nothing here can repaint and it costs nothing on any TradingView plan.")
+string htfcTf    = input.timeframe("240", "Candle Timeframe", group=G_HTFC,
+     tooltip="Must be HIGHER than the chart timeframe to mean anything. Equal or lower and every chart bar starts a new candle, so you get a row of copies of the bars you are already looking at.")
+int    htfcCount = input.int(4, "Candles Shown", minval=1, maxval=10, group=G_HTFC,
+     tooltip="Includes the one still forming. 4 gives you the live candle and the three before it - enough to see whether this one is continuing or breaking the sequence.")
+int    htfcOffset= input.int(60, "Offset (bars right of price)", minval=5, maxval=300, group=G_HTFC,
+     tooltip="How far right of the last bar the row of candles starts.\n\nIt has to clear the volume profile, which ends at Histogram Offset plus its width. At the defaults that is about bar 45, so 60 leaves a gap. Raise it if the two overlap on your chart.")
+int    htfcWidth = input.int(5, "Candle Width (bars)", minval=1, maxval=20, group=G_HTFC)
+int    htfcGap   = input.int(4, "Gap Between Candles (bars)", minval=1, maxval=30, group=G_HTFC)
+bool   htfcRays  = input.bool(true, "Extend Open / High / Low of the Live Candle", group=G_HTFC,
+     tooltip="Rays from the bar where each was actually made, out to the candle. This is the half the drawn candle cannot tell you: WHEN in the period the high was set. A high made in the first bar and never revisited is a very different candle from the same high made five minutes ago.")
+bool   htfcLbl   = input.bool(true, "Label the Live Candle", group=G_HTFC,
+     tooltip="Timeframe, percent change from the HTF open, and where the close sits inside the candle's range - 0% is on the low, 100% on the high. Closing near an extreme is the whole reading.")
+color  cHtfcUp   = input.color(#26a69a, "HTF Candle Up", inline="hcc", group=G_HTFC)
+color  cHtfcDn   = input.color(#ef5350, "HTF Candle Down", inline="hcc", group=G_HTFC)
+color  cHtfcWick = input.color(color.new(#b2b5be, 25), "Wick", group=G_HTFC)
+color  cHtfcRay  = input.color(color.new(#b2b5be, 55), "Open / High / Low Rays", group=G_HTFC)
+
 string G_OI = "17 - OPEN INTEREST & FUNDING  (perps)"
 bool   oiOn_in      = input.bool(true, "Enable Open Interest", group=G_OI,
      tooltip="OI is the count of contracts still open. Combined with price direction it tells you WHO is doing the moving:\n\nPrice up + OI up      new longs opening - real buying, but risk is building\nPrice up + OI down    shorts covering - a squeeze, not demand; tends to stall\nPrice down + OI up    new shorts opening - real selling\nPrice down + OI down  longs closing or being liquidated - a flush\n\nA squeeze into resistance and genuine buying into resistance look identical on price. They are opposite trades. This is the only thing that separates them.")
@@ -1674,6 +1694,11 @@ var float htfVal = na
 var bool  htfFirstDone = false
 
 bool htfOn = htfMode != "Off"
+// Deliberately NOT resolved through the preset. Everything else on the chart is
+// a level or a reading at a price; this is a second chart sitting beside the
+// first, and how much room that is worth is a per-trader call, not a busyness
+// setting. It stays exactly where you put it on every preset.
+bool htfcOn = htfcOn_in
 bool htfNew = false
 if htfMode == "Daily"
     htfNew := chgD
@@ -1744,6 +1769,166 @@ if htfOn and barstate.islast and not na(htfPoc)
         line.set_xy2(lnHVah, time, htfVah)
         line.set_xy1(lnHVal, htL, htfVal)
         line.set_xy2(lnHVal, time, htfVal)
+
+// ============================================================================
+// 12d2. HTF CANDLES
+// ----------------------------------------------------------------------------
+// The higher-timeframe candles, drawn beside the chart, newest one still
+// forming. Built from the chart's own bars - a running open / high / low since
+// the last timeframe.change - rather than from request.security.
+//
+// That is the important decision. The usual way to do this is fifteen
+// request.security calls for high[1], low[1], open[1] and so on with
+// lookahead_on, which is correct but is fifteen data requests, and the moment
+// anyone drops the [1] offset it starts showing the future. Accumulating from
+// chart bars cannot repaint, cannot leak the future, costs no requests, and
+// works on every TradingView plan. The only thing it cannot do is show a
+// candle from before the chart's own history begins.
+//
+// Scalars here are var, and Pine restores var scalars at the start of every
+// realtime recalculation, so the live high and low track the tick correctly.
+// The completed-candle ARRAYS do not roll back, which is why the push that
+// fills them is the one thing gated on barClosed.
+// ============================================================================
+var array<float> hcO = array.new<float>()
+var array<float> hcH = array.new<float>()
+var array<float> hcL = array.new<float>()
+var array<float> hcC = array.new<float>()
+
+var float hcLiveO = na
+var float hcLiveH = na
+var float hcLiveL = na
+var int   hcOpenBar = na
+var int   hcHiBar   = na
+var int   hcLoBar   = na
+
+var array<box>   hcBoxes  = array.new<box>()
+var array<line>  hcLines  = array.new<line>()
+var array<label> hcLabels = array.new<label>()
+
+bool hcNew = htfcOn and timeframe.change(htfcTf)
+
+if htfcOn
+    if hcNew
+        // The bar that opens a new HTF period is the bar AFTER the old one
+        // closed, so the candle just finished closed at close[1].
+        if barClosed and not na(hcLiveO)
+            hcO.push(hcLiveO)
+            hcH.push(hcLiveH)
+            hcL.push(hcLiveL)
+            hcC.push(close[1])
+            while hcO.size() > htfcCount - 1
+                hcO.shift()
+                hcH.shift()
+                hcL.shift()
+                hcC.shift()
+        hcLiveO   := open
+        hcLiveH   := high
+        hcLiveL   := low
+        hcOpenBar := bar_index
+        hcHiBar   := bar_index
+        hcLoBar   := bar_index
+    else
+        if high > nz(hcLiveH, high)
+            hcLiveH := high
+            hcHiBar := bar_index
+        if low < nz(hcLiveL, low)
+            hcLiveL := low
+            hcLoBar := bar_index
+        if na(hcLiveO)
+            // first bars of the chart, before any period boundary has been seen
+            hcLiveO   := open
+            hcLiveH   := high
+            hcLiveL   := low
+            hcOpenBar := bar_index
+            hcHiBar   := bar_index
+            hcLoBar   := bar_index
+
+if barstate.islast
+    for b in hcBoxes
+        box.delete(b)
+    hcBoxes.clear()
+    for l in hcLines
+        line.delete(l)
+    hcLines.clear()
+    for lb in hcLabels
+        label.delete(lb)
+    hcLabels.clear()
+
+    if htfcOn and not na(hcLiveO)
+        int hcDone = hcO.size()
+        int hcSlot = htfcWidth + htfcGap
+        int hcHalf = math.max(1, int(htfcWidth / 2))
+
+        // Pine will not place a drawing more than 500 bars beyond the last one,
+        // and at the widest settings this row would reach 760 - ten candles,
+        // fifty bars apart, starting three hundred bars out. So work out how
+        // many actually FIT and drop the oldest, rather than letting the far end
+        // of the row fail. The live candle is the one that matters, so it is the
+        // one always kept.
+        int hcRoom = math.max(0, 480 - htfcOffset - htfcWidth)
+        int hcFit  = math.max(1, int(hcRoom / hcSlot) + 1)
+        int hcAll  = math.min(hcDone + 1, hcFit)
+        int hcSkip = hcDone + 1 - hcAll
+        int hcLiveX = bar_index + htfcOffset + (hcAll - 1) * hcSlot
+
+        for k = 0 to hcAll - 1
+            int   src    = k + hcSkip
+            bool  isLive = src >= hcDone
+            float cO = isLive ? hcLiveO : hcO.get(src)
+            float cH = isLive ? hcLiveH : hcH.get(src)
+            float cL = isLive ? hcLiveL : hcL.get(src)
+            float cC = isLive ? close   : hcC.get(src)
+            int   xc = bar_index + htfcOffset + k * hcSlot
+            color col = cC >= cO ? cHtfcUp : cHtfcDn
+
+            // A vertical line - x1 == x2 with different y - is fine. What is
+            // NOT fine is x1 == x2 together with extend.right, which has no
+            // defined slope and renders as a vertical line that drags the
+            // price scale. That was the mystery red line on the nPOCs. No
+            // extend here, so this is a wick and nothing else.
+            if cH > cL
+                hcLines.push(line.new(xc, cH, xc, cL, xloc=xloc.bar_index,
+                     color=cHtfcWick, width=1, force_overlay=true))
+
+            // A candle that opened and closed on the same tick has no body and
+            // would draw as nothing at all, so it gets a one-tick doji instead.
+            float bT = math.max(cO, cC)
+            float bB = math.min(cO, cC)
+            if bT <= bB
+                bT := bT + syminfo.mintick
+                bB := bB - syminfo.mintick
+            hcBoxes.push(box.new(xc - hcHalf, bT, xc + hcHalf, bB, bgcolor=col,
+                 border_color=col, force_overlay=true))
+
+        // --- rays from where the live open, high and low were actually made
+        if htfcRays
+            int rayTo = hcLiveX + hcHalf
+            // Drawing coordinates cannot reach further back than max_bars_back,
+            // and a daily candle on a 1m chart is well over a thousand bars, so
+            // the anchor is clamped rather than left to fail silently.
+            int rayMin = bar_index - 480
+            hcLines.push(line.new(math.max(rayMin, nz(hcHiBar, bar_index)), hcLiveH, rayTo, hcLiveH,
+                 xloc=xloc.bar_index, color=cHtfcRay, style=line.style_dotted, force_overlay=true))
+            hcLines.push(line.new(math.max(rayMin, nz(hcLoBar, bar_index)), hcLiveL, rayTo, hcLiveL,
+                 xloc=xloc.bar_index, color=cHtfcRay, style=line.style_dotted, force_overlay=true))
+            hcLines.push(line.new(math.max(rayMin, nz(hcOpenBar, bar_index)), hcLiveO, rayTo, hcLiveO,
+                 xloc=xloc.bar_index, color=cHtfcRay, style=line.style_dashed, force_overlay=true))
+
+        if htfcLbl
+            float hcRng = hcLiveH - hcLiveL
+            // Where the close sits inside the candle's own range. This is the
+            // reading: 90% is closing on the high with the low rejected, 10% is
+            // the reverse. The percent change alone cannot tell those apart.
+            float hcPos = hcRng > 0 ? (close - hcLiveL) / hcRng * 100 : 50.0
+            float hcChg = hcLiveO != 0 ? (close - hcLiveO) / hcLiveO * 100 : 0.0
+            hcLabels.push(label.new(hcLiveX + hcHalf + 1, hcLiveH, htfcTf + "  " +
+                 (hcChg >= 0 ? "+" : "") + str.tostring(hcChg, "#.##") + "%\nclose " +
+                 str.tostring(hcPos, "#") + "% of range",
+                 xloc=xloc.bar_index, style=label.style_label_left,
+                 color=color.new(chart.bg_color, 15),
+                 textcolor=close >= hcLiveO ? cHtfcUp : cHtfcDn,
+                 size=size.tiny, force_overlay=true))
 
 // where does today's value sit inside the bigger auction?
 string htfPos = "n/a"
@@ -2125,8 +2310,8 @@ if barstate.islast and aucOn
         // other feature rather than a guessed number, so raising Max Naked POCs
         // or Max Divergence Lines correctly takes rows away from the profile
         // instead of quietly evicting them.
-        int boxReserve  = 15 + balBins + 2 + cmeKeep + sessKeep * 3 + 20
-        int lineReserve = maxNpoc + maxLvn + divMaxLines + 60
+        int boxReserve  = 15 + balBins + 2 + cmeKeep + sessKeep * 3 + 20 + (htfcOn ? htfcCount : 0)
+        int lineReserve = maxNpoc + maxLvn + divMaxLines + 60 + (htfcOn ? htfcCount + 3 : 0)
         int boxRoom     = math.max(60, 500 - boxReserve)
         int lineRoom    = math.max(60, 500 - lineReserve)
         int cap         = histSplitUD ? math.min(boxRoom, lineRoom) : boxRoom
