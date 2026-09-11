@@ -3252,22 +3252,37 @@ var array<int>   opBar   = array.new<int>()
 var array<float> opRisk  = array.new<float>()
 var array<float> opRPlan = array.new<float>()
 
-var int sigWin = 0
-var int sigLoss = 0
 var int sigOpen = 0
-var int sigExpired = 0
-var float sumRealR = 0.0
-var float sumPlanR = 0.0
-var int   nClosed  = 0
-// Total R alone cannot say WHERE the money went. Splitting realised R by how
-// each trade ended separates an edge that is not there from an edge that is
-// being given back by the exits.
-var float sumRWin  = 0.0
-var float sumRLoss = 0.0
-var float sumRExp  = 0.0
-var float sumRFlat = 0.0
-var int sigFlat = 0
 var int sigSkip = 0
+
+// THE RUNNING STATISTICS, as one array rather than eleven separate counters.
+//
+// Not a style choice. The two blocks that ADD to these had to become functions
+// to keep the script's main body under Pine's size cap, and a Pine function may
+// mutate an array but may NOT modify a global - `f_ledAdd(LG_REALR, realR)` inside a
+// function is a compile error. An array element is not a global being
+// reassigned, it is an object being changed, so it is allowed.
+//
+// The named indices below and the plain copies further down mean every site
+// that READS a statistic still reads sumRealR, sigWin and the rest by name.
+// Total R alone cannot say WHERE the money went, which is why realised R is
+// split by how each trade ended: an edge that was never there looks nothing
+// like an edge the exits are handing back.
+var array<float> ledger = array.new<float>(11, 0.0)
+int LG_WIN   = 0
+int LG_LOSS  = 1
+int LG_EXP   = 2
+int LG_FLAT  = 3
+int LG_NCL   = 4
+int LG_REALR = 5
+int LG_PLANR = 6
+int LG_RWIN  = 7
+int LG_RLOSS = 8
+int LG_REXP  = 9
+int LG_RFLAT = 10
+
+f_ledAdd(int k, float v) =>
+    ledger.set(k, ledger.get(k) + v)
 
 // A signal is known at its bar's CLOSE, so the earliest price anyone could
 // actually trade is the next bar's OPEN. These hold a signal for that one bar.
@@ -4010,11 +4025,11 @@ f_closeReversals() =>
             float rk = opRisk.get(i)
             float en = opEntry.get(i)
             float flatR = rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
-            sumRealR += flatR
-            sumRFlat += flatR
-            sumPlanR += nz(opRPlan.get(i))
-            nClosed  += 1
-            sigFlat  += 1
+            f_ledAdd(LG_REALR, flatR)
+            f_ledAdd(LG_RFLAT, flatR)
+            f_ledAdd(LG_PLANR, nz(opRPlan.get(i)))
+            f_ledAdd(LG_NCL, 1)
+            f_ledAdd(LG_FLAT, 1)
             if riskOn and opDraw.size() > i
                 TradeDraw tdf = opDraw.get(i)
                 box.delete(tdf.tgtBox)
@@ -4133,24 +4148,24 @@ f_manageTrades() =>
         int   outc  = 0
         if d == 1
             if low <= st
-                sigLoss += 1
+                f_ledAdd(LG_LOSS, 1)
                 realR := -1.0
                 outc  := 2
                 done := true
             else if high >= tg
-                sigWin += 1
+                f_ledAdd(LG_WIN, 1)
                 hit := true
                 realR := opRPlan.get(i)
                 outc  := 1
                 done := true
         else
             if high >= st
-                sigLoss += 1
+                f_ledAdd(LG_LOSS, 1)
                 realR := -1.0
                 outc  := 2
                 done := true
             else if low <= tg
-                sigWin += 1
+                f_ledAdd(LG_WIN, 1)
                 hit := true
                 realR := opRPlan.get(i)
                 outc  := 1
@@ -4161,7 +4176,7 @@ f_manageTrades() =>
         // trades that resolved - systematically overstating it. Expired trades
         // are now counted and shown.
         if not done and bar_index - opBar.get(i) > statHorizon
-            sigExpired += 1
+            f_ledAdd(LG_EXP, 1)
             realR := rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
             outc  := 3
             done := true
@@ -4174,15 +4189,15 @@ f_manageTrades() =>
                 box.delete(td.stopBox)
                 label.delete(td.info)
                 opDraw.remove(i)
-            sumRealR += realR
+            f_ledAdd(LG_REALR, realR)
             if outc == 1
-                sumRWin += realR
+                f_ledAdd(LG_RWIN, realR)
             else if outc == 2
-                sumRLoss += realR
+                f_ledAdd(LG_RLOSS, realR)
             else
-                sumRExp += realR
-            sumPlanR += nz(opRPlan.get(i))
-            nClosed  += 1
+                f_ledAdd(LG_REXP, realR)
+            f_ledAdd(LG_PLANR, nz(opRPlan.get(i)))
+            f_ledAdd(LG_NCL, 1)
             opEntry.remove(i)
             opStop.remove(i)
             opTgt.remove(i)
@@ -4220,6 +4235,21 @@ if opEntry.size() > 0
 // Expectancy is the number that decides whether any of this is worth trading.
 // Positive means the edge pays; negative means a higher hit rate would still
 // be losing money, which is exactly the case a raw win percentage hides.
+// Plain copies of the ledger, taken AFTER both accumulating blocks have run on
+// this bar and BEFORE anything reads them. Every existing read site is
+// untouched by the array underneath.
+int   sigWin     = int(ledger.get(LG_WIN))
+int   sigLoss    = int(ledger.get(LG_LOSS))
+int   sigExpired = int(ledger.get(LG_EXP))
+int   sigFlat    = int(ledger.get(LG_FLAT))
+int   nClosed    = int(ledger.get(LG_NCL))
+float sumRealR   = ledger.get(LG_REALR)
+float sumPlanR   = ledger.get(LG_PLANR)
+float sumRWin    = ledger.get(LG_RWIN)
+float sumRLoss   = ledger.get(LG_RLOSS)
+float sumRExp    = ledger.get(LG_REXP)
+float sumRFlat   = ledger.get(LG_RFLAT)
+
 float expectR = nClosed > 0 ? sumRealR / nClosed : na
 float avgPlanR = nClosed > 0 ? sumPlanR / nClosed : na
 
