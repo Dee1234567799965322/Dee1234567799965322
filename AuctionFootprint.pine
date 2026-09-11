@@ -41,14 +41,25 @@ indicator("Auction Footprint", shorttitle="FOOTPRINT", overlay=true,
 // ============================================================================
 // TYPES
 // ----------------------------------------------------------------------------
-// buy and sell are parallel arrays indexed from rowLo, so index i is the price
-// row rowLo + i. One object per bar keeps them together: two loose arrays that
+// buy and sell are parallel arrays, index i being the price band that starts at
+// pLo + i * step. One object per bar keeps them together: two loose arrays that
 // every site has to index identically is the classic way to get a footprint
 // showing one bar's buying against another bar's selling.
+//
+// pLo and step are stored PER BAR, in price, and this matters. The first version
+// stored an integer row index instead and converted it back to a price at draw
+// time using the CURRENT row height. Row height is derived from a rolling
+// average range, so it drifts - and a row index means nothing except alongside
+// the row height it was measured with. Every stored bar was therefore redrawn at
+// its own row index times somebody else's row height, which scales the price. On
+// a 4h gold chart that threw whole columns hundreds of dollars away from the
+// bars they came from. A price is a price on any bar; that is why it is stored
+// as one.
 // ============================================================================
 type FpBar
     int          bi
-    int          rowLo
+    float        pLo
+    float        step
     array<float> buy
     array<float> sell
     float        delta
@@ -104,6 +115,8 @@ string G_LVL = "5 - LEVELS"
 bool   pocLine   = input.bool(true, "Extend Each Bar's POC Right", group=G_LVL,
      tooltip="A line at the busiest price of each bar, running forward until price trades back through it. Untested bar POCs are the short-term version of a naked POC - unfinished business at a price that mattered.")
 int    pocKeep   = input.int(10, "Bar POCs Kept", minval=1, maxval=30, group=G_LVL)
+float  unfinMin  = input.float(25.0, "Unfinished Needs Minority Side (%)", minval=1.0, maxval=50.0, step=1.0, group=G_LVL,
+     tooltip="How much of the extreme row the SMALLER side has to hold before the auction there counts as unfinished. At 25 the weaker side must be at least a quarter of that row.\n\nWithout a floor this fires on every bar at both ends: each lower-timeframe sample is spread over its own range, so practically every row ends up holding a trace of both sides, and a flag that is always on is not a flag.")
 bool   unfinOn   = input.bool(true, "Mark Unfinished Auctions", group=G_LVL,
      tooltip="A bar whose extreme row still has BOTH buying and selling in it. The auction was still two-sided when the bar ended - nobody was driven out - so the high or low was not a rejection and price tends to come back and finish the job.\n\nA finished extreme shows one side only: the last row is all buying at a high, all selling at a low.")
 
@@ -182,11 +195,22 @@ float autoStep = rowTarget > 0 and not na(avgRange) and avgRange > 0 ? avgRange 
 float autoTicks = math.max(1.0, math.round(autoStep / syminfo.mintick))
 float rowSize = rowMode == "Auto" ? autoTicks * syminfo.mintick : rowTicks * syminfo.mintick
 
-f_rowOf(float px) =>
-    int(math.floor(px / rowSize))
+// Where price p falls inside a bar whose grid starts at pLo with height step.
+f_rowIn(float px, float pLo, float step) =>
+    int((px - pLo) / step)
 
-f_rowPrice(int r) =>
-    r * rowSize
+// The bottom of row i of that bar.
+f_rowPx(FpBar f, int i) =>
+    f.pLo + i * f.step
+
+// An extreme row counts as UNFINISHED when both sides are meaningfully present.
+// The first version asked only that both were above zero, which on a grid where
+// every sample is spread across its own range is true almost everywhere - so
+// nearly every bar was flagged at both ends and the label meant nothing. The
+// smaller side now has to carry a real share of the row.
+f_unfin(float b, float sv, float thr) =>
+    float t = b + sv
+    t > 0 and math.min(b, sv) / t >= thr
 
 f_txtSize() =>
     switch cellSize
@@ -210,11 +234,19 @@ f_short(float v) =>
 var array<FpBar> fpBars = array.new<FpBar>()
 
 if fpOn and barClosed and high > low
-    int rLo  = f_rowOf(low)
-    int rHi  = f_rowOf(high)
-    int want = rHi - rLo + 1
+    // A bar needing more rows than the cap is COARSENED, not truncated. The
+    // first version clipped it to the lowest rowMax rows, which quietly deleted
+    // the top of the widest and most interesting bars on the chart - exactly
+    // the ones worth looking at. Wider rows lose resolution; clipping loses the
+    // high.
+    float stepUse = rowSize
+    int want = int(math.ceil((high - low) / stepUse)) + 1
     bool clip = want > rowMax
-    int nR = math.min(want, rowMax)
+    if clip
+        stepUse := math.ceil((high - low) / rowMax / syminfo.mintick) * syminfo.mintick
+        want := int(math.ceil((high - low) / stepUse)) + 1
+    int nR = math.max(1, math.min(want, rowMax))
+    float pLo = math.floor(low / stepUse) * stepUse
 
     array<float> bu = array.new<float>(nR, 0.0)
     array<float> se = array.new<float>(nR, 0.0)
@@ -223,8 +255,8 @@ if fpOn and barClosed and high > low
         for i = 0 to lH.size() - 1
             float v = lV.get(i)
             if not na(v) and v > 0
-                int a = math.max(0, math.min(nR - 1, f_rowOf(lL.get(i)) - rLo))
-                int b = math.max(0, math.min(nR - 1, f_rowOf(lH.get(i)) - rLo))
+                int a = math.max(0, math.min(nR - 1, f_rowIn(lL.get(i), pLo, stepUse)))
+                int b = math.max(0, math.min(nR - 1, f_rowIn(lH.get(i), pLo, stepUse)))
                 float share = v / (b - a + 1)
                 float upShare = lC.get(i) > lO.get(i) ? share : lC.get(i) < lO.get(i) ? 0.0 : share * 0.5
                 float dnShare = share - upShare
@@ -254,9 +286,10 @@ if fpOn and barClosed and high > low
                 poc := r
         // An extreme row with BOTH sides still in it is an auction that had not
         // finished when the bar closed.
-        bool uHi = bu.get(nR - 1) > 0 and se.get(nR - 1) > 0
-        bool uLo = bu.get(0) > 0 and se.get(0) > 0
-        fpBars.push(FpBar.new(bi = bar_index, rowLo = rLo, buy = bu, sell = se,
+        float uThr = unfinMin / 100.0
+        bool uHi = f_unfin(bu.get(nR - 1), se.get(nR - 1), uThr)
+        bool uLo = f_unfin(bu.get(0), se.get(0), uThr)
+        fpBars.push(FpBar.new(bi = bar_index, pLo = pLo, step = stepUse, buy = bu, sell = se,
              delta = bu.sum() - se.sum(), total = tot, pocIdx = poc,
              unfinHi = uHi, unfinLo = uLo, clipped = clip))
         while fpBars.size() > fpCount
@@ -321,7 +354,7 @@ if fpOn and barClosed and fpBars.size() > 0
                 if runBuy == stackMin or runSell == stackMin
                     bool isBuy = runBuy == stackMin
                     // middle of the stacked run, not its edge
-                    float py = f_rowPrice(f.rowLo + i - int(stackMin / 2)) + rowSize / 2
+                    float py = f_rowPx(f, i - int(stackMin / 2)) + f.step / 2
                     stkPx.push(py)
                     stkDir.push(isBuy ? 1 : -1)
                     stkLn.push(line.new(bar_index, py, bar_index + 1, py, xloc=xloc.bar_index,
@@ -335,7 +368,7 @@ if fpOn and barClosed and fpBars.size() > 0
 
         // --- this bar's POC
         if pocLine
-            float py = f_rowPrice(f.rowLo + f.pocIdx) + rowSize / 2
+            float py = f_rowPx(f, f.pocIdx) + f.step / 2
             pocPx.push(py)
             pocLn.push(line.new(bar_index, py, bar_index + 1, py, xloc=xloc.bar_index,
                  color=color.new(cPocCol, 30), width=1, style=line.style_dotted, extend=extend.right))
@@ -404,8 +437,8 @@ if barstate.islast
                             float tv = bv + sv
                             if tv > 0
                                 float dv = bv - sv
-                                float pLo = f_rowPrice(f.rowLo + i)
-                                float pHi = pLo + rowSize
+                                float pRowLo = f_rowPx(f, i)
+                                float pRowHi = pRowLo + f.step
 
                                 bool bImb = imbOn and f_buyImb(f, i, minVol)
                                 bool sImb = imbOn and f_sellImb(f, i, minVol)
@@ -433,7 +466,7 @@ if barstate.islast
                                 else if cellTxt == "Total volume"
                                     txt := f_short(tv)
 
-                                fpBoxes.push(box.new(x1, pHi, x2, pLo, bgcolor=bg,
+                                fpBoxes.push(box.new(x1, pRowHi, x2, pRowLo, bgcolor=bg,
                                      border_color=(bImb or sImb) ? cStack : color(na),
                                      border_width=(bImb or sImb) ? 1 : 0,
                                      text=txt, text_color=cTxt, text_size=f_txtSize(),
@@ -443,18 +476,18 @@ if barstate.islast
                     // --- unfinished auction markers
                     if unfinOn
                         if f.unfinHi
-                            fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPrice(f.rowLo + nR - 1) + rowSize,
+                            fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPx(f, nR - 1) + f.step,
                                  "unfinished", xloc=xloc.bar_index, style=label.style_label_down,
                                  color=color.new(cUnfin, 80), textcolor=cUnfin, size=size.tiny))
                         if f.unfinLo
-                            fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPrice(f.rowLo),
+                            fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPx(f, 0),
                                  "unfinished", xloc=xloc.bar_index, style=label.style_label_up,
                                  color=color.new(cUnfin, 80), textcolor=cUnfin, size=size.tiny))
 
                     // --- the bar's own delta, under its column
                     if showBarDelta
-                        float dBot = f_rowPrice(f.rowLo) - rowSize * 1.4
-                        fpBoxes.push(box.new(x1, dBot + rowSize, x2, dBot,
+                        float dBot = f_rowPx(f, 0) - f.step * 1.4
+                        fpBoxes.push(box.new(x1, dBot + f.step, x2, dBot,
                              bgcolor=color.new(f.delta >= 0 ? cBuy : cSell, 55),
                              border_color=color(na),
                              text=(f.delta > 0 ? "+" : "") + f_short(f.delta),
