@@ -71,6 +71,17 @@ type Npoc
     float price
     line  ln
 
+// A price somebody defended and held. dir +1 is support (sellers absorbed),
+// -1 is resistance (buyers absorbed). ok means it has survived long enough to
+// be believed rather than merely spotted.
+type OfLvl
+    float px
+    int   dir
+    int   born
+    bool  ok
+    float vol
+    line  ln
+
 // ============================================================================
 // 1. INPUTS
 // ============================================================================
@@ -544,6 +555,28 @@ bool divRefInv  = input.bool(false, "Correlated Symbol Is Inverse", group=G_DIV,
 // The pane's own graded markers were removed so it can never contradict the
 // chart. buyA / sellA remain as ALERT conditions only.
 
+string G_OF = "22 - ORDER FLOW  (footprint engine, no drawing)"
+bool  ofOn      = input.bool(true, "Enable Order Flow Engine", group=G_OF,
+     tooltip="Runs the Auction Footprint engine inside this script with the grid switched OFF.\n\nThe expensive half of a footprint is the DRAWING - five hundred boxes, one per cell. The reading is a single pass over the lower-timeframe samples this script already fetches for the volume profile, so running it headless costs almost nothing and adds a source of evidence that is not another oscillator built out of the same price.\n\nNothing here changes a signal until you switch one of the three gate options on below. Off, it is a readout.")
+int   ofRows    = input.int(14, "Rows per Bar", minval=4, maxval=40, group=G_OF,
+     tooltip="How finely each bar is sliced for the absorption test. Finer finds smaller shelves and more of them.")
+float ofAbsMult = input.float(2.5, "Absorption Heavy Row Multiple", minval=1.2, maxval=10.0, step=0.1, group=G_OF,
+     tooltip="How much more than an average row of its own bar a price has to trade before it counts as defended.")
+float ofAbsEdge = input.float(30.0, "Absorption Edge Band (%)", minval=5.0, maxval=50.0, step=5.0, group=G_OF,
+     tooltip="How much of a bar counts as its extreme. Absorption in the middle of a bar is ordinary two-way trade; it only means something where price was trying to go.")
+int   ofAbsConf = input.int(3, "Bars to Confirm Absorption", minval=1, maxval=20, group=G_OF)
+int   ofAbsKeep = input.int(6, "Absorption Levels Kept", minval=1, maxval=20, group=G_OF)
+float ofDivMin  = input.float(10.0, "Delta Divergence Needs (% of volume)", minval=1.0, maxval=60.0, step=1.0, group=G_OF,
+     tooltip="A bar closing up on a delta of minus three is rounding error, not absorption. The delta has to be this share of the bar's own volume before the divergence counts.")
+bool  ofDraw    = input.bool(false, "Draw Absorption Levels", group=G_OF,
+     tooltip="Just the confirmed levels - two or three lines - not the grid. The grid belongs in the separate footprint script where it has a drawing budget of its own.")
+color cOfAbs    = input.color(#ff6d00, "Absorption Level Colour", group=G_OF)
+bool  ofLoc     = input.bool(false, "Count Absorption as Signal Location", group=G_OF,
+     tooltip="Lets a confirmed absorption level satisfy the LOCATION gate the way a value area edge or a naked POC does.\n\nThis is the strongest case for wiring the engine in: every other level in that gate is derived from where price HAS BEEN. An absorption level is derived from somebody actively defending a price and succeeding, which is a different kind of fact.\n\nOFF by default. It changes how many signals pass, so measure it.")
+bool  ofConf    = input.bool(false, "Count Absorption in Confluence", group=G_OF)
+bool  ofProof   = input.bool(false, "Count Delta Divergence as Proof", group=G_OF,
+     tooltip="Lets hidden strength - a bar closing UP while net flow was SELLING - satisfy the PROOF gate, and hidden weakness the reverse.\n\nThis is the one piece of evidence in the whole script that no oscillator can reach: it says the aggressive side was absorbed and price went the wrong way for them. OFF by default for the same reason as the others - measure before you trust it.")
+
 string G_TBL = "10 - DASHBOARD"
 bool   showTable = input.bool(true, "Show Dashboard", group=G_TBL)
 string tblPos    = input.string("Top Right", "Position",
@@ -783,6 +816,13 @@ array<float> lC = na
 array<float> lO = na
 array<float> lV = na
 float dLast = na
+// The HIGHEST and LOWEST the delta reached INSIDE the bar. requestVolumeDelta
+// has always returned these and this script has always discarded them, which is
+// a waste: the closing delta alone cannot tell a bar that ran steadily to +2K
+// from one that was at -8K first and reversed. Same call, same cost, two more
+// numbers.
+float dHiIn = na
+float dLoIn = na
 
 if useLtf
     [rH, rL, rC, rO, rV] = request.security_lower_tf(syminfo.tickerid, ltfEff, [high, low, close, open, volume], ignore_invalid_symbol=true)
@@ -793,6 +833,8 @@ if useLtf
     lV := rV
     [_dOpen, _dMax, _dMin, rDelta] = taLib.requestVolumeDelta(deltaTf)
     dLast := rDelta
+    dHiIn := _dMax
+    dLoIn := _dMin
 
 bool ltfPresent = false
 if useLtf
@@ -2394,7 +2436,7 @@ if barstate.islast and aucOn
         // or Max Divergence Lines correctly takes rows away from the profile
         // instead of quietly evicting them.
         int boxReserve  = 15 + balBins + 2 + cmeKeep + sessKeep * 3 + 20 + (htfcOn ? htfcCount : 0)
-        int lineReserve = maxNpoc + maxLvn + divMaxLines + 60 + (htfcOn ? htfcCount + 3 : 0)
+        int lineReserve = maxNpoc + maxLvn + divMaxLines + 60 + (htfcOn ? htfcCount + 3 : 0) + (ofOn and ofDraw ? ofAbsKeep : 0)
         int boxRoom     = math.max(60, 500 - boxReserve)
         int lineRoom    = math.max(60, 500 - lineReserve)
         int cap         = histSplitUD ? math.min(boxRoom, lineRoom) : boxRoom
@@ -3362,6 +3404,136 @@ bool oiVetoBuy   = oiVetoOn  and oiRealOffer
 bool oiVetoSell  = oiVetoOn  and oiRealBid
 
 // ============================================================================
+// 20c. ORDER FLOW ENGINE  (the footprint, headless)
+// ----------------------------------------------------------------------------
+// The Auction Footprint script's reading half, with the grid switched off.
+//
+// The expensive part of a footprint is the DRAWING - five hundred boxes, one
+// per cell - not the arithmetic. The arithmetic is a single pass over the
+// lower-timeframe samples this script already fetches for the volume profile.
+// So it runs here for almost nothing, and what it produces is the one kind of
+// evidence the rest of the script does not have: every oscillator in the pane
+// is built out of this symbol's own price, and this is not.
+//
+// Two things come out of it.
+//
+// DELTA DIVERGENCE - a bar that closed UP while net flow was SELLING. Every
+// aggressive seller was absorbed by somebody taking the other side and price
+// went the wrong way for them. Hidden strength, and its mirror.
+//
+// ABSORPTION LEVELS - a price where one side pushed hard, traded an unusual
+// amount, and then failed to get through. Note the inversion: heavy BUYING at a
+// high that fails is buyers being absorbed, so the level is RESISTANCE even
+// though every print there was green. The aggressive side is the side that
+// lost. Whether it failed is only knowable from what came next, so a level is a
+// candidate until it has survived, and is deleted the moment price CLOSES
+// through it.
+// ============================================================================
+var array<OfLvl> ofLvls = array.new<OfLvl>()
+
+// --- delta divergence, from the excursion the delta request already returns
+float ofTot  = nz(totVol, nz(volume))
+bool  ofBig  = ofTot > 0 and math.abs(barDelta) >= ofTot * ofDivMin / 100.0
+bool  ofBull = ofOn and ofBig and close > open and barDelta < 0
+bool  ofBear = ofOn and ofBig and close < open and barDelta > 0
+// how far delta travelled inside the bar, not just where it ended
+float ofSwing = not na(dHiIn) and not na(dLoIn) ? dHiIn - dLoIn : na
+
+// --- absorption candidates from this bar's own rows
+if ofOn and barClosed and high > low and ltfOk
+    float ofStep = (high - low) / ofRows
+    if ofStep > 0
+        array<float> ofBuy = array.new<float>(ofRows, 0.0)
+        array<float> ofSel = array.new<float>(ofRows, 0.0)
+        for i = 0 to lH.size() - 1
+            float v = lV.get(i)
+            if not na(v) and v > 0
+                int a = math.max(0, math.min(ofRows - 1, int((lL.get(i) - low) / ofStep)))
+                int b = math.max(0, math.min(ofRows - 1, int((lH.get(i) - low) / ofStep)))
+                float sh = v / (b - a + 1)
+                float up = lC.get(i) > lO.get(i) ? sh : lC.get(i) < lO.get(i) ? 0.0 : sh * 0.5
+                for r = a to b
+                    ofBuy.set(r, ofBuy.get(r) + up)
+                    ofSel.set(r, ofSel.get(r) + (sh - up))
+
+        float ofSum = ofBuy.sum() + ofSel.sum()
+        if ofSum > 0
+            float avgRow = ofSum / ofRows
+            int band = math.max(1, math.min(ofRows, int(math.round(ofRows * ofAbsEdge / 100.0))))
+
+            // resistance: heaviest BUY-dominant row in the top band
+            int bR = -1
+            float bRv = 0.0
+            for i = math.max(0, ofRows - band) to ofRows - 1
+                float v = ofBuy.get(i) + ofSel.get(i)
+                if v >= avgRow * ofAbsMult and ofBuy.get(i) > ofSel.get(i) and v > bRv
+                    bRv := v
+                    bR := i
+            // support: heaviest SELL-dominant row in the bottom band
+            int bS = -1
+            float bSv = 0.0
+            for i = 0 to math.min(ofRows - 1, band - 1)
+                float v = ofBuy.get(i) + ofSel.get(i)
+                if v >= avgRow * ofAbsMult and ofSel.get(i) > ofBuy.get(i) and v > bSv
+                    bSv := v
+                    bS := i
+
+            if bR >= 0
+                ofLvls.push(OfLvl.new(px = low + (bR + 0.5) * ofStep, dir = -1, born = bar_index,
+                     ok = false, vol = bRv, ln = na))
+            if bS >= 0
+                ofLvls.push(OfLvl.new(px = low + (bS + 0.5) * ofStep, dir = 1, born = bar_index,
+                     ok = false, vol = bSv, ln = na))
+            while ofLvls.size() > ofAbsKeep
+                OfLvl gone = ofLvls.shift()
+                line.delete(gone.ln)
+
+// --- confirm what held, delete what broke
+float ofTol = atr14 * 0.15
+bool ofNewSup = false
+bool ofNewRes = false
+if ofOn and barClosed and ofLvls.size() > 0
+    for i = ofLvls.size() - 1 to 0
+        OfLvl a = ofLvls.get(i)
+        if bar_index > a.born
+            // A WICK through the level is price testing whoever is there. A
+            // CLOSE through it is them being gone.
+            bool broke = a.dir > 0 ? close < a.px - ofTol : close > a.px + ofTol
+            if broke
+                line.delete(a.ln)
+                ofLvls.remove(i)
+            else if not a.ok and bar_index - a.born >= ofAbsConf
+                a.ok := true
+                ofNewSup := ofNewSup or a.dir > 0
+                ofNewRes := ofNewRes or a.dir < 0
+
+// --- the nearest CONFIRMED level each side, the form the gates can use
+float ofSupPx = na
+float ofResPx = na
+if ofOn and ofLvls.size() > 0
+    for i = 0 to ofLvls.size() - 1
+        OfLvl a = ofLvls.get(i)
+        if a.ok
+            if a.dir > 0 and a.px <= close
+                ofSupPx := na(ofSupPx) ? a.px : math.max(ofSupPx, a.px)
+            if a.dir < 0 and a.px >= close
+                ofResPx := na(ofResPx) ? a.px : math.min(ofResPx, a.px)
+
+// --- optional: the levels only, never the grid
+var array<line> ofLines = array.new<line>()
+if barstate.islast
+    for l in ofLines
+        line.delete(l)
+    ofLines.clear()
+    if ofOn and ofDraw and ofLvls.size() > 0
+        for i = 0 to ofLvls.size() - 1
+            OfLvl a = ofLvls.get(i)
+            ofLines.push(line.new(math.max(a.born, bar_index - 480), a.px, bar_index + 2, a.px,
+                 xloc=xloc.bar_index, color=a.ok ? cOfAbs : color.new(cOfAbs, 60),
+                 width=a.ok ? 2 : 1, style=a.ok ? line.style_solid : line.style_dotted,
+                 extend=extend.right, force_overlay=true))
+
+// ============================================================================
 // 19c. CHART SIGNALS  -  all four layers must agree
 // ----------------------------------------------------------------------------
 // The pane's A/B/C grades are momentum only: a WaveTrend cross with money flow
@@ -3461,6 +3633,17 @@ if balUseLoc and balActive
         rejLowNow := true
     if f_rejDn(balHi) or f_rejDn(balPoc)
         rejHighNow := true
+// Absorption levels. Every other level in this gate says where price HAS BEEN -
+// a prior value area edge, an untested POC, an initial balance. An absorption
+// level says somebody actively defended a price and succeeded, which is a
+// different kind of fact and the best argument for wiring the footprint engine
+// in at all. Only CONFIRMED levels reach here; a candidate that has not held
+// yet is not a level.
+if ofLoc
+    if f_rejUp(ofSupPx)
+        rejLowNow := true
+    if f_rejDn(ofResPx)
+        rejHighNow := true
 
 // ---------------------------------------------------------------------------
 // ALL FOUR GATES SHARE ONE WINDOW
@@ -3529,6 +3712,9 @@ f_confluence(float px) =>
     if gpConf
         n += f_near(px, gpF618, tol) ? 1 : 0
         n += f_near(px, gpF786, tol) ? 1 : 0
+    if ofConf
+        n += f_near(px, ofSupPx, tol) ? 1 : 0
+        n += f_near(px, ofResPx, tol) ? 1 : 0
     n
 
 int confLow  = f_confluence(low)
@@ -3645,8 +3831,15 @@ bool absorbDn = dnaAbsorb and close <  open
 // of bars; proof counted only on the exact bar it fired. Three gates that
 // persist and one that does not can only line up by luck, which is the whole
 // of the "there is a divergence but no signal" complaint.
-bool proofBuyNow  = divProofBuy  or absorbUp or mfTurnUp or oiProofBuy
-bool proofSellNow = divProofSell or absorbDn or mfTurnDn or oiProofSell
+// ofBull / ofBear are the footprint's delta divergence: the bar closed one way
+// while the aggressive flow went the other, so that flow was absorbed. It is
+// the only entry in this list that is not derived from this symbol's own price
+// curve, which is exactly why it is worth having - and why it is off until you
+// have measured it.
+bool ofProofBuy  = ofProof and ofBull
+bool ofProofSell = ofProof and ofBear
+bool proofBuyNow  = divProofBuy  or absorbUp or mfTurnUp or oiProofBuy  or ofProofBuy
+bool proofSellNow = divProofSell or absorbDn or mfTurnDn or oiProofSell or ofProofSell
 bool proofBuy  = ta.barssince(proofBuyNow)  <= alignWin
 bool proofSell = ta.barssince(proofSellNow) <= alignWin
 
@@ -4401,7 +4594,7 @@ plotshape(dnaEffortB or dnaEffortS ? (dnaEffortB ? low : high) : na, "Effort",
 // ============================================================================
 // force_overlay lifts the dashboard onto the PRICE chart instead of leaving it
 // stacked beside the oscillator in the lower pane.
-var table dash = table.new(f_tablePos(tblPos), 4, 18, bgcolor=cTblBg,
+var table dash = table.new(f_tablePos(tblPos), 4, 19, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -4541,6 +4734,21 @@ if showTable and barstate.islast
     f_pair(12, 2, "Profile", profTxt, not inPeriod ? C_WN : tooCoarse ? C_DN : C_UP)
     f_pair(13, 0, "Open int", oiOk ? oiState : "no OI feed", oiCol)
     f_pair(13, 2, "OI z", oiOk ? str.tostring(oiChgZ, "#.#") : "-", math.abs(oiChgZ) > 1.5 ? C_WN : C_NE)
+    // What the footprint engine is seeing, whether or not it is allowed to act
+    // on it. STRENGTH means the bar closed up while the aggressive flow was
+    // selling - those sellers were absorbed. sup / res are confirmed absorption
+    // levels, the prices somebody defended and held.
+    string ofTxt = ofBull ? "STRENGTH" : ofBear ? "WEAKNESS" : "-"
+    if not ofOn
+        ofTxt := "off"
+    else if ofTxt == "-"
+        ofTxt := (na(ofSupPx) ? "" : "sup " + str.tostring(ofSupPx, format.mintick)) +
+             (na(ofSupPx) or na(ofResPx) ? "" : "  ") +
+             (na(ofResPx) ? "" : "res " + str.tostring(ofResPx, format.mintick))
+        if ofTxt == ""
+            ofTxt := "-"
+    f_pair(18, 0, "Order flow", ofTxt, ofBull ? C_UP : ofBear ? C_DN : C_NE)
+    f_pair(18, 2, "Delta swing", na(ofSwing) ? "-" : f_volShort(ofSwing), C_NE)
     f_pair(14, 0, "Structure", trendDir > 0 ? "Bullish" : trendDir < 0 ? "Bearish" : "-",
          trendDir > 0 ? C_UP : trendDir < 0 ? C_DN : C_NE)
     f_pair(14, 2, "Funding", fundOk ? str.tostring(fundVal, "#.####") : "-", C_NE)
@@ -4676,6 +4884,17 @@ if qBig
     alertMsg += "BIG volume cluster. "
 else if qMed
     alertMsg += "Medium volume cluster. "
+
+// Order flow, through the same single alert() the rest of the script uses.
+if ofOn
+    if ofBull
+        alertMsg += "Hidden strength - closed up on selling delta, sellers absorbed. "
+    if ofBear
+        alertMsg += "Hidden weakness - closed down on buying delta, buyers absorbed. "
+    if ofNewSup
+        alertMsg += "Absorption SUPPORT confirmed" + (na(ofSupPx) ? "" : " at " + str.tostring(ofSupPx, format.mintick)) + ". "
+    if ofNewRes
+        alertMsg += "Absorption RESISTANCE confirmed" + (na(ofResPx) ? "" : " at " + str.tostring(ofResPx, format.mintick)) + ". "
 
 if alertMsg != ""
     alert(str.tostring(syminfo.ticker) + " " + timeframe.period + " | " + alertMsg, alert.freq_once_per_bar_close)
