@@ -438,6 +438,11 @@ color cSwing     = input.color(color.new(#b2b5be, 25), "Swing Label Color", grou
 string G_CSIG = "16 - CHART SIGNALS  (location-gated)"
 bool  csigOn_in     = input.bool(true, "Show Buy / Sell on Price Chart", group=G_CSIG,
      tooltip="These are NOT the pane's A/B/C grades. A pane signal only needs momentum. A chart signal needs all four layers to agree:\n\n1 CONTEXT  - regime permits the direction\n2 LOCATION - price at a value area edge or an untested POC\n3 TRIGGER  - WaveTrend cross in the extreme zone\n4 PROOF    - real money flow, absorption, or a delta divergence\n\nYou will see far fewer of these. That is the point.")
+string gateMode  = input.string("Window (legacy)", "Gate Mode",
+     options=["Window (legacy)", "Same event (strict)"], group=G_CSIG,
+     tooltip="WINDOW is what this script has always done and what every measurement so far was taken on. Each gate asks 'did this happen in the last csigWindow + divLbR bars' - eight, on the defaults. The four gates therefore do not have to describe the same event, only the same week, and PROOF is an OR of five sources of which money-flow-crossing-zero is by far the loosest. The practical effect is that the gates qualify on a larger share of bars than the cooldown allows through, so the COOLDOWN is doing the selecting and the four-layer hierarchy is description rather than mechanism.\n\nSAME EVENT anchors everything to one swing. A divergence cannot confirm until divLbR bars after the pivot it measures - that delay is what makes it non-repainting - so the signal is evaluated on the divergence bar and the rejection and the WaveTrend cross must both belong to THAT pivot, within Event Tolerance bars. Divergence stops being one of five options and becomes mandatory: no divergence, no signal.\n\nExpect far fewer trades. That is the point, and it is also the only way the costs come down: on a Binance perp at roughly 0.09 percent round trip against a half-percent stop you are paying about 0.16R a trade, so 588 trades carry ~94R of friction that no signal was ever going to clear.")
+int   gateTol    = input.int(2, "Event Tolerance (bars)", minval=0, maxval=6, group=G_CSIG,
+     tooltip="How far the rejection and the momentum cross may sit from the divergence's own pivot and still count as the same swing. 0 demands they land on the exact pivot bar. Same event mode only.")
 string csigSens  = input.string("Strict (all 4)", "Sensitivity",
      options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)"], group=G_CSIG,
      tooltip="How many of the four gates must pass. Location and trigger are always required - sensitivity only relaxes context and proof.\n\nIf you are seeing no signals at all, this is the dial to turn first.")
@@ -1460,31 +1465,37 @@ if devOk and not na(avgRange) and avgRange > 0
     else
         regime := "TRANSITION"
 
-string ibExt = "n/a"
-float rngRatio = na
-string dayType = "n/a"
-if not na(ibH) and not na(ibL) and devOk
-    float ibRange = ibH - ibL
-    bool extUp = devHi > ibH
-    bool extDn = devLo < ibL
-    if extUp and extDn
-        ibExt := "BOTH"
-    else if extUp
-        ibExt := "UP"
-    else if extDn
-        ibExt := "DOWN"
-    else
-        ibExt := "None"
-    if ibRange > 0
-        rngRatio := (devHi - devLo) / ibRange
+// Moved into a function to keep the main body under Pine's size cap. Three
+// globals, so they come back as a tuple rather than being assigned inside.
+f_dayType() =>
+    string oExt   = "n/a"
+    float  oRatio = na
+    string oDay   = "n/a"
+    if not na(ibH) and not na(ibL) and devOk
+        float ibRange = ibH - ibL
+        bool extUp = devHi > ibH
+        bool extDn = devLo < ibL
         if extUp and extDn
-            dayType := "Neutral"
-        else if rngRatio < 1.15
-            dayType := "Normal"
-        else if rngRatio < 1.8
-            dayType := "Normal var"
+            oExt := "BOTH"
+        else if extUp
+            oExt := "UP"
+        else if extDn
+            oExt := "DOWN"
         else
-            dayType := "Trend day"
+            oExt := "None"
+        if ibRange > 0
+            oRatio := (devHi - devLo) / ibRange
+            if extUp and extDn
+                oDay := "Neutral"
+            else if oRatio < 1.15
+                oDay := "Normal"
+            else if oRatio < 1.8
+                oDay := "Normal var"
+            else
+                oDay := "Trend day"
+    [oExt, oRatio, oDay]
+
+[ibExt, rngRatio, dayType] = f_dayType()
 
 string openType = "n/a"
 if not na(periodOpen) and not na(ibH) and not na(ibL)
@@ -3807,9 +3818,17 @@ if htfOn
     if f_rejDn(htfVah)
         rejHighNow := true
 if balUseLoc and balActive
-    if f_rejUp(balLo) or f_rejUp(balPoc)
+    // balPoc is NOT an entry. The point of control is where the auction found
+    // its fairest price - maximum acceptance, minimum edge - so it is a TARGET
+    // to rotate toward and a level to count in confluence, never a place to
+    // initiate. Fading an extreme back to the POC is the trade; buying the POC
+    // itself is buying the middle of the range. It was in this gate and that
+    // was a straight violation of the model the script claims to run.
+    // npocDn/npocUp stay: an UNTESTED POC is the opposite case, a price the
+    // market never accepted, which is why it acts as a magnet.
+    if f_rejUp(balLo)
         rejLowNow := true
-    if f_rejDn(balHi) or f_rejDn(balPoc)
+    if f_rejDn(balHi)
         rejHighNow := true
 // Absorption levels. Every other level in this gate says where price HAS BEEN -
 // a prior value area edge, an untested POC, an initial balance. An absorption
@@ -4046,6 +4065,38 @@ if csigStrict
     ctxBuy  := not imbDn
     ctxSell := not imbUp
 
+// ---------------------------------------------------------------------------
+// SAME EVENT
+// ---------------------------------------------------------------------------
+// The window mode asks each gate "did this happen recently" and lets recently
+// mean eight bars, independently, in any order. Four things that each happened
+// sometime this week is not four confirmations of one event - and measured
+// against a twenty-bar cooldown it qualifies often enough that the cooldown,
+// not the logic, decides which trades are taken.
+//
+// This anchors on the divergence instead. A divergence is KNOWN divLbR bars
+// after the pivot it measures; that lag is unavoidable and it is exactly what
+// makes it non-repainting. So the signal is evaluated on the bar the
+// divergence confirms, and the other two gates have to belong to the pivot
+// that divergence just measured:
+//
+//   the rejection happened divLbR bars ago, give or take gateTol
+//   the momentum cross happened no earlier than that same pivot
+//
+// and PROOF is the divergence itself. Not one of five. The whole reason this
+// script exists is the divergence; if it cannot carry a signal on its own then
+// that is worth knowing plainly rather than hiding behind an OR with
+// money-flow-crosses-zero, which fires every ten or twenty bars regardless.
+f_evtBuy() =>
+    divProofBuy and math.abs(barsSinceRejLow - divLbR) <= gateTol and ta.barssince(crossUpOk) <= divLbR + gateTol and confAtLowRej >= csigConfMin
+
+f_evtSell() =>
+    divProofSell and math.abs(barsSinceRejHigh - divLbR) <= gateTol and ta.barssince(crossDnOk) <= divLbR + gateTol and confAtHighRej >= csigConfMin
+
+bool strictMode = gateMode == "Same event (strict)"
+bool evtBuy  = strictMode and f_evtBuy()
+bool evtSell = strictMode and f_evtSell()
+
 int gatesBuy  = (ctxBuy ? 1 : 0) + (atLowEdge ? 1 : 0) + (trigBuy ? 1 : 0) + (proofBuy ? 1 : 0)
 int gatesSell = (ctxSell ? 1 : 0) + (atHighEdge ? 1 : 0) + (trigSell ? 1 : 0) + (proofSell ? 1 : 0)
 
@@ -4056,8 +4107,10 @@ else if csigSens == "Loose (location + trigger)"
     needGates := 2
 
 // location and trigger are never optional, whatever the sensitivity
-bool rawBuySig  = csigOn and atLowEdge  and trigBuy  and gatesBuy  >= needGates
-bool rawSellSig = csigOn and atHighEdge and trigSell and gatesSell >= needGates
+// Strict replaces the window test outright; context is the one gate it keeps,
+// because "the regime permits this direction" is a state, not an event.
+bool rawBuySig  = csigOn and (strictMode ? (evtBuy  and ctxBuy)  : (atLowEdge  and trigBuy  and gatesBuy  >= needGates))
+bool rawSellSig = csigOn and (strictMode ? (evtSell and ctxSell) : (atHighEdge and trigSell and gatesSell >= needGates))
 
 // LOGIC ERROR FOUND: these were independent, so a wide bar that touched a low
 // level AND a high level satisfied both location tests and printed BUY and SELL
