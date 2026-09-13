@@ -1094,26 +1094,85 @@ float devVal = na
 float devHi  = na
 float devLo  = na
 bool  devOk  = false
+// How many samples the DRAWN profile is actually built from. The dashboard used
+// to report curH.size(), the persistent array - which on a Daily chart is last
+// period's count, not this one's, and so never warned about the period that was
+// on screen.
+int   devSamples = 0
 array<float> devBins   = array.new<float>(profRows, 0.0)
 array<float> devBinsUp = array.new<float>(profRows, 0.0)
 
 bool profRolling = profRange == "Rolling Lookback"
 
-if barstate.islast and aucOn
-    // Period mode profiles the accumulated lower-timeframe samples. Rolling
-    // mode rebuilds from the last N CHART bars instead - coarser than the
-    // intrabar samples, but it is one pass on one bar and it needs no second
-    // set of persistent arrays competing with the period ones, so it cannot
-    // disturb prior value, the naked POCs or the excess classification.
-    array<float> pfH = curH
-    array<float> pfL = curL
-    array<float> pfV = curV
-    array<float> pfU = curU
+// ----------------------------------------------------------------------------
+// THE SAMPLES THE DEVELOPING PROFILE IS DRAWN FROM.
+//
+// This is a function purely so its ~35 statements sit in their own scope. The
+// main body is close to Pine's size cap and this block is the kind that grows.
+// A function may not reassign a global, but it may MUTATE an array it is handed
+// or one it creates, which is all this does.
+//
+// THE FORMING BAR. Accumulation (section 7) is gated on barClosed, because
+// array pushes are not rolled back between the ticks of an unconfirmed bar and
+// an ungated push would duplicate the whole bar hundreds of times over. The
+// side effect is that the profile always STOPS at the last CLOSED bar. On a 15m
+// chart that hole is fifteen minutes wide and invisible. On a 4h chart it is
+// four hours. On a Daily chart it is a whole day - which is exactly where the
+// histogram looked like it had stopped tracking price, because it had.
+//
+// THE ROLLOVER LAGS THE SAME WAY. Section 6 clears curH on barClosed too, so
+// when the live bar is the one that opens a new period the arrays still hold
+// the WHOLE PREVIOUS PERIOD. On a Daily chart every bar opens a new period, so
+// that chart was drawing yesterday's profile and only ever yesterday's.
+//
+// The cure is not to loosen either gate - they are what keep the real arrays
+// from being corrupted in real time. It is to COPY here and reconstruct the
+// state the arrays WOULD be in had the live bar closed: a new period starts
+// from nothing, a continuing one keeps what it has, and either way the live bar
+// goes on the end. This runs only on the last bar and the copy is rebuilt from
+// scratch every tick, so nothing persists.
+//
+// curH.copy() is not optional. array<float> x = curH ALIASES the real array,
+// and the .clear() below would then wipe the period's samples for good.
+// ----------------------------------------------------------------------------
+f_devSamples() =>
+    array<float> pfH = curH.copy()
+    array<float> pfL = curL.copy()
+    array<float> pfV = curV.copy()
+    array<float> pfU = curU.copy()
+    if not barClosed
+        if isNewPeriod
+            pfH.clear()
+            pfL.clear()
+            pfV.clear()
+            pfU.clear()
+        if inPeriod
+            if ltfOk
+                for i = 0 to lH.size() - 1
+                    float lv = lV.get(i)
+                    if not na(lv)
+                        if lv > 0
+                            pfH.push(lH.get(i))
+                            pfL.push(lL.get(i))
+                            pfV.push(lv)
+                            pfU.push(lC.get(i) > lO.get(i) ? lv : lC.get(i) < lO.get(i) ? 0.0 : lv * 0.5)
+            else
+                float cv = nz(volume)
+                if cv > 0
+                    pfH.push(high)
+                    pfL.push(low)
+                    pfV.push(cv)
+                    pfU.push(close > open ? cv : close < open ? 0.0 : cv * 0.5)
+    // Rolling mode ignores all of the above and rebuilds from the last N CHART
+    // bars - coarser than intrabar samples, but one pass on one bar, and it
+    // needs no second set of persistent arrays competing with the period ones,
+    // so it cannot disturb prior value, the naked POCs or the excess reads.
+    // high[0] is the live bar, so rolling mode never had the forming-bar hole.
     if profRolling
-        pfH := array.new<float>()
-        pfL := array.new<float>()
-        pfV := array.new<float>()
-        pfU := array.new<float>()
+        pfH.clear()
+        pfL.clear()
+        pfV.clear()
+        pfU.clear()
         int look = math.min(profLook, bar_index)
         for i = 0 to look
             float bv = nz(volume[i])
@@ -1122,6 +1181,11 @@ if barstate.islast and aucOn
                 pfL.push(low[i])
                 pfV.push(bv)
                 pfU.push(close[i] > open[i] ? bv : close[i] < open[i] ? 0.0 : bv * 0.5)
+    [pfH, pfL, pfV, pfU]
+
+if barstate.islast and aucOn
+    [pfH, pfL, pfV, pfU] = f_devSamples()
+    devSamples := pfH.size()
     [dP, dVah, dVal, dHi, dLo, dOk, dBins, dBinsU] = f_profile(pfH, pfL, pfV, pfU, profRows, vaPct)
     devPoc := dP
     devVah := dVah
@@ -1807,7 +1871,21 @@ float htfDevPoc = na
 float htfDevVah = na
 float htfDevVal = na
 if htfOn and barstate.islast
-    [kPoc, kVah, kVal, kHi, kLo, kOk, kBins, kBinsU] = f_profile(hH, hL, hV, noSplit, profRows, vaPct)
+    // Same forming-bar hole as the developing period profile, and on a Daily
+    // chart with Weekly HTF value the week only ever holds seven samples, so
+    // one missing bar is a seventh of the evidence.
+    array<float> kH = hH.copy()
+    array<float> kL = hL.copy()
+    array<float> kV = hV.copy()
+    if not barClosed
+        if htfNew
+            kH.clear()
+            kL.clear()
+            kV.clear()
+        kH.push(high)
+        kL.push(low)
+        kV.push(nz(volume))
+    [kPoc, kVah, kVal, kHi, kLo, kOk, kBins, kBinsU] = f_profile(kH, kL, kV, noSplit, profRows, vaPct)
     if kOk
         htfDevPoc := kPoc
         htfDevVah := kVah
@@ -4786,13 +4864,14 @@ f_drawDash() =>
         vwTxt := str.tostring(vwapVal, format.mintick)
         vwCol := close > vwapVal ? C_UP : C_DN
     f_pair(12, 0, "VWAP", vwTxt, vwCol)
-    int barsPer = curH.size()
+    int barsPer = devSamples
     bool tooCoarse = barsPer < 10
     // A frozen profile has to announce itself. Outside the session inPeriod is
     // false and nothing is being added, so every level on the chart is a
     // snapshot of the last close - true when it was drawn, stale now.
     string profTxt = not inPeriod ? "DORMANT - outside session" :
-         tooCoarse ? "TOO FEW BARS" : (ltfOk ? ltfEff + " intra" : "chart bars")
+         tooCoarse ? "TOO FEW (" + str.tostring(barsPer) + ")" :
+         str.tostring(barsPer) + " x " + (ltfOk ? ltfEff + "m" : "chart bar")
     f_pair(12, 2, "Profile", profTxt, not inPeriod ? C_WN : tooCoarse ? C_DN : C_UP)
     f_pair(13, 0, "Open int", oiOk ? oiState : "no OI feed", oiCol)
     f_pair(13, 2, "OI z", oiOk ? str.tostring(oiChgZ, "#.#") : "-", math.abs(oiChgZ) > 1.5 ? C_WN : C_NE)
