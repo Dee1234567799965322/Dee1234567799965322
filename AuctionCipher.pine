@@ -2217,6 +2217,48 @@ if not na(swLo)
         legLoIdx := lIdx
     lastPivDir := -1
 
+// THE PIVOT IS ALWAYS BEHIND THE MARKET.
+//
+// ta.pivothigh(len, len) cannot confirm a high until len bars have printed to
+// its RIGHT. At the default Pivot Strength of 15 that is fifteen bars of lag
+// before the leg's newer end is even allowed to exist - on a daily chart,
+// three working weeks. Price spends those bars running, and a retracement grid
+// measured to a high the market left two weeks ago describes nothing: every
+// level sits below the market and none of them is a retracement of the move
+// actually in progress. That is the "fibs do not move" complaint, and it is not
+// the lookback - the leg is young, its endpoint is just stale.
+//
+// So the newer end tracks the extreme price has REACHED since that pivot, not
+// the pivot itself. This is what a chartist does by hand: the fib is anchored
+// to the actual high of the move, not to the last high a pivot function was
+// willing to confirm.
+//
+// Updated on CONFIRMED bars only. That is what keeps it legal to feed into the
+// confluence count - on the live bar the level is last close's value, so it is
+// the same number a historical bar would have had, and it cannot slide around
+// intrabar and let the live bar pass a gate no closed bar could have passed.
+var float legRun    = na
+var int   legRunFor = na
+// The bar the running extreme was actually made on. Leg AGE is measured from
+// here, not from the pivot: a leg still printing new extremes is alive, and
+// ageing it out on the pivot's date would retire a move that is still running.
+var int   legRunIdx = na
+
+int  newerIdx = na(legHiIdx) or na(legLoIdx) ? na : math.max(legHiIdx, legLoIdx)
+bool hiNewer  = not na(legHiIdx) and not na(legLoIdx) and legHiIdx > legLoIdx
+if not na(newerIdx)
+    if na(legRunFor) or legRunFor != newerIdx
+        // A fresh pivot owns the end. Seed from the pivot itself: every bar
+        // between it and here is its right-hand side, and by the definition of
+        // a pivot none of them is more extreme.
+        legRun    := hiNewer ? legHi : legLo
+        legRunFor := newerIdx
+        legRunIdx := newerIdx
+    else if barClosed
+        float ext = hiNewer ? math.max(legRun, high) : math.min(legRun, low)
+        legRunIdx := ext != legRun ? bar_index : legRunIdx
+        legRun    := ext
+
 // The leg runs from the OLDER pivot to the NEWER one, and the pullback comes
 // back from the newer one towards the older. Expressed that way a single
 // formula covers both directions - level = to + (from - to) * ratio - and the
@@ -2231,11 +2273,17 @@ float gpTo   = na
 int   gpAge  = na
 bool  gpLive = false
 if not na(legHi) and not na(legLo) and not na(legHiIdx) and not na(legLoIdx)
-    bool hiIsNewer = legHiIdx > legLoIdx
-    gpFrom := hiIsNewer ? legLo : legHi
-    gpTo   := hiIsNewer ? legHi : legLo
-    gpAge  := bar_index - math.max(legHiIdx, legLoIdx)
+    gpFrom := hiNewer ? legLo : legHi
+    // na(legRun) cannot happen once both pivots exist, but falling back to the
+    // raw pivot is the right answer if it ever did.
+    gpTo   := na(legRun) ? (hiNewer ? legHi : legLo) : legRun
+    gpAge  := bar_index - nz(legRunIdx, newerIdx)
     gpLive := math.abs(gpTo - gpFrom) > syminfo.mintick and gpAge <= gpLookback
+    // A RETRACEMENT PAST 100% IS NOT A RETRACEMENT. If price has traded back
+    // through the leg's origin the whole grid is void - 0.618 of a leg the
+    // market has already undone is a line with nothing behind it. It used to
+    // keep drawing, which is the other half of why the levels looked stuck.
+    gpLive := gpLive and (hiNewer ? close >= gpFrom : close <= gpFrom)
 
 f_fibAt(float ratio) =>
     gpLive ? gpTo + (gpFrom - gpTo) * ratio : na
