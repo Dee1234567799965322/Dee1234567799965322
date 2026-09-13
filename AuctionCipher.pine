@@ -291,11 +291,12 @@ color  cVwapBand = input.color(color.new(#ff9800, 70), "Band Color", group=G_VWA
 string G_FIB = "14 - FIB LEVELS"
 bool  gpOn_in      = input.bool(true, "Golden Pockets (retracement)", group=G_FIB,
      tooltip="0.5 / 0.618 / 0.786 / 0.886 measured from the most recent confirmed swing. Drawn as lines, so they cost no plot slots.")
-int   gpLookback= input.int(120, "Maximum Leg Age (bars)", minval=10, maxval=1000, group=G_FIB,
-     tooltip="If the leg the fibs are measured from is older than this, they are not drawn.\n\nThis input previously did NOTHING. It was named Swing Lookback, it sat in the menu looking adjustable, and the only place it appeared was as a fallback that could never be reached. Now it does the job the fibs actually needed: a retracement of a leg that finished two hundred bars ago is not a level, it is a leftover, and it is the main reason fibs appear to sit still while price moves away from them.")
+int   gpLookback= input.int(120, "Swing Window (bars)", minval=10, maxval=1000, group=G_FIB,
+     tooltip="If the leg the fibs are measured from is older than this, they are not drawn.\n\nThis input previously did NOTHING. It was named Swing Lookback, it sat in the menu looking adjustable, and the only place it appeared was as a fallback that could never be reached. Now it does the job the fibs actually needed: a retracement of a leg that finished two hundred bars ago is not a level, it is a leftover, and it is the main reason fibs appear to sit still while price moves away from them.\n\nIt is now the window the swing high and swing low are taken from, which is the same idea stated honestly: a leg cannot be older than the window it is measured over.")
 bool  gpConf    = input.bool(false, "Count the Golden Pocket as Confluence", group=G_FIB,
      tooltip="Adds 0.618 and 0.786 to the level confluence count, so a fib that lands on the POC or a naked POC raises the score of that price the way any other stacked level does.\n\nOFF by default and deliberately so: turning it on changes how many signals pass the location gate, and that is a change you should MEASURE rather than assume. The section header has always said confluence is where fibs earn their place - until now the code did not actually do it, so the claim was decoration.")
-int   gpPivotLen= input.int(15, "Pivot Strength", minval=3, maxval=50, group=G_FIB)
+int   gpMinLeg  = input.int(15, "Minimum Leg Length (bars)", minval=3, maxval=50, group=G_FIB,
+     tooltip="How far apart the swing high and the swing low have to be before they count as a leg. A high and a low three bars apart is noise.\n\nThis input used to be Pivot Strength, feeding ta.pivothigh/ta.pivotlow. That is why the fibs lagged: a pivot cannot exist until this many bars have printed to its RIGHT, so the leg's endpoint was always that far behind the market - on a daily chart, three weeks. The leg is now taken from the window's own extremes, which cannot lag, and this number filters noise instead of creating it.")
 int   gpExtend  = input.int(20, "Extend Right (bars)", minval=0, maxval=200, group=G_FIB)
 bool  fibTgtOn_in  = input.bool(false, "Custom Target Fibs (extension)", group=G_FIB,
      tooltip="Your original extension set: 1.47, 1.55, 2.56, 2.60, 2.64 above and -0.20, -0.23, -0.29 below. These are projection targets, not entries.")
@@ -2170,120 +2171,60 @@ plot(vwapOn and vwapBands ? vwapL1 : na, "VWAP -1sd", color=cVwapBand, force_ove
 var array<line>  fibLines  = array.new<line>()
 var array<label> fibLabels = array.new<label>()
 
-float swHi = ta.pivothigh(high, gpPivotLen, gpPivotLen)
-float swLo = ta.pivotlow(low, gpPivotLen, gpPivotLen)
-
-// WHY THE FIBS DID NOT MOVE.
-// These used to be two independent "most recent pivot high" and "most recent
-// pivot low" values. ta.pivothigh and ta.pivotlow do NOT alternate: in a trend
-// you get pivot high after pivot high with no qualifying low between them, so
-// one of the two anchors goes stale and stays stale for hundreds of bars. The
-// range then spanned the whole trend instead of the current leg, and every new
-// pivot moved the levels by a fraction of a percent. They looked frozen because
-// in every way that matters they were.
+// THE LEG IS THE WINDOW'S OWN EXTREMES, NOT A PAIR OF CONFIRMED PIVOTS.
 //
-// Worse, the draw was guarded by `if rng > 0` with rng = lastSwHi - lastSwLo.
-// A pivot low ABOVE the last pivot high - an ordinary higher low after a gap
-// up - made that negative and the entire fib set silently vanished.
+// Two rewrites of this block chased the same symptom and both missed. First it
+// was two independent "most recent pivot" values, which do not alternate, so one
+// anchor went stale for hundreds of bars. Then it was an alternating pivot leg
+// with a running extreme bolted on, plus a rule that voided the leg once price
+// retraced past 100%. That rule is correct in theory and useless in practice:
+// on any chart where price has run beyond the last confirmed swing origin - a
+// completely ordinary thing for price to do - it deleted the fibs entirely.
+// Drawing nothing is worse than drawing a stale level, because there is nothing
+// left to judge.
 //
-// This is a proper alternating leg instead. Two highs in a row do not make a
-// leg, they EXTEND one, so the more extreme of the two is kept and the pairing
-// stays high-to-low.
-var float legHi    = na
-var float legLo    = na
-var int   legHiIdx = na
-var int   legLoIdx = na
-var int   lastPivDir = 0
-
-if not na(swHi)
-    int hIdx = bar_index - gpPivotLen
-    if lastPivDir == 1
-        if na(legHi) or swHi > legHi
-            legHi := swHi
-            legHiIdx := hIdx
-    else
-        legHi := swHi
-        legHiIdx := hIdx
-    lastPivDir := 1
-
-if not na(swLo)
-    int lIdx = bar_index - gpPivotLen
-    if lastPivDir == -1
-        if na(legLo) or swLo < legLo
-            legLo := swLo
-            legLoIdx := lIdx
-    else
-        legLo := swLo
-        legLoIdx := lIdx
-    lastPivDir := -1
-
-// THE PIVOT IS ALWAYS BEHIND THE MARKET.
+// The mistake in all three was using ta.pivothigh/ta.pivotlow at all. A pivot
+// cannot be confirmed until Pivot Strength bars have printed to its RIGHT, so
+// the leg's endpoint is structurally behind the market - fifteen bars behind at
+// the old default, three weeks on a daily chart - and no amount of patching
+// downstream can put back information the anchor does not have yet.
 //
-// ta.pivothigh(len, len) cannot confirm a high until len bars have printed to
-// its RIGHT. At the default Pivot Strength of 15 that is fifteen bars of lag
-// before the leg's newer end is even allowed to exist - on a daily chart,
-// three working weeks. Price spends those bars running, and a retracement grid
-// measured to a high the market left two weeks ago describes nothing: every
-// level sits below the market and none of them is a retracement of the move
-// actually in progress. That is the "fibs do not move" complaint, and it is not
-// the lookback - the leg is young, its endpoint is just stale.
+// A fib needs two numbers: where the move started and how far it has got. Both
+// are simply the extremes of the recent window. The more RECENT extreme is the
+// far end of the move, the other is its origin, and that pair cannot go stale,
+// cannot be voided by a breach, and re-anchors by itself the moment price makes
+// a new extreme. It is also what an auto-fib tool does, and what a chartist
+// does by hand.
 //
-// So the newer end tracks the extreme price has REACHED since that pivot, not
-// the pivot itself. This is what a chartist does by hand: the fib is anchored
-// to the actual high of the move, not to the last high a pivot function was
-// willing to confirm.
+// Computed on EVERY bar, so the levels exist on historical bars too. That is
+// what makes them legal to feed the confluence count: a level that only existed
+// on the live bar would let the live bar pass a gate no historical bar could.
 //
-// Updated on CONFIRMED bars only. That is what keeps it legal to feed into the
-// confluence count - on the live bar the level is last close's value, so it is
-// the same number a historical bar would have had, and it cannot slide around
-// intrabar and let the live bar pass a gate no closed bar could have passed.
-var float legRun    = na
-var int   legRunFor = na
-// The bar the running extreme was actually made on. Leg AGE is measured from
-// here, not from the pivot: a leg still printing new extremes is alive, and
-// ageing it out on the pivot's date would retire a move that is still running.
-var int   legRunIdx = na
+// Clamped to 480 because max_bars_back is 500. The input allows up to 1000, and
+// asking ta.highest for more history than the script reserved is a runtime
+// error, not a silent shrug.
+int   fibLen = math.min(gpLookback, 480)
+float winHi  = ta.highest(high, fibLen)
+float winLo  = ta.lowest(low, fibLen)
+// These come back as offsets <= 0. Closer to zero is more recent.
+int   hiOff  = ta.highestbars(high, fibLen)
+int   loOff  = ta.lowestbars(low, fibLen)
 
-int  newerIdx = na(legHiIdx) or na(legLoIdx) ? na : math.max(legHiIdx, legLoIdx)
-bool hiNewer  = not na(legHiIdx) and not na(legLoIdx) and legHiIdx > legLoIdx
-if not na(newerIdx)
-    if na(legRunFor) or legRunFor != newerIdx
-        // A fresh pivot owns the end. Seed from the pivot itself: every bar
-        // between it and here is its right-hand side, and by the definition of
-        // a pivot none of them is more extreme.
-        legRun    := hiNewer ? legHi : legLo
-        legRunFor := newerIdx
-        legRunIdx := newerIdx
-    else if barClosed
-        float ext = hiNewer ? math.max(legRun, high) : math.min(legRun, low)
-        legRunIdx := ext != legRun ? bar_index : legRunIdx
-        legRun    := ext
-
-// The leg runs from the OLDER pivot to the NEWER one, and the pullback comes
+// The leg runs from the OLDER extreme to the NEWER one, and the pullback comes
 // back from the newer one towards the older. Expressed that way a single
-// formula covers both directions - level = to + (from - to) * ratio - and the
-// inverted case that used to draw nothing now draws correctly instead.
-//
-// Computed on EVERY bar, not inside the last-bar drawing block, so these levels
-// exist on historical bars too. That is what makes them legal to feed into the
-// confluence count: a level that only exists on the live bar would let the live
-// bar pass a gate no historical bar could ever have passed.
-float gpFrom = na
-float gpTo   = na
-int   gpAge  = na
-bool  gpLive = false
-if not na(legHi) and not na(legLo) and not na(legHiIdx) and not na(legLoIdx)
-    gpFrom := hiNewer ? legLo : legHi
-    // na(legRun) cannot happen once both pivots exist, but falling back to the
-    // raw pivot is the right answer if it ever did.
-    gpTo   := na(legRun) ? (hiNewer ? legHi : legLo) : legRun
-    gpAge  := bar_index - nz(legRunIdx, newerIdx)
-    gpLive := math.abs(gpTo - gpFrom) > syminfo.mintick and gpAge <= gpLookback
-    // A RETRACEMENT PAST 100% IS NOT A RETRACEMENT. If price has traded back
-    // through the leg's origin the whole grid is void - 0.618 of a leg the
-    // market has already undone is a line with nothing behind it. It used to
-    // keep drawing, which is the other half of why the levels looked stuck.
-    gpLive := gpLive and (hiNewer ? close >= gpFrom : close <= gpFrom)
+// formula covers both directions - level = to + (from - to) * ratio.
+float gpFrom  = na
+float gpTo    = na
+bool  gpLive  = false
+bool  hiNewer = false
+if not na(winHi) and not na(winLo) and not na(hiOff) and not na(loOff)
+    hiNewer := hiOff > loOff
+    gpFrom  := hiNewer ? winLo : winHi
+    gpTo    := hiNewer ? winHi : winLo
+    // A high and a low three bars apart is noise, not a leg. This is the only
+    // thing Pivot Strength was ever really buying, so the input keeps its slot
+    // and now does the job directly instead of through a lagging pivot.
+    gpLive  := math.abs(gpTo - gpFrom) > syminfo.mintick and math.abs(hiOff - loOff) >= gpMinLeg
 
 f_fibAt(float ratio) =>
     gpLive ? gpTo + (gpFrom - gpTo) * ratio : na
@@ -2320,7 +2261,7 @@ f_drawFibs() =>
     fibLabels.clear()
 
     if gpLive
-        int x1 = math.max(bar_index - 480, math.min(legHiIdx, legLoIdx))
+        int x1 = math.max(bar_index - 480, bar_index + math.min(hiOff, loOff))
         int x2 = bar_index + gpExtend
 
         if gpOn
