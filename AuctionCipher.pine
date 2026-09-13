@@ -583,6 +583,16 @@ bool  ofConf    = input.bool(false, "Count Absorption in Confluence", group=G_OF
 bool  ofProof   = input.bool(false, "Count Delta Divergence as Proof", group=G_OF,
      tooltip="Lets hidden strength - a bar closing UP while net flow was SELLING - satisfy the PROOF gate, and hidden weakness the reverse.\n\nThis is the one piece of evidence in the whole script that no oscillator can reach: it says the aggressive side was absorbed and price went the wrong way for them. OFF by default for the same reason as the others - measure before you trust it.")
 
+string G_FDV = "27 - FORMING DIVERGENCE  (early warning, not a signal)"
+bool  fdvOn   = input.bool(true, "Show Forming Divergences", group=G_FDV,
+     tooltip="Marks a divergence WHILE IT IS STILL FORMING - price below the last confirmed pivot low while the oscillator holds above it - instead of waiting the divLbR bars a pivot needs to confirm. On a 5m chart with the default 5 right-bars that is twenty-five minutes earlier.\n\nIt is PROVISIONAL. It updates every tick and it can vanish if the low keeps going. That is the honest trade: a confirmed divergence is late but real, a forming one is early but might not finish. Nothing here feeds a signal, the gates, or the statistics - the measured numbers are exactly what they were.")
+bool  fdvZone = input.bool(true, "Only in the Extreme Zone", group=G_FDV,
+     tooltip="Require the oscillator to be past Oversold 1 / Overbought 1. A divergence in the middle of the range is noise.")
+bool  fdvLoc  = input.bool(true, "Only at an Auction Level", group=G_FDV,
+     tooltip="Require the LOCATION gate to be open - price at a value area edge, an untested POC, the initial balance, HTF value. A forming divergence in the middle of value is a wiggle.")
+color cFdvUp  = input.color(#26a69a, "Forming Bull", inline="fdv", group=G_FDV)
+color cFdvDn  = input.color(#ef5350, "Forming Bear", inline="fdv", group=G_FDV)
+
 string G_AUD = "26 - GATE AUDIT  (diagnostic)"
 string audPos = input.string("Middle Left", "Audit Table Position",
      options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=G_AUD)
@@ -2030,54 +2040,70 @@ var array<float> hcH = array.new<float>()
 var array<float> hcL = array.new<float>()
 var array<float> hcC = array.new<float>()
 
-var float hcLiveO = na
-var float hcLiveH = na
-var float hcLiveL = na
-var int   hcOpenBar = na
-var int   hcHiBar   = na
-var int   hcLoBar   = na
-
 var array<box>   hcBoxes  = array.new<box>()
 var array<line>  hcLines  = array.new<line>()
 var array<label> hcLabels = array.new<label>()
 
 bool hcNew = htfcOn and timeframe.change(htfcTf)
 
-if htfcOn
-    if hcNew
-        // The bar that opens a new HTF period is the bar AFTER the old one
-        // closed, so the candle just finished closed at close[1].
-        if barClosed and not na(hcLiveO)
-            hcO.push(hcLiveO)
-            hcH.push(hcLiveH)
-            hcL.push(hcLiveL)
-            hcC.push(close[1])
-            while hcO.size() > htfcCount - 1
-                hcO.shift()
-                hcH.shift()
-                hcL.shift()
-                hcC.shift()
-        hcLiveO   := open
-        hcLiveH   := high
-        hcLiveL   := low
-        hcOpenBar := bar_index
-        hcHiBar   := bar_index
-        hcLoBar   := bar_index
-    else
-        if high > nz(hcLiveH, high)
-            hcLiveH := high
-            hcHiBar := bar_index
-        if low < nz(hcLiveL, low)
-            hcLiveL := low
-            hcLoBar := bar_index
-        if na(hcLiveO)
-            // first bars of the chart, before any period boundary has been seen
-            hcLiveO   := open
-            hcLiveH   := high
-            hcLiveL   := low
-            hcOpenBar := bar_index
-            hcHiBar   := bar_index
-            hcLoBar   := bar_index
+// Moved into a function to keep the main body under Pine's size cap. The six
+// values are a persistent ARRAY rather than six scalars, for the same reason
+// the ledger and the gate audit are: a Pine function may not assign a global
+// but may mutate an array it can see. A tuple return does not work here - the
+// state has to be READ to be updated, so it cannot be declared by its own call.
+var array<float> hcs = array.new<float>(6, na)
+
+// Every mutation below is either idempotent on a re-run of the same bar (a
+// running max, a reset to this bar's own open/high/low) or gated on barClosed
+// (the push into the completed-candle arrays). That is what makes an array -
+// which does NOT roll back between the ticks of a live bar - safe here where a
+// plain counter would not be.
+f_htfcState() =>
+    if htfcOn
+        if hcNew
+            // The bar that opens a new HTF period is the bar AFTER the old one
+            // closed, so the candle just finished closed at close[1].
+            if barClosed and not na(hcs.get(0))
+                hcO.push(hcs.get(0))
+                hcH.push(hcs.get(1))
+                hcL.push(hcs.get(2))
+                hcC.push(close[1])
+                while hcO.size() > htfcCount - 1
+                    hcO.shift()
+                    hcH.shift()
+                    hcL.shift()
+                    hcC.shift()
+            hcs.set(0, open)
+            hcs.set(1, high)
+            hcs.set(2, low)
+            hcs.set(3, bar_index)
+            hcs.set(4, bar_index)
+            hcs.set(5, bar_index)
+        else
+            if high > nz(hcs.get(1), high)
+                hcs.set(1, high)
+                hcs.set(4, bar_index)
+            if low < nz(hcs.get(2), low)
+                hcs.set(2, low)
+                hcs.set(5, bar_index)
+            if na(hcs.get(0))
+                // first bars of the chart, before any period boundary has been seen
+                hcs.set(0, open)
+                hcs.set(1, high)
+                hcs.set(2, low)
+                hcs.set(3, bar_index)
+                hcs.set(4, bar_index)
+                hcs.set(5, bar_index)
+
+f_htfcState()
+
+float hcLiveO   = hcs.get(0)
+float hcLiveH   = hcs.get(1)
+float hcLiveL   = hcs.get(2)
+int   hcOpenBar = int(hcs.get(3))
+int   hcHiBar   = int(hcs.get(4))
+int   hcLoBar   = int(hcs.get(5))
+
 
 // Moved into a function to keep the main body under Pine's size cap.
 f_drawHtfCandles() =>
@@ -2844,6 +2870,45 @@ f_divergence(float osc, int lbL, int lbR) =>
     [bullReg, bearReg, bullHid, bearHid, prevLowV, prevLowI, prevHighV, prevHighI]
 
 [wtBull, wtBear, wtBullH, wtBearH, wtPLV, wtPLI, wtPHV, wtPHI] = f_divergence(wt2, divLbL, divLbR)
+
+// ============================================================================
+// 18b. THE DIVERGENCE YOU CAN SEE BEFORE THE CODE CAN
+// ----------------------------------------------------------------------------
+// A confirmed divergence needs ta.pivotlow(osc, divLbL, divLbR), and a pivot
+// does not exist until divLbR bars have printed to its RIGHT. At the default 5
+// that is five bars of lag - twenty-five minutes on a 5m chart. So when you are
+// watching a low form and the oscillator is plainly holding up against it, the
+// code is not blind and it is not broken: it is waiting, because a divergence
+// that confirmed instantly would be one that can un-print, and every backtest
+// number built on it would be a lie.
+//
+// That lag is not negotiable if the statistics are to mean anything. What IS
+// possible is to show the thing WHILE IT FORMS, clearly marked as provisional,
+// and keep it out of the measured path entirely.
+//
+// FORMING means: price has gone BELOW the last confirmed pivot low while the
+// oscillator is holding ABOVE the value it had there. That is the definition of
+// a bullish divergence - the only difference from the confirmed version is that
+// this low has not finished being a low yet. It updates tick by tick and it can
+// disappear. That is exactly what you are looking at with your eyes.
+//
+// It touches nothing. Not chartBuy, not the gates, not the ledger, not the
+// statistics table. It is a heads-up, and the measured signal is unchanged.
+// ============================================================================
+float wtPivLo = ta.pivotlow(wt2, divLbL, divLbR)
+float wtPivHi = ta.pivothigh(wt2, divLbL, divLbR)
+var float pvLoOsc = na
+var float pvLoPx  = na
+var float pvHiOsc = na
+var float pvHiPx  = na
+if not na(wtPivLo)
+    pvLoOsc := wt2[divLbR]
+    pvLoPx  := low[divLbR]
+if not na(wtPivHi)
+    pvHiOsc := wt2[divLbR]
+    pvHiPx  := high[divLbR]
+
+
 [cvBull, cvBear, cvBullH, cvBearH, cvPLV, cvPLI, cvPHV, cvPHI] = f_divergence(cvdNorm, divLbL, divLbR)
 
 // REGULAR and HIDDEN are kept apart from here on.
@@ -3952,6 +4017,20 @@ int barsSinceRejHigh = ta.barssince(rejHighNow)
 
 bool atLowEdge  = barsSinceRejLow  <= alignWin and confAtLowRej  >= csigConfMin
 bool atHighEdge = barsSinceRejHigh <= alignWin and confAtHighRej >= csigConfMin
+
+// Declared here, not up with the divergence block, because it reads the
+// LOCATION gate and Pine needs that to exist first.
+f_forming() =>
+    bool fb = fdvOn and not na(pvLoOsc) and low < pvLoPx and wt2 > pvLoOsc and (not fdvZone or wt2 <= wtOS1)
+    bool fs = fdvOn and not na(pvHiOsc) and high > pvHiPx and wt2 < pvHiOsc and (not fdvZone or wt2 >= wtOB1)
+    // Only where the auction says the price matters, if asked. A forming
+    // divergence in the middle of value is a wiggle.
+    if fdvLoc
+        fb := fb and atLowEdge
+        fs := fs and atHighEdge
+    [fb, fs]
+
+[formBull, formBear] = f_forming()
 
 // --- TRIGGER
 bool crossUpOk = csigZoneOnly ? (wtCrossUp and wt2 <= wtOS1) : wtCrossUp
@@ -5357,3 +5436,13 @@ if ofOn
 
 if alertMsg != ""
     alert(str.tostring(syminfo.ticker) + " " + timeframe.period + " | " + alertMsg, alert.freq_once_per_bar_close)
+
+// Hollow and small on purpose. A provisional read must not look like the solid
+// BUY / SELL flags the measured engine produces, or it will be traded as one.
+plotshape(formBull ? low : na, title="Forming Bull Divergence", location=location.absolute,
+     style=shape.circle, size=size.tiny, color=color.new(cFdvUp, 25), offset=0, force_overlay=true)
+plotshape(formBear ? high : na, title="Forming Bear Divergence", location=location.absolute,
+     style=shape.circle, size=size.tiny, color=color.new(cFdvDn, 25), offset=0, force_overlay=true)
+alertcondition(formBull, title="Forming bullish divergence", message="Forming bullish divergence - PROVISIONAL, not a confirmed signal")
+alertcondition(formBear, title="Forming bearish divergence", message="Forming bearish divergence - PROVISIONAL, not a confirmed signal")
+
