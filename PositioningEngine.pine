@@ -1,0 +1,434 @@
+//@version=6
+// ============================================================================
+// POSITIONING ENGINE  v1.0
+// ----------------------------------------------------------------------------
+// A DIFFERENT HYPOTHESIS, NOT A BETTER INDICATOR.
+//
+// Auction Cipher was measured to death across two timeframes and twenty
+// instrument-runs. Out of sample it returned +0.29pp on 30m and +0.35pp on 15m
+// against a ~34.6% break-even - zero, twice, with the per-instrument results
+// scrambling completely between the two. The architecture was honest by the
+// end. There was simply no edge in it, because everything it read was derived
+// from price and volume, and anything findable there has been found.
+//
+// This script reads something else. On a perpetual future there is a public
+// number that is NOT in the price series: OPEN INTEREST, the count of contracts
+// outstanding. It says whether a move is being made by people OPENING
+// positions or by people being CLOSED OUT of them. Those are different events
+// that look identical on a candle.
+//
+// THE HYPOTHESIS, stated so it can be killed:
+//
+//   A move driven by forced closure exhausts itself, because the fuel is
+//   finite. When price falls hard AND open interest collapses, the seller was
+//   not choosing to sell - they were liquidated. Once the forced supply is
+//   gone the price it was pushed to has no one defending it. The same in
+//   reverse for a short squeeze.
+//
+//   A move on RISING open interest is the opposite: new money is taking the
+//   other side deliberately, and it has no forced exit.
+//
+// That is a mechanism, not a pattern. It predicts something specific: fade a
+// flush, respect an expansion. This script measures whether that is true.
+//
+// WHAT IT DELIBERATELY DOES NOT DO
+//
+// No value areas, no divergences, no WaveTrend, no structure, no confluence
+// count. Not because those are worthless but because we already measured them
+// at zero, and mixing a tested-null into a new test only launders the null.
+// If this has an edge it has to come from the positioning data alone.
+//
+// REQUIREMENTS
+//
+// A perpetual future whose venue publishes open interest to TradingView -
+// BINANCE:BTCUSDT.P, BYBIT:BTCUSD.P and most major perps do. The dashboard
+// says plainly whether the feed arrived. On a symbol without it this script
+// has nothing to say and will tell you so rather than invent a reading.
+// ============================================================================
+indicator("Positioning Engine", shorttitle="POSITIONING", overlay=true,
+     max_boxes_count=200, max_lines_count=200, max_labels_count=300, max_bars_back=500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_DATA = "1 - DATA SOURCES"
+string oiSymIn = input.string("", "Open Interest Symbol (blank = auto)", group=G_DATA,
+     tooltip="Blank derives it as <exchange>:<ticker>_OI, which is how TradingView names the open-interest series for a perp. Fill it in only if the auto-derived name is wrong for your venue.")
+string spotSym = input.string("", "Spot Symbol for Basis (blank = off)", group=G_DATA,
+     tooltip="The SPOT market for the same asset, e.g. BINANCE:BTCUSDT against BINANCE:BTCUSDT.P. The gap between perp and spot is the basis, and a rich basis means longs are paying to be long - crowding you can see before it unwinds. Leave blank to skip the extra data request.")
+string fundSym = input.string("", "Funding Symbol (blank = off)", group=G_DATA,
+     tooltip="Funding rate series if your venue publishes one. Optional - the basis carries most of the same information.")
+
+string G_SIG = "2 - FLUSH DETECTION"
+int   zLen    = input.int(100, "Baseline Length (bars)", minval=20, maxval=500, group=G_SIG,
+     tooltip="How much history the z-scores are measured against. This is the only real free parameter in the script and it is deliberately long, so a single day cannot redefine what 'unusual' means.")
+float oiDropZ = input.float(1.5, "OI Collapse (std dev)", minval=0.5, maxval=4.0, step=0.1, group=G_SIG,
+     tooltip="How far open interest has to fall, against its own recent distribution, before the move counts as forced closure rather than ordinary two-way trade.")
+float rngZ_in = input.float(1.5, "Range Expansion (std dev)", minval=0.5, maxval=4.0, step=0.1, group=G_SIG,
+     tooltip="A flush is violent. A quiet bar that happens to shed open interest is people going home, not people being carried out.")
+bool  needCrowd = input.bool(true, "Require Prior Crowding", group=G_SIG,
+     tooltip="Only fade a flush if the side being flushed was CROWDED going into it - a rich basis before a long flush, a cheap one before a short squeeze. This is the mechanism the whole hypothesis rests on: without crowding there was no fuel, so there is nothing to exhaust.\n\nOFF makes it a pure OI-collapse signal, which is a different and weaker claim. Measure both.")
+int   crowdLb = input.int(24, "Crowding Lookback (bars)", minval=4, maxval=200, group=G_SIG)
+
+string G_RISK = "3 - RISK"
+float stopPad = input.float(0.25, "Stop Beyond Flush Extreme (ATR)", minval=0.0, maxval=2.0, step=0.05, group=G_RISK)
+float tgtCap  = input.float(2.0, "Target (R)", minval=0.5, maxval=10.0, step=0.5, group=G_RISK)
+int   cooldown= input.int(10, "Cooldown (bars)", minval=1, maxval=200, group=G_RISK)
+int   horizon = input.int(200, "Outcome Horizon (bars)", minval=20, maxval=1000, group=G_RISK,
+     tooltip="A trade that has reached neither stop nor target within this many bars is marked EXPIRED and counted anyway. Deleting it instead would quietly remove the trades that went nowhere and overstate the win rate.")
+
+string G_VIS = "4 - DISPLAY"
+bool  showSig = input.bool(true, "Show Signals", group=G_VIS)
+bool  showRisk= input.bool(true, "Draw Stop / Target", group=G_VIS)
+bool  showTbl = input.bool(true, "Show Statistics", group=G_VIS)
+bool  showDash= input.bool(true, "Show Positioning Dashboard", group=G_VIS)
+color cBuy    = input.color(#26a69a, "Buy", inline="c", group=G_VIS)
+color cSell   = input.color(#ef5350, "Sell", inline="c", group=G_VIS)
+
+// ============================================================================
+// 2. LIVE-MARKET SAFETY
+// ----------------------------------------------------------------------------
+// Pine re-runs the whole script on every tick of the forming bar. Plain
+// variables roll back before each re-run; ARRAYS and DRAWINGS do not. So every
+// line that appends to an array or creates a drawing is gated on this, or a
+// single live bar writes itself into the record hundreds of times.
+// ============================================================================
+bool barClosed = barstate.isconfirmed
+
+// ============================================================================
+// 3. THE DATA THAT IS NOT IN THE PRICE
+// ============================================================================
+string oiSym = oiSymIn != "" ? oiSymIn : syminfo.prefix + ":" + syminfo.ticker + "_OI"
+float oiRaw  = request.security(oiSym, timeframe.period, close, ignore_invalid_symbol=true)
+bool  oiOk   = not na(oiRaw) and oiRaw > 0
+
+float spotRaw = na
+if spotSym != ""
+    spotRaw := request.security(spotSym, timeframe.period, close, ignore_invalid_symbol=true)
+bool spotOk = not na(spotRaw) and spotRaw > 0
+
+float fundRaw = na
+if fundSym != ""
+    fundRaw := request.security(fundSym, timeframe.period, close, ignore_invalid_symbol=true)
+bool fundOk = not na(fundRaw)
+
+// ============================================================================
+// 4. DERIVED POSITIONING
+// ----------------------------------------------------------------------------
+// Open interest is measured as a PERCENT change, not an absolute one. The
+// absolute number grows by orders of magnitude across a bull market, so a
+// fixed threshold on it would mean something different every year.
+// ============================================================================
+// EVERY ta.* CALL HERE IS UNCONDITIONAL AND AT TOP LEVEL, never inside the
+// ternary that consumes it. ta.sma and ta.stdev carry a rolling window, so they
+// have to be reached on every bar or the window they return is computed from a
+// series with holes in it. Pine warns about this; the warning is right.
+float atr14 = ta.atr(14)
+float oiPct = oiOk and not na(oiRaw[1]) and oiRaw[1] > 0 ? (oiRaw - oiRaw[1]) / oiRaw[1] * 100.0 : 0.0
+float oiSd  = ta.stdev(oiPct, zLen)
+float oiMa  = ta.sma(oiPct, zLen)
+float oiZ   = oiSd > 0 ? (oiPct - oiMa) / oiSd : 0.0
+
+float rng   = high - low
+float rngSd = ta.stdev(rng, zLen)
+float rngMa = ta.sma(rng, zLen)
+float rngZv = rngSd > 0 ? (rng - rngMa) / rngSd : 0.0
+
+// Basis in basis points. Positive means the perp trades ABOVE spot, which is
+// what a crowded long book looks like: people paying a premium to be long.
+//
+// basisBp falls back to 0 rather than na when there is no spot symbol, purely
+// so the two ta calls below stay fed. basisZ is forced to na afterwards, so a
+// missing feed reads as MISSING and never as "flat".
+float basisRaw = spotOk ? (close - spotRaw) / spotRaw * 10000.0 : 0.0
+float basSd    = ta.stdev(basisRaw, zLen)
+float basMa    = ta.sma(basisRaw, zLen)
+float basisBp  = spotOk ? basisRaw : na
+float basisZ   = spotOk and basSd > 0 ? (basisRaw - basMa) / basSd : na
+
+// Was the flushed side actually crowded BEFORE the flush? Measured crowdLb
+// bars back, so the flush bar itself cannot contaminate the reading.
+float basisBefore = spotOk ? basisZ[crowdLb] : na
+float fundBefore  = fundOk ? fundRaw[crowdLb] : na
+bool  longsCrowded  = not needCrowd or (spotOk and not na(basisBefore) and basisBefore > 0) or (fundOk and not na(fundBefore) and fundBefore > 0)
+bool  shortsCrowded = not needCrowd or (spotOk and not na(basisBefore) and basisBefore < 0) or (fundOk and not na(fundBefore) and fundBefore < 0)
+
+// ============================================================================
+// 5. THE FLUSH
+// ----------------------------------------------------------------------------
+// Price runs AND open interest collapses on the same bar. Contracts are being
+// destroyed, not created - somebody's position is being closed for them.
+//
+// Direction matters and it is counter-intuitive the first time: a DOWN bar on
+// collapsing OI is LONGS being liquidated, so the forced flow was SELLING, and
+// the trade is to buy what they were forced to give up.
+// ============================================================================
+bool oiCollapse = oiOk and oiZ <= -oiDropZ
+bool expansion  = rngZv >= rngZ_in
+
+bool flushLong  = oiCollapse and expansion and close < open and longsCrowded
+bool flushShort = oiCollapse and expansion and close > open and shortsCrowded
+
+// ============================================================================
+// 6. SIGNALS
+// ============================================================================
+var int lastBuyBar  = -10000
+var int lastSellBar = -10000
+
+bool rawBuy  = showSig and flushLong  and bar_index - lastBuyBar  > cooldown
+bool rawSell = showSig and flushShort and bar_index - lastSellBar > cooldown
+
+// A bar cannot be both. If it somehow qualifies both ways the evidence is
+// contradictory and neither is taken.
+if rawBuy and rawSell
+    rawBuy  := false
+    rawSell := false
+
+if rawBuy and barClosed
+    lastBuyBar := bar_index
+if rawSell and barClosed
+    lastSellBar := bar_index
+
+// Stop sits beyond the flush bar's own extreme - the price forced flow reached
+// and could not hold. Target is a fixed multiple, capped, so the reward is not
+// a function of how far the flush happened to run.
+float sigStop = rawBuy ? low - atr14 * stopPad : rawSell ? high + atr14 * stopPad : na
+float sigRisk = rawBuy ? close - sigStop : rawSell ? sigStop - close : na
+float sigTgt  = rawBuy ? close + sigRisk * tgtCap : rawSell ? close - sigRisk * tgtCap : na
+
+// ============================================================================
+// 7. TRADE LEDGER
+// ----------------------------------------------------------------------------
+// Fills are at the NEXT bar's open, never at the signal bar's close. The close
+// is a price the bar had already finished making; filling there measures a
+// trade nobody could have taken.
+// ============================================================================
+var array<float> opEntry = array.new<float>()
+var array<float> opStop  = array.new<float>()
+var array<float> opTgt   = array.new<float>()
+var array<int>   opDir   = array.new<int>()
+var array<int>   opBar   = array.new<int>()
+var array<float> opRisk  = array.new<float>()
+
+var bool  pendLong  = false
+var bool  pendShort = false
+var float pendStop  = na
+var float pendTgt   = na
+
+// A Pine function cannot assign a global, but it can mutate an array it sees.
+// Eleven counters in one array for exactly that reason.
+var array<float> led = array.new<float>(8, 0.0)
+int L_WIN = 0
+int L_LOSS = 1
+int L_EXP = 2
+int L_RWIN = 3
+int L_RLOSS = 4
+int L_REXP = 5
+int L_FILL = 6
+int L_SKIP = 7
+
+f_led(int k, float v) =>
+    led.set(k, led.get(k) + v)
+
+f_fill(bool isLong, float st, float tg) =>
+    float fp = open
+    float rk = isLong ? fp - st : st - fp
+    bool ok = rk > 0
+    if ok
+        opEntry.push(fp)
+        opStop.push(st)
+        opTgt.push(tg)
+        opDir.push(isLong ? 1 : -1)
+        opBar.push(bar_index)
+        opRisk.push(rk)
+        f_led(L_FILL, 1)
+    else
+        // the market opened through the stop - not a trade, and counted as
+        // skipped rather than quietly dropped
+        f_led(L_SKIP, 1)
+    ok
+
+// ORDER OF EVENTS INSIDE ONE BAR. Open, then range, then close:
+//   1. fill what was pending, at THIS bar's open
+//   2. resolve stops and targets against THIS bar's range
+//   3. arm the next signal
+// Step 2 before step 3 is what stops a trade resolving on the bar it was
+// entered on, which would be reading extremes that happened before the entry
+// price existed.
+if barClosed and pendLong
+    f_fill(true, pendStop, pendTgt)
+    pendLong := false
+if barClosed and pendShort
+    f_fill(false, pendStop, pendTgt)
+    pendShort := false
+
+f_manage() =>
+    for i = opEntry.size() - 1 to 0
+        int d = opDir.get(i)
+        float st = opStop.get(i)
+        float tg = opTgt.get(i)
+        float en = opEntry.get(i)
+        float rk = opRisk.get(i)
+        bool done = false
+        // The stop is tested FIRST. When one bar contains both the stop and the
+        // target there is no way to know which came first, so the pessimistic
+        // reading is the only honest one.
+        if d == 1
+            if low <= st
+                f_led(L_LOSS, 1)
+                f_led(L_RLOSS, -1.0)
+                done := true
+            else if high >= tg
+                f_led(L_WIN, 1)
+                f_led(L_RWIN, tgtCap)
+                done := true
+        else
+            if high >= st
+                f_led(L_LOSS, 1)
+                f_led(L_RLOSS, -1.0)
+                done := true
+            else if low <= tg
+                f_led(L_WIN, 1)
+                f_led(L_RWIN, tgtCap)
+                done := true
+        if not done and bar_index - opBar.get(i) > horizon
+            f_led(L_EXP, 1)
+            f_led(L_REXP, rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0)
+            done := true
+        if done
+            opEntry.remove(i)
+            opStop.remove(i)
+            opTgt.remove(i)
+            opDir.remove(i)
+            opBar.remove(i)
+            opRisk.remove(i)
+
+if barClosed and opEntry.size() > 0
+    f_manage()
+
+if barClosed and rawBuy and not na(sigTgt)
+    pendLong := true
+    pendStop := sigStop
+    pendTgt  := sigTgt
+if barClosed and rawSell and not na(sigTgt)
+    pendShort := true
+    pendStop  := sigStop
+    pendTgt   := sigTgt
+
+// ============================================================================
+// 8. DRAWING
+// ============================================================================
+var array<box>   rBox = array.new<box>()
+var array<label> rLab = array.new<label>()
+
+f_drawTrade(bool isLong, float e, float st, float tg) =>
+    rBox.push(box.new(bar_index, tg, bar_index + 20, e,
+         bgcolor=color.new(isLong ? cBuy : cSell, 85), border_color=color(na)))
+    rBox.push(box.new(bar_index, e, bar_index + 20, st,
+         bgcolor=color.new(isLong ? cSell : cBuy, 88), border_color=color(na)))
+    while rBox.size() > 40
+        box.delete(rBox.shift())
+
+if showRisk and barClosed and (rawBuy or rawSell) and not na(sigTgt)
+    f_drawTrade(rawBuy, close, sigStop, sigTgt)
+
+plotshape(rawBuy  ? low  : na, title="Flush Long",  location=location.absolute,
+     style=shape.labelup,   text="FLUSH\nLONG",  color=cBuy,  textcolor=#ffffff, size=size.small)
+plotshape(rawSell ? high : na, title="Flush Short", location=location.absolute,
+     style=shape.labeldown, text="FLUSH\nSHORT", color=cSell, textcolor=#ffffff, size=size.small)
+
+// OI direction under the bars, so the state is readable without the table
+plotchar(oiOk and oiCollapse ? true : na, title="OI collapse", char="v", location=location.belowbar,
+     color=#ffea00, size=size.tiny)
+
+alertcondition(rawBuy,  title="Flush long",  message="Long liquidation flush - forced selling exhausted")
+alertcondition(rawSell, title="Flush short", message="Short squeeze flush - forced buying exhausted")
+
+// ============================================================================
+// 9. DASHBOARD
+// ============================================================================
+var table dash = table.new(position.top_right, 2, 9, bgcolor=color.new(#131722, 12),
+     border_color=color.new(#000000, 60), border_width=1)
+
+f_row(int r, string k, string v, color c) =>
+    table.cell(dash, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+f_drawDash() =>
+    f_row(0, "POSITIONING", oiOk ? "OI live" : "NO OI FEED", oiOk ? #26a69a : #ef5350)
+    f_row(1, "OI z", oiOk ? str.tostring(oiZ, "#.##") : "-", oiZ <= -oiDropZ ? #ffea00 : #b2b5be)
+    f_row(2, "OI 1-bar %", oiOk ? str.tostring(oiPct, "#.###") + "%" : "-", oiPct < 0 ? #ef5350 : #26a69a)
+    f_row(3, "Range z", str.tostring(rngZv, "#.##"), rngZv >= rngZ_in ? #ffea00 : #b2b5be)
+    f_row(4, "Basis", spotOk ? str.tostring(basisBp, "#.#") + " bp  (z " + str.tostring(basisZ, "#.#") + ")" : "no spot symbol",
+         spotOk ? (basisBp > 0 ? #26a69a : #ef5350) : #6c7080)
+    f_row(5, "Funding", fundOk ? str.tostring(fundRaw, "#.####") : "no funding symbol", fundOk ? #b2b5be : #6c7080)
+    // What the positioning says about THIS bar, in words.
+    string st = "-"
+    color  sc = #b2b5be
+    if not oiOk
+        st := "no data"
+        sc := #ef5350
+    else if flushLong
+        st := "LONG FLUSH - forced selling"
+        sc := cBuy
+    else if flushShort
+        st := "SHORT SQUEEZE - forced buying"
+        sc := cSell
+    else if oiCollapse
+        st := "OI falling, range too quiet"
+        sc := #ffea00
+    else if oiZ > 1.0
+        st := "NEW POSITIONING - has fuel, do not fade"
+        sc := #ffa726
+    else
+        st := "ordinary two-way"
+    f_row(6, "State", st, sc)
+    f_row(7, "Crowding", not needCrowd ? "not required" :
+         longsCrowded and shortsCrowded ? "both / unknown" :
+         longsCrowded ? "longs crowded" : shortsCrowded ? "shorts crowded" : "neither", #b2b5be)
+    f_row(8, "Open now", str.tostring(opEntry.size()), #b2b5be)
+
+if showDash and barstate.islast
+    f_drawDash()
+
+// ============================================================================
+// 10. STATISTICS
+// ----------------------------------------------------------------------------
+// The same rig that measured Auction Cipher, so the two are comparable and so
+// this one can be killed as cleanly as that one was.
+//
+// Break-even is printed next to the win rate. With a fixed target of tgtCap R
+// and a stop of exactly 1R, a system needs 1/(1+tgtCap) of its trades to win
+// just to stand still. Reading a win rate without it is how people convince
+// themselves a 33% system is broken or a 45% system is good.
+// ============================================================================
+var table st = table.new(position.bottom_left, 2, 9, bgcolor=color.new(#131722, 12),
+     border_color=color.new(#000000, 60), border_width=1)
+
+f_srow(int r, string k, string v, color c) =>
+    table.cell(st, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(st, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+f_drawStats() =>
+    float w = led.get(L_WIN)
+    float l = led.get(L_LOSS)
+    float e = led.get(L_EXP)
+    float n = w + l
+    float allN = n + e
+    float totR = led.get(L_RWIN) + led.get(L_RLOSS) + led.get(L_REXP)
+    float be = 1.0 / (1.0 + tgtCap)
+    float wr = n > 0 ? w / n : na
+    f_srow(0, "MEASURED ON THIS CHART", str.tostring(horizon) + "b", #b2b5be)
+    f_srow(1, "Win / Loss / Expired", str.tostring(int(w)) + " / " + str.tostring(int(l)) + " / " + str.tostring(int(e)), #b2b5be)
+    f_srow(2, "Win rate", n > 0 ? str.tostring(wr * 100, "#.#") + "%  (" + str.tostring(int(n)) + ")" : "-",
+         na(wr) ? #b2b5be : wr > be ? #26a69a : #ef5350)
+    f_srow(3, "Break-even needs", str.tostring(be * 100, "#.#") + "%", #6c7080)
+    f_srow(4, "Edge", n > 0 ? str.tostring((wr - be) * 100, "+#.#") + " pp" : "-",
+         na(wr) ? #b2b5be : wr > be ? #26a69a : #ef5350)
+    f_srow(5, "Total R", str.tostring(totR, "+#.#"), totR > 0 ? #26a69a : #ef5350)
+    f_srow(6, "Expectancy", allN > 0 ? str.tostring(totR / allN, "+#.##") + "R" : "-", totR > 0 ? #26a69a : #ef5350)
+    f_srow(7, "Filled / skipped", str.tostring(int(led.get(L_FILL))) + " / " + str.tostring(int(led.get(L_SKIP))), #6c7080)
+    f_srow(8, "Target", str.tostring(tgtCap, "#.#") + "R  fixed", #6c7080)
+
+if showTbl and barstate.islast
+    f_drawStats()
