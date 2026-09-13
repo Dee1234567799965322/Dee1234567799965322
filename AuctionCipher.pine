@@ -3965,8 +3965,21 @@ bool crossDnOk = csigZoneOnly ? (wtCrossDn and wt2 >= wtOB1) : wtCrossDn
 // coincide. That is why a divergence plainly visible on the oscillator kept
 // producing no signal.
 //
-bool trigBuy  = ta.barssince(crossUpOk) <= alignWin
-bool trigSell = ta.barssince(crossDnOk) <= alignWin
+// Hoisted for the reason spelled out above barsSinceRejLow, and then ignored
+// when I wrote the strict gate: ta.barssince COUNTS BARS, so it has to be
+// reached on EVERY bar. Inside f_evtBuy it sat behind two `and`s, and
+// divProofBuy - the left-most term - is false on the overwhelming majority of
+// bars, so the call almost never ran and the count it returned was wrong from
+// the first skipped bar onward. That is the same trap this file documents twice
+// and I walked into it a third time.
+//
+// It also explains the 8 trades. A corrupted barssince does not fail loudly; it
+// returns a stale number, so the strict gate was testing the cross against a
+// count that had stopped advancing.
+int barsSinceCrossUp = ta.barssince(crossUpOk)
+int barsSinceCrossDn = ta.barssince(crossDnOk)
+bool trigBuy  = barsSinceCrossUp <= alignWin
+bool trigSell = barsSinceCrossDn <= alignWin
 
 // ---------------------------------------------------------------------------
 // DIVERGENCE QUALITY
@@ -4087,11 +4100,14 @@ if csigStrict
 // script exists is the divergence; if it cannot carry a signal on its own then
 // that is worth knowing plainly rather than hiding behind an OR with
 // money-flow-crosses-zero, which fires every ten or twenty bars regardless.
+// Every barssince here is a HOISTED value, never a fresh call. A call placed
+// behind an `and` in this expression would be short-circuited away on most
+// bars and would return a stale count forever after.
 f_evtBuy() =>
-    divProofBuy and math.abs(barsSinceRejLow - divLbR) <= gateTol and ta.barssince(crossUpOk) <= divLbR + gateTol and confAtLowRej >= csigConfMin
+    divProofBuy and math.abs(barsSinceRejLow - divLbR) <= gateTol and barsSinceCrossUp <= divLbR + gateTol and confAtLowRej >= csigConfMin
 
 f_evtSell() =>
-    divProofSell and math.abs(barsSinceRejHigh - divLbR) <= gateTol and ta.barssince(crossDnOk) <= divLbR + gateTol and confAtHighRej >= csigConfMin
+    divProofSell and math.abs(barsSinceRejHigh - divLbR) <= gateTol and barsSinceCrossDn <= divLbR + gateTol and confAtHighRej >= csigConfMin
 
 bool strictMode = gateMode == "Same event (strict)"
 bool evtBuy  = strictMode and f_evtBuy()
