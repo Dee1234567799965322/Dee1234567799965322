@@ -578,6 +578,10 @@ bool  ofConf    = input.bool(false, "Count Absorption in Confluence", group=G_OF
 bool  ofProof   = input.bool(false, "Count Delta Divergence as Proof", group=G_OF,
      tooltip="Lets hidden strength - a bar closing UP while net flow was SELLING - satisfy the PROOF gate, and hidden weakness the reverse.\n\nThis is the one piece of evidence in the whole script that no oscillator can reach: it says the aggressive side was absorbed and price went the wrong way for them. OFF by default for the same reason as the others - measure before you trust it.")
 
+string G_AUD = "26 - GATE AUDIT  (diagnostic)"
+bool  audOn = input.bool(false, "Show Gate Audit", group=G_AUD,
+     tooltip="Counts, over every bar this chart has loaded, how often each of the four gates was open, how often all four were open together, and how many of those became signals.\n\nThis answers one question and it is the most important question you can ask a rule set: is the LOGIC selecting the trades, or is the cooldown? If all four gates are open on a large share of bars, the four-layer hierarchy is decoration and the Cooldown input is the real strategy. The PROOF breakdown says the same thing about divergence specifically - if divergence supplies a small share of proofs, then divergence is not what the system trades on, whatever the description says.")
+
 string G_GEX = "25 - GAMMA EXPOSURE  (levels you supply)"
 // WHY THESE ARE TYPED IN AND NOT COMPUTED.
 //
@@ -1306,7 +1310,9 @@ if devOk
 // ============================================================================
 // 10. LOW VOLUME NODES
 // ============================================================================
-if barstate.islast and aucOn
+// Moved into a function to keep the main body under Pine's size cap. It writes
+// no global - it only deletes and rebuilds the low-volume-node lines.
+f_drawLvn() =>
     for l in lvnLines
         line.delete(l)
     lvnLines.clear()
@@ -1327,6 +1333,9 @@ if barstate.islast and aucOn
                             lvnLines.push(line.new(lvnX1, py, time, py, xloc=xloc.bar_time,
                                  color=cLvn, style=line.style_dashed, width=1,
                                  extend=extend.right, force_overlay=true))
+
+if barstate.islast and aucOn
+    f_drawLvn()
 
 // ============================================================================
 // 11. NAKED POC MAINTENANCE
@@ -4136,6 +4145,40 @@ if csigOneTrade and (anyLongOpen or anyShortOpen)
 
 var int lastBuyBar = -9999
 var int lastSellBar = -9999
+// ============================================================================
+// 19h2. GATE AUDIT
+// ----------------------------------------------------------------------------
+// A rule set is only its rules if the rules are what select the trades. If all
+// four gates stand open on a large share of bars then the hierarchy is not
+// choosing anything - the cooldown is - and "four independent confirmations"
+// describes the comment block rather than the code.
+//
+// An array rather than sixteen scalars for the usual reason: a Pine function
+// may not assign a global but may mutate an array it is handed, and the tally
+// has to live in a function to keep the main body under the size cap.
+// ============================================================================
+var array<float> gaud = array.new<float>(16, 0.0)
+
+f_audit(bool cB, bool lB, bool tB, bool pB, bool sB,
+         bool cS, bool lS, bool tS, bool pS, bool sS,
+         bool pDiv, bool pMf, bool pAbs) =>
+    gaud.set(0,  gaud.get(0)  + 1)
+    gaud.set(1,  gaud.get(1)  + (cB ? 1 : 0))
+    gaud.set(2,  gaud.get(2)  + (lB ? 1 : 0))
+    gaud.set(3,  gaud.get(3)  + (tB ? 1 : 0))
+    gaud.set(4,  gaud.get(4)  + (pB ? 1 : 0))
+    gaud.set(5,  gaud.get(5)  + (cB and lB and tB and pB ? 1 : 0))
+    gaud.set(6,  gaud.get(6)  + (sB ? 1 : 0))
+    gaud.set(7,  gaud.get(7)  + (cS ? 1 : 0))
+    gaud.set(8,  gaud.get(8)  + (lS ? 1 : 0))
+    gaud.set(9,  gaud.get(9)  + (tS ? 1 : 0))
+    gaud.set(10, gaud.get(10) + (pS ? 1 : 0))
+    gaud.set(11, gaud.get(11) + (cS and lS and tS and pS ? 1 : 0))
+    gaud.set(12, gaud.get(12) + (sS ? 1 : 0))
+    gaud.set(13, gaud.get(13) + (pDiv ? 1 : 0))
+    gaud.set(14, gaud.get(14) + (pMf  ? 1 : 0))
+    gaud.set(15, gaud.get(15) + (pAbs ? 1 : 0))
+
 bool chartBuy = false
 bool chartSell = false
 if rawBuySig and bar_index - lastBuyBar > csigCool
@@ -4144,6 +4187,11 @@ if rawBuySig and bar_index - lastBuyBar > csigCool
 if rawSellSig and bar_index - lastSellBar > csigCool
     chartSell := true
     lastSellBar := bar_index
+
+// Tally AFTER cooldown, so the gap between "all four gates open" and "a signal
+// fired" is exactly the number of setups the cooldown threw away.
+if audOn and barClosed
+    f_audit(ctxBuy, atLowEdge, trigBuy, proofBuy, chartBuy, ctxSell, atHighEdge, trigSell, proofSell, chartSell, divProofBuy, mfTurnUp, absorbUp)
 
 
 // --- draw the trade
@@ -4539,6 +4587,47 @@ f_pair2(int r, string k, string v, color c) =>
     table.cell(stat, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
     table.cell(stat, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
 
+var table aud = table.new(f_tablePos(statPos) == position.bottom_left ? position.top_right : position.bottom_left,
+     2, 13, bgcolor=cTblBg, border_color=color.new(#000000, 75), border_width=1,
+     frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
+
+f_aud(int r, string k, string v, color c) =>
+    table.cell(aud, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(aud, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+f_audPct(float hit, float tot) =>
+    tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%" : "-"
+
+f_drawAudit() =>
+    float bars = gaud.get(0)
+    // A gate open on most bars is not a gate. Red is the warning.
+    f_aud(0, "GATE AUDIT", str.tostring(int(bars)) + " bars", cTxt)
+    f_aud(1, "Context open",  f_audPct(gaud.get(1), bars) + " / " + f_audPct(gaud.get(7), bars),
+         gaud.get(1) > bars * 0.8 ? C_DN : C_NE)
+    f_aud(2, "Location open", f_audPct(gaud.get(2), bars) + " / " + f_audPct(gaud.get(8), bars),
+         gaud.get(2) > bars * 0.5 ? C_DN : C_NE)
+    f_aud(3, "Trigger open",  f_audPct(gaud.get(3), bars) + " / " + f_audPct(gaud.get(9), bars),
+         gaud.get(3) > bars * 0.5 ? C_DN : C_NE)
+    f_aud(4, "Proof open",    f_audPct(gaud.get(4), bars) + " / " + f_audPct(gaud.get(10), bars),
+         gaud.get(4) > bars * 0.7 ? C_DN : C_NE)
+    f_aud(5, "ALL FOUR open", f_audPct(gaud.get(5), bars) + " / " + f_audPct(gaud.get(11), bars),
+         gaud.get(5) > bars * 0.1 ? C_DN : C_UP)
+    f_aud(6, "Signals fired", str.tostring(int(gaud.get(6))) + " / " + str.tostring(int(gaud.get(12))), cTxt)
+    // The number that decides whether the logic or the cooldown is the strategy.
+    float qual = gaud.get(5) + gaud.get(11)
+    float took = gaud.get(6) + gaud.get(12)
+    f_aud(7, "Cooldown discarded", str.tostring(int(qual - took)) + "  (" + f_audPct(qual - took, qual) + ")",
+         qual > 0 and (qual - took) / qual > 0.8 ? C_DN : C_NE)
+    f_aud(8, "PROOF came from", "", color.new(cTxt, 40))
+    float pd = gaud.get(13)
+    float pm = gaud.get(14)
+    float pa = gaud.get(15)
+    float ptot = pd + pm + pa
+    f_aud(9,  "  divergence", str.tostring(int(pd)) + "  " + f_audPct(pd, ptot), ptot > 0 and pd / ptot < 0.2 ? C_DN : C_UP)
+    f_aud(10, "  money flow", str.tostring(int(pm)) + "  " + f_audPct(pm, ptot), C_NE)
+    f_aud(11, "  absorption", str.tostring(int(pa)) + "  " + f_audPct(pa, ptot), C_NE)
+    f_aud(12, "red = too permissive", "", color.new(cTxt, 55))
+
 // Moved into a function to keep the main body under Pine's size cap.
 f_drawStats() =>
     table.cell(stat, 0, 0, "MEASURED ON THIS CHART", text_color=cTxt, text_size=size.tiny, text_halign=text.align_left)
@@ -4586,6 +4675,9 @@ f_drawStats() =>
 
 if statOn and barstate.islast
     f_drawStats()
+
+if audOn and barstate.islast
+    f_drawAudit()
 
 // THE ONLY MARKERS THAT MEAN "TRADE". Labelled boxes, not triangles, so they
 // can never be mistaken for the DNA or momentum annotations around them.
