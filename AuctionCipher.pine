@@ -1136,11 +1136,16 @@ bool profRolling = profRange == "Rolling Lookback"
 // and the .clear() below would then wipe the period's samples for good.
 // ----------------------------------------------------------------------------
 f_devSamples() =>
-    array<float> pfH = curH.copy()
-    array<float> pfL = curL.copy()
-    array<float> pfV = curV.copy()
-    array<float> pfU = curU.copy()
-    if not barClosed
+    // Rolling mode ignores the accumulated samples entirely, so it must not pay
+    // to copy them: curH can hold 20,000 floats and this runs on every tick of
+    // the last bar. Four arrays of that size copied and then immediately thrown
+    // away was the difference between a redraw and a timeout.
+    bool useAcc = not profRolling
+    array<float> pfH = useAcc ? curH.copy() : array.new<float>()
+    array<float> pfL = useAcc ? curL.copy() : array.new<float>()
+    array<float> pfV = useAcc ? curV.copy() : array.new<float>()
+    array<float> pfU = useAcc ? curU.copy() : array.new<float>()
+    if useAcc and not barClosed
         if isNewPeriod
             pfH.clear()
             pfL.clear()
@@ -1169,10 +1174,6 @@ f_devSamples() =>
     // so it cannot disturb prior value, the naked POCs or the excess reads.
     // high[0] is the live bar, so rolling mode never had the forming-bar hole.
     if profRolling
-        pfH.clear()
-        pfL.clear()
-        pfV.clear()
-        pfU.clear()
         int look = math.min(profLook, bar_index)
         for i = 0 to look
             float bv = nz(volume[i])
@@ -4122,8 +4123,6 @@ f_closeReversals() =>
             opRisk.remove(i)
             opRPlan.remove(i)
 
-if closeOnReversal and barClosed and opEntry.size() > 0
-    f_closeReversals()
 
 bool fillNextOpen = riskFill == "Next bar open (realistic)"
 
@@ -4157,49 +4156,6 @@ f_fillPending(bool isLong, float st, float tg) =>
         if riskOn
             f_drawTrade(isLong, fillP, st, tg, fR)
     taken
-
-// if the market opened past the stop, or the move to the open ate enough of the
-// edge that the setup no longer clears its own minimum, it is not a trade any
-// more. Counted as unfilled, not hidden.
-if barClosed and pendLong
-    if not f_fillPending(true, pendStop, pendTgt)
-        sigSkip += 1
-    pendLong := false
-if barClosed and pendShort
-    if not f_fillPending(false, pendStop, pendTgt)
-        sigSkip += 1
-    pendShort := false
-
-if chartBuy and not na(rkTgtL) and barClosed
-    if fillNextOpen
-        pendLong := true
-        pendStop := rkStopL
-        pendTgt  := rkTgtL
-    else
-        opEntry.push(rkEntry)
-        opStop.push(rkStopL)
-        opTgt.push(rkTgtL)
-        opDir.push(1)
-        opBar.push(bar_index)
-        opRisk.push(rkRiskL)
-        opRPlan.push(rkRL)
-        if riskOn
-            f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
-if chartSell and not na(rkTgtS) and barClosed
-    if fillNextOpen
-        pendShort := true
-        pendStop  := rkStopS
-        pendTgt   := rkTgtS
-    else
-        opEntry.push(rkEntry)
-        opStop.push(rkStopS)
-        opTgt.push(rkTgtS)
-        opDir.push(-1)
-        opBar.push(bar_index)
-        opRisk.push(rkRiskS)
-        opRPlan.push(rkRS)
-        if riskOn
-            f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
 
 // The take-profit marker is derived from THIS loop rather than from a second
 // parallel ledger of its own. That duplicate ledger was pushed at signal time,
@@ -4285,8 +4241,86 @@ f_manageTrades() =>
             opRPlan.remove(i)
     hit
 
+// if the market opened past the stop, or the move to the open ate enough of the
+// edge that the setup no longer clears its own minimum, it is not a trade any
+// more. Counted as unfilled, not hidden.
+if barClosed and pendLong
+    if not f_fillPending(true, pendStop, pendTgt)
+        sigSkip += 1
+    pendLong := false
+if barClosed and pendShort
+    if not f_fillPending(false, pendStop, pendTgt)
+        sigSkip += 1
+    pendShort := false
+
+// ----------------------------------------------------------------------------
+// ORDER OF EVENTS INSIDE ONE BAR. This sequence is the whole point, and it used
+// to be scrambled: the reversal close ran FIRST, at the top of the block, then
+// the fill, then new signals, and stops and targets were resolved LAST, three
+// hundred lines further down. Two things were wrong with that.
+//
+// ONE - a trade the bar had already STOPPED OUT could be flat-closed by a
+// reversal signal before anything looked at the low. The stop is touched
+// intrabar; the reversal close marks to the CLOSE. So a trade that lost its
+// full 1R was booked at whatever the close happened to be, which on a reversal
+// bar is usually far better. That is an optimistic bias, it lands entirely in
+// the flat bucket, and the flat bucket is exactly what the reversal-close
+// setting is judged on.
+//
+// TWO - in "Signal bar close" fill mode a trade was pushed and then resolved
+// against the SAME bar's high and low. Those extremes happened BEFORE the entry
+// price existed. That is look-ahead: the trade could be recorded as hitting a
+// target on a high it was never live for.
+//
+// Chronological order within the bar is open, then intrabar, then close:
+//   1. fill what was pending, at this bar's OPEN            (above)
+//   2. resolve stops and targets against this bar's RANGE   (here)
+//   3. flat-close what a reversal invalidates, at the CLOSE (here)
+//   4. arm the next signal                                  (below)
+//
+// Step 2 before step 3 means a stop that was touched wins over the flat. Step 2
+// before step 4 means a trade entered at the close cannot resolve on the bar it
+// was entered on, which is what removes the look-ahead. A trade FILLED at this
+// bar's open is still resolved on this bar, correctly - it was live for the
+// whole range.
+// ----------------------------------------------------------------------------
 if opEntry.size() > 0 and barClosed
     tpHit := f_manageTrades()
+
+if closeOnReversal and barClosed and opEntry.size() > 0
+    f_closeReversals()
+
+if chartBuy and not na(rkTgtL) and barClosed
+    if fillNextOpen
+        pendLong := true
+        pendStop := rkStopL
+        pendTgt  := rkTgtL
+    else
+        opEntry.push(rkEntry)
+        opStop.push(rkStopL)
+        opTgt.push(rkTgtL)
+        opDir.push(1)
+        opBar.push(bar_index)
+        opRisk.push(rkRiskL)
+        opRPlan.push(rkRL)
+        if riskOn
+            f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
+if chartSell and not na(rkTgtS) and barClosed
+    if fillNextOpen
+        pendShort := true
+        pendStop  := rkStopS
+        pendTgt   := rkTgtS
+    else
+        opEntry.push(rkEntry)
+        opStop.push(rkStopS)
+        opTgt.push(rkTgtS)
+        opDir.push(-1)
+        opBar.push(bar_index)
+        opRisk.push(rkRiskS)
+        opRPlan.push(rkRS)
+        if riskOn
+            f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
+
 
 sigOpen := opEntry.size()
 
