@@ -441,7 +441,7 @@ bool  csigOn_in     = input.bool(true, "Show Buy / Sell on Price Chart", group=G
 string gateMode  = input.string("Same event (strict)", "Gate Mode",
      options=["Window (legacy)", "Same event (strict)"], group=G_CSIG,
      tooltip="WINDOW is what this script has always done and what every measurement so far was taken on. Each gate asks 'did this happen in the last csigWindow + divLbR bars' - eight, on the defaults. The four gates therefore do not have to describe the same event, only the same week, and PROOF is an OR of five sources of which money-flow-crossing-zero is by far the loosest. The practical effect is that the gates qualify on a larger share of bars than the cooldown allows through, so the COOLDOWN is doing the selecting and the four-layer hierarchy is description rather than mechanism.\n\nSAME EVENT anchors everything to one swing. A divergence cannot confirm until divLbR bars after the pivot it measures - that delay is what makes it non-repainting - so the signal is evaluated on the divergence bar and the rejection and the WaveTrend cross must both belong to THAT pivot, within Event Tolerance bars. Divergence stops being one of five options and becomes mandatory: no divergence, no signal.\n\nExpect far fewer trades. That is the point, and it is also the only way the costs come down: on a Binance perp at roughly 0.09 percent round trip against a half-percent stop you are paying about 0.16R a trade, so 588 trades carry ~94R of friction that no signal was ever going to clear.")
-int   gateTol    = input.int(2, "Event Tolerance (bars)", minval=0, maxval=6, group=G_CSIG,
+int   gateTol    = input.int(4, "Event Tolerance (bars)", minval=0, maxval=6, group=G_CSIG,
      tooltip="How far the rejection and the momentum cross may sit from the divergence's own pivot and still count as the same swing. 0 demands they land on the exact pivot bar. Same event mode only.")
 string csigSens  = input.string("Strict (all 4)", "Sensitivity",
      options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)"], group=G_CSIG,
@@ -584,6 +584,8 @@ bool  ofProof   = input.bool(false, "Count Delta Divergence as Proof", group=G_O
      tooltip="Lets hidden strength - a bar closing UP while net flow was SELLING - satisfy the PROOF gate, and hidden weakness the reverse.\n\nThis is the one piece of evidence in the whole script that no oscillator can reach: it says the aggressive side was absorbed and price went the wrong way for them. OFF by default for the same reason as the others - measure before you trust it.")
 
 string G_AUD = "26 - GATE AUDIT  (diagnostic)"
+string audPos = input.string("Middle Left", "Audit Table Position",
+     options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=G_AUD)
 bool  audOn = input.bool(true, "Show Gate Audit", group=G_AUD,
      tooltip="Counts, over every bar this chart has loaded, how often each of the four gates was open, how often all four were open together, and how many of those became signals.\n\nThis answers one question and it is the most important question you can ask a rule set: is the LOGIC selecting the trades, or is the cooldown? If all four gates are open on a large share of bars, the four-layer hierarchy is decoration and the Cooldown input is the real strategy. The PROOF breakdown says the same thing about divergence specifically - if divergence supplies a small share of proofs, then divergence is not what the system trades on, whatever the description says.")
 
@@ -4656,7 +4658,7 @@ f_pair2(int r, string k, string v, color c) =>
     table.cell(stat, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
     table.cell(stat, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
 
-var table aud = table.new(f_tablePos(statPos) == position.bottom_left ? position.top_right : position.bottom_left,
+var table aud = table.new(f_tablePos(audPos),
      2, 13, bgcolor=cTblBg, border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
