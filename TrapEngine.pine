@@ -1,0 +1,641 @@
+// ============================================================================
+// TRAP ENGINE  v1.0
+// ----------------------------------------------------------------------------
+// ONE HYPOTHESIS, STATED SO IT CAN BE KILLED.
+//
+//   A price level that has been defended twice has resting stop orders beyond
+//   it. When price trades THROUGH that level, triggers those stops, and then
+//   fails to hold the new ground - closing back inside within a few bars - the
+//   traders who were filled on the break are immediately offside and must exit.
+//   Their exits are market orders in the opposite direction, on a deadline.
+//   Fading that failure has positive expectancy.
+//
+// WHY THIS IS NOT ANOTHER AUCTION CIPHER GATE.
+//
+// Auction Cipher says: price is away from value, value should be revisited.
+// That is a statement about EQUILIBRIUM, and equilibrium statements carry no
+// clock. Price can sit away from value for weeks and the statement stays true
+// the whole time while the trade bleeds. Fifteen measurements found no edge in
+// it, and the largest effect in the whole program was negative.
+//
+// This says: an identifiable group of traders is now offside and has to get out.
+// That is a statement about FORCED FLOW, and forced flow has a deadline. It is
+// the same shape as the Positioning Engine's hypothesis - there, forced closure
+// read from open interest; here, forced closure read from price structure. If
+// either has an edge it is for the same reason, and neither depends on the
+// auction returning to value on any particular schedule.
+//
+// WHAT COUNTS AS EVIDENCE.
+//
+// The trade ledger is the one that measured Auction Cipher: confirmed bars only,
+// fills at the NEXT bar's open, the stop tested before the target when one bar
+// holds both, expired trades counted rather than dropped, and the break-even win
+// rate printed beside the win rate so neither can be read without the other.
+// Nothing here is allowed to look good by being measured generously.
+//
+// The target is a FIXED multiple of risk, not a structural level. Auction Cipher
+// used structural targets and it cost us: the target distance varied per
+// instrument, so break-even moved underneath every comparison. A fixed target
+// means break-even is one number - 1/(1+target) - and every cell on every
+// instrument is directly comparable. That matters more here than squeezing the
+// last tenth of an R out of each trade.
+//
+// THE EXPERIMENT THIS FILE EXISTS TO RUN.
+//
+// "Require Absorption" ON versus OFF, everything else fixed. OFF is a plain
+// sweep-and-reclaim: price poked through a level and came back. ON additionally
+// demands that the order flow on the excursion opposed it - that the breakout
+// was being SOLD while it printed. If the trap hypothesis is right, ON should
+// beat OFF by more than noise. If the two read the same, the reclaim is doing
+// all the work and the flow reading is decoration.
+//
+// Run that A/B before running anything else. It is the only question this file
+// was built to answer.
+// ============================================================================
+import TradingView/ta/12 as taLib
+
+indicator("Trap Engine", shorttitle="TRAP", overlay=true,
+     max_boxes_count=200, max_lines_count=300, max_labels_count=300, max_bars_back=500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_LVL = "1 - WHERE STOPS SIT"
+bool  useEq  = input.bool(true,  "Equal Highs / Lows", group=G_LVL,
+     tooltip="Two swing points at the same price. This is the primary source and the one the hypothesis is really about: a level the market has defended twice is a level retail has drawn a line on, and stops cluster just beyond it.\n\nTurn the others off first when you want to test the idea in its purest form.")
+bool  usePD  = input.bool(true,  "Prior Day High / Low", group=G_LVL,
+     tooltip="Yesterday's extreme. Widely watched, widely used as a stop reference, and it resets daily so it never goes stale.")
+bool  useIB  = input.bool(true,  "Initial Balance High / Low", group=G_LVL,
+     tooltip="The first hour's range. Breakout traders enter beyond it by construction, which makes the other side of an IB break a textbook trap location.")
+int   pivLen = input.int(5, "Swing Strength (bars)", minval=2, maxval=20, group=G_LVL,
+     tooltip="How many bars either side a high must dominate to count as a swing point. Higher finds fewer, more significant levels. This is a real free parameter - do not tune it after seeing results.")
+float eqTol  = input.float(0.15, "Equal Level Tolerance (ATR)", minval=0.01, maxval=1.0, step=0.01, group=G_LVL,
+     tooltip="How close two swing points must be to count as EQUAL, measured in ATR so it scales across instruments. Traders do not draw lines to the tick; 0.15 ATR is about the width of the zone a human would call 'the same level'.")
+int   lvlLife = input.int(300, "Level Lifetime (bars)", minval=20, maxval=2000, group=G_LVL,
+     tooltip="How long an untouched level stays armed before it is forgotten. A level nobody has tested in 300 bars is not where anyone's stops are any more.")
+
+string G_SWP = "2 - THE SWEEP"
+float minPen = input.float(0.05, "Minimum Penetration (ATR)", minval=0.0, maxval=1.0, step=0.01, group=G_SWP,
+     tooltip="Price must trade BEYOND the level by at least this much, or no stops were triggered and there is nobody trapped. A wick that merely touches the level is a normal test, not a sweep.")
+float maxPen = input.float(1.00, "Maximum Penetration (ATR)", minval=0.1, maxval=5.0, step=0.05, group=G_SWP,
+     tooltip="Price must NOT run beyond the level by more than this. Past a point the break stops being a stop-run and becomes a genuine breakout with real buyers behind it - fading that is how you get run over.\n\nThis upper bound is the single most important setting in the file and the one most likely to be wrong. It is the line between 'trapped' and 'correct'.")
+int   reclBars = input.int(4, "Reclaim Deadline (bars)", minval=1, maxval=20, group=G_SWP,
+     tooltip="How many bars price gets to close back inside the level. Fast is the whole point: a trap that takes twenty bars to resolve was not a trap, it was a range.")
+float accBuf = input.float(0.35, "Acceptance Buffer (ATR)", minval=0.0, maxval=2.0, step=0.05, group=G_SWP,
+     tooltip="If a bar CLOSES beyond the level by more than this while the sweep is pending, the market has accepted the new price and the setup is cancelled - not held open hoping. Acceptance is the auction-theory word for 'you were wrong'.")
+
+string G_WGT = "3 - THE WEIGHT"
+bool  needAbs = input.bool(true, "Require Absorption", group=G_WGT,
+     tooltip="THE EXPERIMENT. Demands that cumulative delta across the excursion OPPOSED the break: price made a new high while net selling was happening, which means somebody was filling the breakout buyers rather than joining them.\n\nThis is the difference between 'price came back' and 'price came back because it was being sold the whole way'. Run this file with it ON and again with it OFF, change nothing else, and compare. If ON does not beat OFF, the flow reading adds nothing and the honest conclusion is that this is a price-pattern system, not an order-flow one.")
+float absMin = input.float(0.0, "Absorption Threshold (delta units)", minval=0.0, group=G_WGT,
+     tooltip="How strongly delta must oppose the break. 0 means any opposing sign counts, which is the weakest and most honest default - raising it is a free parameter and will flatter the result.")
+bool  needVol = input.bool(true, "Require Volume Expansion", group=G_WGT,
+     tooltip="Stops firing is a burst of market orders, so a real sweep prints unusual volume. A quiet drift through a level trapped nobody.")
+float volZMin = input.float(0.7, "Volume z on Sweep", minval=0.0, maxval=4.0, step=0.1, group=G_WGT,
+     tooltip="How far above its own recent average the sweep bar's volume must sit. Deliberately modest - demanding a 2-sigma bar finds textbook examples and almost nothing else.")
+
+string G_RSK = "4 - RISK"
+float stopBuf = input.float(0.15, "Stop Beyond Sweep (ATR)", minval=0.0, maxval=1.0, step=0.01, group=G_RSK,
+     tooltip="The stop sits past the extreme the sweep reached, plus this buffer. That extreme is the whole thesis: if price goes back through it the trap did not spring and the trade is simply wrong. This is why traps have tight, structurally honest stops.")
+float tgtCap  = input.float(2.0, "Target (R)", minval=0.5, maxval=10.0, step=0.5, group=G_RSK,
+     tooltip="Fixed multiple of risk. Break-even win rate is 1/(1+this): at 2R you need 33.3% to stand still. Printed on the panel so you never have to remember it.")
+int   horizon = input.int(200, "Outcome Horizon (bars)", minval=20, maxval=1000, group=G_RSK,
+     tooltip="How long a trade gets before it is given up on and booked as EXPIRED at whatever it shows. Long enough that almost everything resolves into a real win or loss.")
+int   coolOff = input.int(3, "Cooldown (bars)", minval=0, maxval=50, group=G_RSK,
+     tooltip="Minimum bars between signals in the same direction. Stops one messy level from generating six correlated trades that then get counted as six independent measurements.")
+
+string G_DSP = "5 - DISPLAY"
+bool  showLvls = input.bool(true,  "Draw Armed Levels", group=G_DSP)
+bool  showSwp  = input.bool(true,  "Mark Sweeps", group=G_DSP)
+bool  showTrd  = input.bool(true,  "Draw Trades", group=G_DSP)
+bool  showDash = input.bool(true,  "Dashboard", group=G_DSP)
+bool  showTbl  = input.bool(true,  "Measurement Panel", group=G_DSP)
+color cBuy  = input.color(#26a69a, "Long",  group=G_DSP, inline="c")
+color cSell = input.color(#ef5350, "Short", group=G_DSP, inline="c")
+color cLvl  = input.color(#787b86, "Level", group=G_DSP, inline="c")
+
+// ============================================================================
+// 2. PRIMITIVES
+// ----------------------------------------------------------------------------
+// Everything with rolling state is computed HERE, at top level, on every bar,
+// unconditionally. Pine's ta.* functions carry history internally: put one
+// behind an `and` or a ternary and it silently stops updating and returns a
+// stale value. That bug has already cost this project one whole measurement
+// round, so nothing in this file evaluates a ta.* call conditionally.
+// ============================================================================
+bool  barClosed = barstate.isconfirmed
+
+float atr     = ta.atr(14)
+float volMean = ta.sma(volume, 50)
+float volStd  = ta.stdev(volume, 50)
+float volZ    = volStd > 0 ? (volume - volMean) / volStd : 0.0
+
+float pvHi = ta.pivothigh(high, pivLen, pivLen)
+float pvLo = ta.pivotlow(low,  pivLen, pivLen)
+
+// --- intrabar delta, on the same terms as Auction Cipher
+int    chartSec = timeframe.in_seconds(timeframe.period)
+bool   useLtf   = chartSec > 60
+string ltfEff   = chartSec >= 86400 ? "60" : chartSec >= 3600 ? "5" : "1"
+
+float dLast = na
+if useLtf
+    [_dO, _dMax, _dMin, rDelta] = taLib.requestVolumeDelta(ltfEff)
+    dLast := rDelta
+
+// Fallback for charts with no usable intrabar feed: classify the whole bar by
+// its own direction. Cruder, but it keeps the file usable on 1m and on symbols
+// where the library returns nothing, instead of silently reading zero.
+float barDelta = na(dLast) ? (close > open ? volume : close < open ? -volume : 0.0) : dLast
+bool  deltaReal = not na(dLast)
+
+// --- session levels
+bool  isNewDay = ta.change(time("D")) != 0
+var float pdHi = na
+var float pdLo = na
+var float curHi = na
+var float curLo = na
+var float ibH = na
+var float ibL = na
+var int   ibBars = 0
+int ibTarget = math.max(1, int(3600 / math.max(chartSec, 1)))
+
+if barClosed
+    if isNewDay
+        pdHi   := curHi
+        pdLo   := curLo
+        curHi  := high
+        curLo  := low
+        ibH    := high
+        ibL    := low
+        ibBars := 1
+    else
+        curHi := na(curHi) ? high : math.max(curHi, high)
+        curLo := na(curLo) ? low  : math.min(curLo, low)
+        if ibBars < ibTarget
+            ibH    := na(ibH) ? high : math.max(ibH, high)
+            ibL    := na(ibL) ? low  : math.min(ibL, low)
+            ibBars += 1
+
+// ============================================================================
+// 3. LEVEL INVENTORY
+// ----------------------------------------------------------------------------
+// An armed level is a price with resting orders beyond it. Four parallel arrays
+// rather than a UDT array, because every read below wants one field and Pine
+// arrays are cheaper to walk than object arrays.
+//
+// kind: 0 = equal highs/lows, 1 = prior day, 2 = initial balance
+// dir:  +1 = a HIGH (stops sit above it), -1 = a LOW (stops sit below it)
+// ============================================================================
+var array<float> lvPx   = array.new<float>()
+var array<int>   lvDir  = array.new<int>()
+var array<int>   lvKind = array.new<int>()
+var array<int>   lvBar  = array.new<int>()
+
+// Recent swing points, kept only long enough to find pairs at the same price.
+var array<float> swHi = array.new<float>()
+var array<float> swLo = array.new<float>()
+
+f_arm(float px, int dir, int kind) =>
+    bool dup = false
+    if lvPx.size() > 0
+        for i = 0 to lvPx.size() - 1
+            if lvDir.get(i) == dir and math.abs(lvPx.get(i) - px) < eqTol * atr
+                dup := true
+    if not dup and not na(px)
+        lvPx.push(px)
+        lvDir.push(dir)
+        lvKind.push(kind)
+        lvBar.push(bar_index)
+    not dup
+
+// --- equal highs and lows
+// A confirmed pivot is compared against the recent pivot history. Two within
+// tolerance means the level has been defended twice, which is the condition the
+// whole hypothesis rests on. The level armed is the HIGHER of the pair for a
+// high (stops sit above the highest of the equal highs), the LOWER for a low.
+if barClosed and useEq
+    if not na(pvHi)
+        float best = na
+        if swHi.size() > 0
+            for i = 0 to swHi.size() - 1
+                if math.abs(swHi.get(i) - pvHi) <= eqTol * atr
+                    best := na(best) ? swHi.get(i) : math.max(best, swHi.get(i))
+        if not na(best)
+            f_arm(math.max(best, pvHi), 1, 0)
+        swHi.push(pvHi)
+        while swHi.size() > 12
+            swHi.shift()
+    if not na(pvLo)
+        float bestL = na
+        if swLo.size() > 0
+            for i = 0 to swLo.size() - 1
+                if math.abs(swLo.get(i) - pvLo) <= eqTol * atr
+                    bestL := na(bestL) ? swLo.get(i) : math.min(bestL, swLo.get(i))
+        if not na(bestL)
+            f_arm(math.min(bestL, pvLo), -1, 0)
+        swLo.push(pvLo)
+        while swLo.size() > 12
+            swLo.shift()
+
+if barClosed and isNewDay and usePD and not na(pdHi)
+    f_arm(pdHi, 1, 1)
+    f_arm(pdLo, -1, 1)
+
+var bool ibArmed = false
+if barClosed
+    if isNewDay
+        ibArmed := false
+    else if useIB and not ibArmed and ibBars >= ibTarget and not na(ibH)
+        f_arm(ibH, 1, 2)
+        f_arm(ibL, -1, 2)
+        ibArmed := true
+
+// --- retire levels that are no longer where stops are
+// Two ways a level stops being useful. It goes stale - nobody has tested it in
+// lvlLife bars, so nobody is still resting orders there. Or price has simply
+// ACCEPTED through it by more than the penetration band allows, which means the
+// break was real, the stops beyond it are already gone, and what is left is an
+// old line rather than a trap location. Leaving those armed is how a sweep
+// detector ends up firing on ordinary retests of broken structure.
+f_ageLevels() =>
+    if lvPx.size() > 0
+        for i = lvPx.size() - 1 to 0
+            float px = lvPx.get(i)
+            int   d  = lvDir.get(i)
+            bool stale = bar_index - lvBar.get(i) > lvlLife
+            bool gone  = d == 1 ? close > px + maxPen * atr : close < px - maxPen * atr
+            if stale or gone
+                lvPx.remove(i)
+                lvDir.remove(i)
+                lvKind.remove(i)
+                lvBar.remove(i)
+    lvPx.size()
+
+if barClosed
+    f_ageLevels()
+
+// ============================================================================
+// 4. THE SWEEP STATE MACHINE
+// ----------------------------------------------------------------------------
+// A sweep is not one event, it is a sequence with a deadline:
+//
+//   PENETRATE   price trades beyond the level, far enough to trigger stops
+//               (minPen) but not so far that it is a real breakout (maxPen)
+//   ACCUMULATE  delta and volume are tallied across the excursion
+//   RESOLVE     either price CLOSES back inside within reclBars  -> TRAP
+//               or a bar CLOSES beyond by accBuf                 -> ACCEPTED
+//               or the deadline passes                           -> EXPIRED
+//
+// Only the first outcome is a signal. The other two are the setup being wrong
+// in the two different ways it can be wrong, and both cancel it outright rather
+// than leaving it open.
+// ============================================================================
+var array<float> psLvl = array.new<float>()
+var array<int>   psDir = array.new<int>()
+var array<int>   psKnd = array.new<int>()
+var array<float> psExt = array.new<float>()
+var array<int>   psBar = array.new<int>()
+var array<float> psDlt = array.new<float>()
+var array<float> psVz  = array.new<float>()
+
+// A function cannot assign a global, so the one signal a bar can produce is
+// written into this array and read back at top level.
+//   0 dir   1 sweep extreme   2 level   3 kind   4 delta   5 volume z
+var array<float> sigOut = array.new<float>(6, 0.0)
+
+f_openSweeps() =>
+    if lvPx.size() > 0
+        for i = lvPx.size() - 1 to 0
+            float px = lvPx.get(i)
+            int   d  = lvDir.get(i)
+            float pen = d == 1 ? high - px : px - low
+            if pen >= minPen * atr and pen <= maxPen * atr
+                psLvl.push(px)
+                psDir.push(d)
+                psKnd.push(lvKind.get(i))
+                psExt.push(d == 1 ? high : low)
+                psBar.push(bar_index)
+                psDlt.push(barDelta)
+                psVz.push(volZ)
+                // the level has been consumed - stops beyond it are gone now
+                lvPx.remove(i)
+                lvDir.remove(i)
+                lvKind.remove(i)
+                lvBar.remove(i)
+    psLvl.size()
+
+f_resolveSweeps() =>
+    int fired = 0
+    if psLvl.size() > 0
+        for i = psLvl.size() - 1 to 0
+            float px = psLvl.get(i)
+            int   d  = psDir.get(i)
+            int   age = bar_index - psBar.get(i)
+            bool done = false
+
+            // keep tracking the excursion while it is open
+            if age > 0
+                psExt.set(i, d == 1 ? math.max(psExt.get(i), high) : math.min(psExt.get(i), low))
+                psDlt.set(i, psDlt.get(i) + barDelta)
+                psVz.set(i, math.max(psVz.get(i), volZ))
+
+            // ACCEPTED - the market took the new price. Not a trap.
+            if d == 1 and close > px + accBuf * atr
+                done := true
+            else if d == -1 and close < px - accBuf * atr
+                done := true
+            // RAN TOO FAR - a genuine breakout, whatever the close does
+            else if d == 1 and psExt.get(i) - px > maxPen * atr
+                done := true
+            else if d == -1 and px - psExt.get(i) > maxPen * atr
+                done := true
+            // RECLAIMED - closed back inside. The trap sprang.
+            else if age >= 1 and ((d == 1 and close < px) or (d == -1 and close > px))
+                // the weight: did flow oppose the break while it printed?
+                float dl = psDlt.get(i)
+                bool absOk = not needAbs or (d == 1 ? dl < -absMin : dl > absMin)
+                bool volOk = not needVol or psVz.get(i) >= volZMin
+                if absOk and volOk and fired == 0
+                    sigOut.set(0, d == 1 ? -1 : 1)
+                    sigOut.set(1, psExt.get(i))
+                    sigOut.set(2, px)
+                    sigOut.set(3, psKnd.get(i))
+                    sigOut.set(4, dl)
+                    sigOut.set(5, psVz.get(i))
+                    fired := 1
+                done := true
+            // DEADLINE
+            else if age > reclBars
+                done := true
+
+            if done
+                psLvl.remove(i)
+                psDir.remove(i)
+                psKnd.remove(i)
+                psExt.remove(i)
+                psBar.remove(i)
+                psDlt.remove(i)
+                psVz.remove(i)
+    fired
+
+if barClosed
+    sigOut.set(0, 0.0)
+    f_resolveSweeps()
+    f_openSweeps()
+
+// --- cooldown
+var int lastLongBar  = -100000
+var int lastShortBar = -100000
+
+int   sigDir = int(sigOut.get(0))
+float sigExt = sigOut.get(1)
+
+bool rawLong  = barClosed and sigDir ==  1 and bar_index - lastLongBar  > coolOff
+bool rawShort = barClosed and sigDir == -1 and bar_index - lastShortBar > coolOff
+
+if rawLong
+    lastLongBar := bar_index
+if rawShort
+    lastShortBar := bar_index
+
+// ============================================================================
+// 5. TRADE LEDGER
+// ----------------------------------------------------------------------------
+// The rig that measured Auction Cipher, with one correction. There, the target
+// PRICE was computed from the signal bar's close and then a win was credited
+// the full target R - so whenever the next open gapped, the credited R and the
+// realised R quietly disagreed. Here only the STOP is carried forward, and the
+// target is derived inside the fill from the price actually paid. A win is then
+// exactly tgtCap R by construction, and break-even is exactly 1/(1+tgtCap).
+// ============================================================================
+var array<float> opEntry = array.new<float>()
+var array<float> opStop  = array.new<float>()
+var array<float> opTgt   = array.new<float>()
+var array<int>   opDir   = array.new<int>()
+var array<int>   opBar   = array.new<int>()
+
+var bool  pendLong  = false
+var bool  pendShort = false
+var float pendStop  = na
+
+var array<float> led = array.new<float>(8, 0.0)
+int L_WIN  = 0
+int L_LOSS = 1
+int L_EXP  = 2
+int L_RWIN = 3
+int L_RLOSS= 4
+int L_REXP = 5
+int L_FILL = 6
+int L_SKIP = 7
+
+f_led(int k, float v) =>
+    led.set(k, led.get(k) + v)
+
+f_fill(bool isLong, float st) =>
+    float fp = open
+    float rk = isLong ? fp - st : st - fp
+    bool ok = rk > 0
+    if ok
+        opEntry.push(fp)
+        opStop.push(st)
+        opTgt.push(isLong ? fp + tgtCap * rk : fp - tgtCap * rk)
+        opDir.push(isLong ? 1 : -1)
+        opBar.push(bar_index)
+        f_led(L_FILL, 1)
+    else
+        // the open was already through the stop - never a takeable trade, and
+        // counted as skipped rather than dropped out of the denominator
+        f_led(L_SKIP, 1)
+    ok
+
+// ORDER OF EVENTS INSIDE ONE BAR: open, then range, then close.
+//   1. fill what was pending, at THIS bar's open
+//   2. resolve stops and targets against THIS bar's range
+//   3. arm the next signal
+// Step 2 before step 3 is what stops a trade resolving on the bar it was
+// entered on, against extremes that happened before the entry price existed.
+if barClosed and pendLong
+    f_fill(true, pendStop)
+    pendLong := false
+if barClosed and pendShort
+    f_fill(false, pendStop)
+    pendShort := false
+
+f_manage() =>
+    if opEntry.size() > 0
+        for i = opEntry.size() - 1 to 0
+            int   d  = opDir.get(i)
+            float st = opStop.get(i)
+            float tg = opTgt.get(i)
+            float en = opEntry.get(i)
+            float rk = math.abs(en - st)
+            bool done = false
+            // The stop is tested FIRST. When one bar holds both the stop and
+            // the target there is no way to know which came first, so the
+            // pessimistic reading is the only honest one.
+            if d == 1
+                if low <= st
+                    f_led(L_LOSS, 1)
+                    f_led(L_RLOSS, -1.0)
+                    done := true
+                else if high >= tg
+                    f_led(L_WIN, 1)
+                    f_led(L_RWIN, tgtCap)
+                    done := true
+            else
+                if high >= st
+                    f_led(L_LOSS, 1)
+                    f_led(L_RLOSS, -1.0)
+                    done := true
+                else if low <= tg
+                    f_led(L_WIN, 1)
+                    f_led(L_RWIN, tgtCap)
+                    done := true
+            if not done and bar_index - opBar.get(i) > horizon
+                f_led(L_EXP, 1)
+                f_led(L_REXP, rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0)
+                done := true
+            if done
+                opEntry.remove(i)
+                opStop.remove(i)
+                opTgt.remove(i)
+                opDir.remove(i)
+                opBar.remove(i)
+    opEntry.size()
+
+if barClosed
+    f_manage()
+
+if rawLong
+    pendLong := true
+    pendStop := sigExt - stopBuf * atr
+if rawShort
+    pendShort := true
+    pendStop  := sigExt + stopBuf * atr
+
+// ============================================================================
+// 6. DRAWING
+// ============================================================================
+var array<line>  lvLine = array.new<line>()
+var array<box>   tBox   = array.new<box>()
+
+f_drawLevels() =>
+    while lvLine.size() > 0
+        line.delete(lvLine.shift())
+    if lvPx.size() > 0
+        for i = 0 to lvPx.size() - 1
+            int k = lvKind.get(i)
+            lvLine.push(line.new(lvBar.get(i), lvPx.get(i), bar_index + 8, lvPx.get(i),
+                 color=color.new(cLvl, k == 0 ? 20 : 60), width=k == 0 ? 2 : 1,
+                 style=k == 0 ? line.style_solid : line.style_dotted))
+    lvLine.size()
+
+if showLvls and barstate.islast
+    f_drawLevels()
+
+f_drawTrade(bool isLong, float st) =>
+    float rk = isLong ? close - st : st - close
+    if rk > 0
+        tBox.push(box.new(bar_index, isLong ? close + tgtCap * rk : close - tgtCap * rk,
+             bar_index + 20, close,
+             bgcolor=color.new(isLong ? cBuy : cSell, 86), border_color=color(na)))
+        tBox.push(box.new(bar_index, close, bar_index + 20, st,
+             bgcolor=color.new(isLong ? cSell : cBuy, 89), border_color=color(na)))
+        while tBox.size() > 40
+            box.delete(tBox.shift())
+    rk
+
+if showTrd and rawLong
+    f_drawTrade(true, sigExt - stopBuf * atr)
+if showTrd and rawShort
+    f_drawTrade(false, sigExt + stopBuf * atr)
+
+plotshape(showSwp and rawLong,  "Trap Long",  shape.labelup,   location.belowbar,
+     cBuy,  text="TRAP", textcolor=color.white, size=size.small)
+plotshape(showSwp and rawShort, "Trap Short", shape.labeldown, location.abovebar,
+     cSell, text="TRAP", textcolor=color.white, size=size.small)
+
+// ============================================================================
+// 7. DASHBOARD
+// ============================================================================
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(#131722, 12),
+     border_color=color.new(#000000, 60), border_width=1)
+
+f_drow(int r, string k, string v, color c) =>
+    table.cell(dash, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+f_drawDash() =>
+    int nEq = 0
+    if lvKind.size() > 0
+        for i = 0 to lvKind.size() - 1
+            if lvKind.get(i) == 0
+                nEq += 1
+    f_drow(0, "TRAP ENGINE", needAbs ? "absorption ON" : "absorption OFF",
+         needAbs ? #26a69a : #ff9800)
+    f_drow(1, "Levels armed", str.tostring(lvPx.size()) + "   (" + str.tostring(nEq) + " equal)", #b2b5be)
+    f_drow(2, "Sweeps pending", str.tostring(psLvl.size()), psLvl.size() > 0 ? #ff9800 : #6c7080)
+    f_drow(3, "Delta feed", deltaReal ? "intrabar" : "bar proxy", deltaReal ? #26a69a : #ff9800)
+    f_drow(4, "Last sweep delta", sigOut.get(4) != 0 ? str.tostring(sigOut.get(4), "#.#") : "-", #b2b5be)
+    f_drow(5, "Last sweep vol z", sigOut.get(5) != 0 ? str.tostring(sigOut.get(5), "#.##") : "-", #b2b5be)
+    f_drow(6, "Open trades", str.tostring(opEntry.size()), opEntry.size() > 0 ? #ff9800 : #6c7080)
+    f_drow(7, "Penetration band",
+         str.tostring(minPen, "#.##") + " - " + str.tostring(maxPen, "#.##") + " ATR", #6c7080)
+    lvPx.size()
+
+if showDash and barstate.islast
+    f_drawDash()
+
+// ============================================================================
+// 8. MEASUREMENT PANEL
+// ----------------------------------------------------------------------------
+// Break-even sits directly beside the win rate because neither number means
+// anything alone. At a 2R target a system needs 33.3% just to stand still, and
+// reading 36% without that beside it is how people talk themselves into a
+// strategy that is losing money slowly.
+//
+// The edge row is what to write down. Everything else on this panel exists to
+// let you check that the edge row was computed from something real.
+// ============================================================================
+var table st = table.new(position.bottom_left, 2, 10, bgcolor=color.new(#131722, 12),
+     border_color=color.new(#000000, 60), border_width=1)
+
+f_srow(int r, string k, string v, color c) =>
+    table.cell(st, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(st, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+f_drawStats() =>
+    float w = led.get(L_WIN)
+    float l = led.get(L_LOSS)
+    float e = led.get(L_EXP)
+    float n = w + l
+    float allN = n + e
+    float totR = led.get(L_RWIN) + led.get(L_RLOSS) + led.get(L_REXP)
+    float be = 1.0 / (1.0 + tgtCap)
+    float wr = n > 0 ? w / n : na
+    color edgeCol = n < 30 ? #b2b5be : na(wr) ? #b2b5be : wr > be ? #26a69a : #ef5350
+    f_srow(0, "MEASURED ON THIS CHART", str.tostring(horizon) + "b horizon", #b2b5be)
+    f_srow(1, "Win / Loss / Expired",
+         str.tostring(int(w)) + " / " + str.tostring(int(l)) + " / " + str.tostring(int(e)), #b2b5be)
+    f_srow(2, "Resolved", str.tostring(int(n)), n < 30 ? #ff9800 : #b2b5be)
+    f_srow(3, "Win rate", n > 0 ? str.tostring(wr * 100, "#.#") + "%" : "-", edgeCol)
+    f_srow(4, "Break-even needs", str.tostring(be * 100, "#.#") + "%", #6c7080)
+    // THE row. Grey below 30 resolved trades, because below that it cannot
+    // separate a real edge from the 6.4pp of noise two data feeds produce on
+    // the same asset - a number this project measured directly.
+    f_srow(5, "Edge", n > 0 ? str.tostring((wr - be) * 100, "+#.#") + " pp" : "-", edgeCol)
+    f_srow(6, "Total R", str.tostring(totR, "+#.#") + "R", totR > 0 ? #26a69a : #ef5350)
+    f_srow(7, "Expectancy", allN > 0 ? str.tostring(totR / allN, "+#.##") + "R" : "-",
+         totR > 0 ? #26a69a : #ef5350)
+    f_srow(8, "Filled / skipped",
+         str.tostring(int(led.get(L_FILL))) + " / " + str.tostring(int(led.get(L_SKIP))), #6c7080)
+    f_srow(9, "Target", str.tostring(tgtCap, "#.#") + "R fixed  |  " +
+         (needAbs ? "ABS" : "no-abs") + (needVol ? " +VOL" : ""), #6c7080)
+    totR
+
+if showTbl and barstate.islast
+    f_drawStats()
+
+alertcondition(rawLong,  "Trap Long",  "Trap Engine: sweep reclaimed from below")
+alertcondition(rawShort, "Trap Short", "Trap Engine: sweep reclaimed from above")
