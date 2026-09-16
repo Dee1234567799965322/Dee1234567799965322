@@ -85,10 +85,10 @@ int   rows    = input.int(24, "Profile Rows", minval=8, maxval=60, group=G_P,
 float vaPct   = input.float(70, "Value Area %", minval=50, maxval=90, step=5, group=G_P)
 
 string G_C = "2 - WHAT COUNTS AS POOR"
-float excTh   = input.float(0.25, "Excess Threshold", minval=0.02, maxval=0.9, step=0.01, group=G_C,
-     tooltip="Volume in the extreme row, as a fraction of the POC row. BELOW this the extreme is a thin tail - a real rejection - and is classified EXCESS.")
-float poorTh  = input.float(0.55, "Poor Threshold", minval=0.1, maxval=1.0, step=0.01, group=G_C,
-     tooltip="ABOVE this fraction the extreme is thick - price stalled flat there instead of being rejected - and is classified POOR. The gap between the two thresholds is deliberately left as 'Flat', neither one thing nor the other, rather than forcing every extreme into a bucket it does not fit.")
+int excTouch  = input.int(1, "Excess: bars at the extreme <=", minval=1, maxval=5, group=G_C,
+     tooltip="How many bars in the period topped within one profile row of the period high. ONE means a single bar spiked up there and was rejected - a tail, a finished auction, EXCESS.")
+int poorTouch = input.int(3, "Poor: bars at the extreme >=", minval=2, maxval=10, group=G_C,
+     tooltip="THREE or more bars all topping at the same place means price stalled flat at the extreme instead of being rejected - an auction that stopped because the clock ran out, POOR.\n\nThis replaces a broken first version that compared volume in the extreme ROW against the POC row. In any distribution the extreme row is thin by construction, so that test classified 98.9% of all extremes as EXCESS and found 17 poor extremes in 1,520. It was measuring the shape of a distribution, not the shape of an auction.\n\nCALIBRATION CHECK, and read it before reading any result: the panel prints the POOR share. Below about 10% the classifier is still broken and the lift column means nothing regardless of what it says.")
 
 string G_T = "3 - THE TEST"
 int   horiz   = input.int(200, "Tracking Horizon (bars)", minval=20, maxval=1000, group=G_T,
@@ -193,8 +193,19 @@ f_profile() =>
             // trade happened AT the extreme relative to the busiest price. A
             // thin top is a rejection. A thick top is an auction that stopped
             // because the clock ran out, not because it was finished.
-            oTop := pocVol > 0 ? prof.get(rows - 1) / pocVol : na
-            oBot := pocVol > 0 ? prof.get(0) / pocVol : na
+            // COUNT THE BARS AT THE EXTREME. This is the textbook definition -
+            // a poor high is several periods all topping at the same price with
+            // no tail - and unlike a volume ratio against the POC it does not
+            // mistake the thinness of every distribution's tail for a rejection.
+            int topN = 0
+            int botN = 0
+            for i = 0 to pH.size() - 1
+                if pH.get(i) >= oHi - step
+                    topN += 1
+                if pL.get(i) <= oLo + step
+                    botN += 1
+            oTop := topN
+            oBot := botN
             ok := true
     [oHi, oLo, oPoc, oVah, oVal, oTop, oBot, ok]
 
@@ -273,14 +284,14 @@ f_reg(float lvl, int kind) =>
 if barClosed and fOk
     // the extremes, classified
     if not na(fTopP)
-        if fTopP >= poorTh
+        if fTopP >= poorTouch
             f_reg(fHi, 0)
-        else if fTopP <= excTh
+        else if fTopP <= excTouch
             f_reg(fHi, 2)
     if not na(fBotP)
-        if fBotP >= poorTh
+        if fBotP >= poorTouch
             f_reg(fLo, 1)
-        else if fBotP <= excTh
+        else if fBotP <= excTouch
             f_reg(fLo, 3)
     f_reg(fPoc, 4)
     f_reg(fVah, 5)
@@ -438,9 +449,15 @@ f_results() =>
     f_cell(3, 9, "EXCESS lift", #d1d4dc, true)
     f_cell(4, 9, str.tostring(int(xn)), #b2b5be, true)
     f_cell(5, 9, na(xl) ? "-" : str.tostring(xl, "+#.#"), na(xl) ? #b2b5be : xl < 0 ? #26a69a : #b2b5be, true)
-    f_cell(0, 10, "open " + str.tostring(mLvl.size()) + "   horizon " + str.tostring(horiz) + "b", #6c7080, false)
+    // CALIBRATION, printed where it cannot be skipped. If the classifier is not
+    // finding poor extremes then the poor rows are empty and their lift is not
+    // a result about markets, it is a result about the classifier.
+    float pshare = pn + xn > 0 ? pn / (pn + xn) * 100 : na
+    f_cell(0, 10, "POOR share " + (na(pshare) ? "-" : str.tostring(pshare, "#.#") + "%") +
+         (not na(pshare) and pshare < 10 ? "  CLASSIFIER BROKEN" : ""),
+         na(pshare) ? #6c7080 : pshare < 10 ? #ef5350 : #6c7080, false)
     f_cell(1, 10, "", #6c7080, false)
-    f_cell(2, 10, "", #6c7080, false)
+    f_cell(2, 10, "open " + str.tostring(mLvl.size()), #6c7080, false)
     f_cell(3, 10, "theory:", #6c7080, false)
     f_cell(4, 10, "POOR>0", #6c7080, false)
     f_cell(5, 10, "EXCESS<0", #6c7080, false)
