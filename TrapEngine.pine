@@ -1,3 +1,4 @@
+//@version=6
 // ============================================================================
 // TRAP ENGINE  v1.0
 // ----------------------------------------------------------------------------
@@ -52,10 +53,13 @@
 // Run that A/B before running anything else. It is the only question this file
 // was built to answer.
 // ============================================================================
-import TradingView/ta/12 as taLib
-
 indicator("Trap Engine", shorttitle="TRAP", overlay=true,
      max_boxes_count=200, max_lines_count=300, max_labels_count=300, max_bars_back=500)
+
+// Official TradingView library, for requestVolumeDelta(). Same import and same
+// position as Auction Cipher uses - after the declaration, before everything
+// else. It is a compile error below a type declaration.
+import TradingView/ta/12 as taLib
 
 // ============================================================================
 // 1. INPUTS
@@ -311,14 +315,43 @@ f_openSweeps() =>
             int   d  = lvDir.get(i)
             float pen = d == 1 ? high - px : px - low
             if pen >= minPen * atr and pen <= maxPen * atr
-                psLvl.push(px)
-                psDir.push(d)
-                psKnd.push(lvKind.get(i))
-                psExt.push(d == 1 ? high : low)
-                psBar.push(bar_index)
-                psDlt.push(barDelta)
-                psVz.push(volZ)
-                // the level has been consumed - stops beyond it are gone now
+                float ext = d == 1 ? high : low
+                float kf  = lvKind.get(i)
+                // THE SAME-BAR TRAP, which the first version of this file could
+                // not see at all. A bar that pokes through the level and closes
+                // back inside on its OWN close is the commonest form of the
+                // pattern and the one every trap trader draws by hand. Because
+                // sweeps were only ever resolved on a LATER bar, that bar was
+                // skipped and the setup needed a second confirming close - which
+                // both delayed every entry and silently discarded the textbook
+                // case. It is tested here instead.
+                //
+                // This is not lookahead. The bar is confirmed, its close is
+                // final, and the fill is still the NEXT bar's open.
+                bool backIn = d == 1 ? close < px : close > px
+                bool accept = d == 1 ? close > px + accBuf * atr : close < px - accBuf * atr
+                if backIn
+                    bool absOk = not needAbs or (d == 1 ? barDelta < -absMin : barDelta > absMin)
+                    bool volOk = not needVol or volZ >= volZMin
+                    if absOk and volOk and sigOut.get(0) == 0.0
+                        sigOut.set(0, d == 1 ? -1.0 : 1.0)
+                        sigOut.set(1, ext)
+                        sigOut.set(2, px)
+                        sigOut.set(3, kf)
+                        sigOut.set(4, barDelta)
+                        sigOut.set(5, volZ)
+                else if not accept
+                    // still beyond the level and not yet accepted - carry it
+                    // forward and give it the reclaim deadline
+                    psLvl.push(px)
+                    psDir.push(d)
+                    psKnd.push(lvKind.get(i))
+                    psExt.push(ext)
+                    psBar.push(bar_index)
+                    psDlt.push(barDelta)
+                    psVz.push(volZ)
+                // the level is consumed either way - the stops beyond it have
+                // already been taken and it is not a trap location any more
                 lvPx.remove(i)
                 lvDir.remove(i)
                 lvKind.remove(i)
@@ -356,11 +389,12 @@ f_resolveSweeps() =>
                 float dl = psDlt.get(i)
                 bool absOk = not needAbs or (d == 1 ? dl < -absMin : dl > absMin)
                 bool volOk = not needVol or psVz.get(i) >= volZMin
-                if absOk and volOk and fired == 0
-                    sigOut.set(0, d == 1 ? -1 : 1)
+                float kf = psKnd.get(i)
+                if absOk and volOk and fired == 0 and sigOut.get(0) == 0.0
+                    sigOut.set(0, d == 1 ? -1.0 : 1.0)
                     sigOut.set(1, psExt.get(i))
                     sigOut.set(2, px)
-                    sigOut.set(3, psKnd.get(i))
+                    sigOut.set(3, kf)
                     sigOut.set(4, dl)
                     sigOut.set(5, psVz.get(i))
                     fired := 1
@@ -432,13 +466,13 @@ int L_SKIP = 7
 f_led(int k, float v) =>
     led.set(k, led.get(k) + v)
 
-f_fill(bool isLong, float st) =>
+f_fill(bool isLong, float stp) =>
     float fp = open
-    float rk = isLong ? fp - st : st - fp
+    float rk = isLong ? fp - stp : stp - fp
     bool ok = rk > 0
     if ok
         opEntry.push(fp)
-        opStop.push(st)
+        opStop.push(stp)
         opTgt.push(isLong ? fp + tgtCap * rk : fp - tgtCap * rk)
         opDir.push(isLong ? 1 : -1)
         opBar.push(bar_index)
@@ -466,16 +500,16 @@ f_manage() =>
     if opEntry.size() > 0
         for i = opEntry.size() - 1 to 0
             int   d  = opDir.get(i)
-            float st = opStop.get(i)
+            float stpx = opStop.get(i)
             float tg = opTgt.get(i)
             float en = opEntry.get(i)
-            float rk = math.abs(en - st)
+            float rk = math.abs(en - stpx)
             bool done = false
             // The stop is tested FIRST. When one bar holds both the stop and
             // the target there is no way to know which came first, so the
             // pessimistic reading is the only honest one.
             if d == 1
-                if low <= st
+                if low <= stpx
                     f_led(L_LOSS, 1)
                     f_led(L_RLOSS, -1.0)
                     done := true
@@ -484,7 +518,7 @@ f_manage() =>
                     f_led(L_RWIN, tgtCap)
                     done := true
             else
-                if high >= st
+                if high >= stpx
                     f_led(L_LOSS, 1)
                     f_led(L_RLOSS, -1.0)
                     done := true
@@ -534,13 +568,13 @@ f_drawLevels() =>
 if showLvls and barstate.islast
     f_drawLevels()
 
-f_drawTrade(bool isLong, float st) =>
-    float rk = isLong ? close - st : st - close
+f_drawTrade(bool isLong, float stp) =>
+    float rk = isLong ? close - stp : stp - close
     if rk > 0
         tBox.push(box.new(bar_index, isLong ? close + tgtCap * rk : close - tgtCap * rk,
              bar_index + 20, close,
              bgcolor=color.new(isLong ? cBuy : cSell, 86), border_color=color(na)))
-        tBox.push(box.new(bar_index, close, bar_index + 20, st,
+        tBox.push(box.new(bar_index, close, bar_index + 20, stp,
              bgcolor=color.new(isLong ? cSell : cBuy, 89), border_color=color(na)))
         while tBox.size() > 40
             box.delete(tBox.shift())
@@ -598,12 +632,12 @@ if showDash and barstate.islast
 // The edge row is what to write down. Everything else on this panel exists to
 // let you check that the edge row was computed from something real.
 // ============================================================================
-var table st = table.new(position.bottom_left, 2, 10, bgcolor=color.new(#131722, 12),
+var table mTbl = table.new(position.bottom_left, 2, 10, bgcolor=color.new(#131722, 12),
      border_color=color.new(#000000, 60), border_width=1)
 
 f_srow(int r, string k, string v, color c) =>
-    table.cell(st, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
-    table.cell(st, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+    table.cell(mTbl, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(mTbl, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
 
 f_drawStats() =>
     float w = led.get(L_WIN)
