@@ -102,9 +102,23 @@ string oiSym = oiSymIn != "" ? oiSymIn : syminfo.prefix + ":" + syminfo.ticker +
 float oiRaw  = request.security(oiSym, timeframe.period, close, ignore_invalid_symbol=true)
 bool  oiOk   = not na(oiRaw) and oiRaw > 0
 
+// Blank means AUTO, not OFF - the same convention the OI input already uses.
+// A perp ticker is its spot ticker plus a .P suffix (BTCUSDT.P -> BTCUSDT), so
+// the spot market is derivable and there is no reason to make anyone type it.
+//
+// It shipped blank-means-off, which was a silent trap: Require Prior Crowding
+// defaults ON, crowding is measured from the basis, the basis needs spot, and
+// so the default configuration could not produce a single trade on any symbol.
+// It printed an empty measurement panel and said nothing about why.
+// Only derive it for an actual perp. On a non-perp the strip is a no-op and the
+// derived symbol is the CHART, which would make the basis price-minus-itself:
+// a constant zero that reads like a real flat basis instead of a missing one.
+bool   isPerp  = str.endswith(syminfo.ticker, ".P")
+string spotEff = spotSym != "" ? spotSym : isPerp ?
+     syminfo.prefix + ":" + str.replace_all(syminfo.ticker, ".P", "") : ""
 float spotRaw = na
-if spotSym != ""
-    spotRaw := request.security(spotSym, timeframe.period, close, ignore_invalid_symbol=true)
+if spotEff != ""
+    spotRaw := request.security(spotEff, timeframe.period, close, ignore_invalid_symbol=true)
 bool spotOk = not na(spotRaw) and spotRaw > 0
 
 float fundRaw = na
@@ -387,6 +401,12 @@ f_drawDash() =>
         sc := #ffa726
     else
         stateTxt := "ordinary two-way"
+    // A signal is arithmetically impossible when crowding is required and no feed
+    // can supply it. Saying that out loud beats an empty panel the reader has to
+    // reverse-engineer.
+    if needCrowd and not spotOk and not fundOk
+        stateTxt := "BLOCKED - crowding required, no feed"
+        sc := #ef5350
     f_row(6, "State", stateTxt, sc)
     f_row(7, "Crowding", not needCrowd ? "not required" :
          longsCrowded and shortsCrowded ? "both / unknown" :
