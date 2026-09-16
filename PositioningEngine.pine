@@ -340,7 +340,10 @@ plotshape(rawSell ? high : na, title="Flush Short", location=location.absolute,
      style=shape.labeldown, text="FLUSH\nSHORT", color=cSell, textcolor=#ffffff, size=size.small)
 
 // OI direction under the bars, so the state is readable without the table
-plotchar(oiOk and oiCollapse ? true : na, title="OI collapse", char="v", location=location.belowbar,
+// plotchar takes a bool series directly and marks the bars where it is true.
+// Writing it as `cond ? true : na` looks equivalent but is a type error - Pine
+// cannot unify bool with na in a ternary.
+plotchar(oiOk and oiCollapse, title="OI collapse", char="v", location=location.belowbar,
      color=#ffea00, size=size.tiny)
 
 alertcondition(rawBuy,  title="Flush long",  message="Long liquidation flush - forced selling exhausted")
