@@ -438,14 +438,14 @@ color cSwing     = input.color(color.new(#b2b5be, 25), "Swing Label Color", grou
 string G_CSIG = "16 - CHART SIGNALS  (location-gated)"
 bool  csigOn_in     = input.bool(true, "Show Buy / Sell on Price Chart", group=G_CSIG,
      tooltip="These are NOT the pane's A/B/C grades. A pane signal only needs momentum. A chart signal needs all four layers to agree:\n\n1 CONTEXT  - regime permits the direction\n2 LOCATION - price at a value area edge or an untested POC\n3 TRIGGER  - WaveTrend cross in the extreme zone\n4 PROOF    - real money flow, absorption, or a delta divergence\n\nYou will see far fewer of these. That is the point.")
-string gateMode  = input.string("Same event (strict)", "Gate Mode",
+string gateMode  = input.string("Window (legacy)", "Gate Mode",
      options=["Window (legacy)", "Same event (strict)"], group=G_CSIG,
-     tooltip="WINDOW is what this script has always done and what every measurement so far was taken on. Each gate asks 'did this happen in the last csigWindow + divLbR bars' - eight, on the defaults. The four gates therefore do not have to describe the same event, only the same week, and PROOF is an OR of five sources of which money-flow-crossing-zero is by far the loosest. The practical effect is that the gates qualify on a larger share of bars than the cooldown allows through, so the COOLDOWN is doing the selecting and the four-layer hierarchy is description rather than mechanism.\n\nSAME EVENT anchors everything to one swing. A divergence cannot confirm until divLbR bars after the pivot it measures - that delay is what makes it non-repainting - so the signal is evaluated on the divergence bar and the rejection and the WaveTrend cross must both belong to THAT pivot, within Event Tolerance bars. Divergence stops being one of five options and becomes mandatory: no divergence, no signal.\n\nExpect far fewer trades. That is the point, and it is also the only way the costs come down: on a Binance perp at roughly 0.09 percent round trip against a half-percent stop you are paying about 0.16R a trade, so 588 trades carry ~94R of friction that no signal was ever going to clear.")
+     tooltip="WINDOW is what this script has always done and what every measurement so far was taken on. Each gate asks 'did this happen in the last csigWindow + divLbR bars' - eight, on the defaults. The four gates therefore do not have to describe the same event, only the same week, and PROOF is an OR of five sources of which money-flow-crossing-zero is by far the loosest. The practical effect is that the gates qualify on a larger share of bars than the cooldown allows through, so the COOLDOWN is doing the selecting and the four-layer hierarchy is description rather than mechanism.\n\nSAME EVENT anchors everything to one swing. A divergence cannot confirm until divLbR bars after the pivot it measures - that delay is what makes it non-repainting - so the signal is evaluated on the divergence bar and the rejection and the WaveTrend cross must both belong to THAT pivot, within Event Tolerance bars. Divergence stops being one of five options and becomes mandatory: no divergence, no signal.\n\nExpect far fewer trades. That is the point, and it is also the only way the costs come down: on a Binance perp at roughly 0.09 percent round trip against a half-percent stop you are paying about 0.16R a trade, so 588 trades carry ~94R of friction that no signal was ever going to clear.\n\nSensitivity, below, only applies on Window. On Same event it is read nowhere - see its own tooltip for what actually loosens this mode.")
 int   gateTol    = input.int(4, "Event Tolerance (bars)", minval=0, maxval=6, group=G_CSIG,
      tooltip="How far the rejection and the momentum cross may sit from the divergence's own pivot and still count as the same swing. 0 demands they land on the exact pivot bar. Same event mode only.")
 string csigSens  = input.string("Strict (all 4)", "Sensitivity",
      options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)"], group=G_CSIG,
-     tooltip="How many of the four gates must pass. Location and trigger are always required - sensitivity only relaxes context and proof.\n\nIf you are seeing no signals at all, this is the dial to turn first.")
+     tooltip="How many of the four WINDOW-mode gates must pass. Location and trigger are always required - sensitivity only relaxes context and proof.\n\nONLY APPLIES WHEN GATE MODE ABOVE IS \"Window (legacy)\". On \"Same event (strict)\" - the default - every requirement is mandatory by design and this input is read nowhere, so moving it will not change anything you see. The dials that actually loosen Same event are Event Tolerance, Minimum Level Confluence and Minimum Divergence Quality.\n\nIf you are on Window and seeing no signals at all, this is the dial to turn first.")
 bool  csigZoneOnly = input.bool(false, "Cross Must Be In Extreme Zone", group=G_CSIG,
      tooltip="ON is the purist reading, but on ranging days WaveTrend may never reach +/-53 and you will see nothing for days. OFF accepts any cross that clears the other gates.")
 bool  csigNeedBody = input.bool(false, "Rejection Must Close In Direction", group=G_CSIG,
@@ -473,6 +473,8 @@ float csigErMin  = input.float(0.25, "Minimum Efficiency", minval=0.0, maxval=1.
      tooltip="Below this, no signal. Trending markets typically run 0.3 to 0.6; heavy chop sits under 0.15. Start at 0.25 and read the Efficiency row in the dashboard for a while before moving it.")
 bool  csigStrict = input.bool(true, "Require Regime Agreement", group=G_CSIG,
      tooltip="ON - no counter-trend buys while value is migrating down, and vice versa. This is the filter that stops you fading a trend day.")
+int   regimeConfirm = input.int(3, "Regime Confirmation (consecutive closes)", minval=1, maxval=10, group=G_CSIG,
+     tooltip="How many consecutive closes beyond the prior period's VAH/VAL it takes before Require Regime Agreement will call the move a real trend and start blocking counter-trend signals. At 3 (the original hardcoded value), a fast, fresh trend can already be several bars deep before this confirms - early in that window a divergence signal can still fire straight into it, because the gate hasn't recognized the trend yet. Lower catches nothing, higher blocks earlier but also refuses more genuine early reversals. This does not affect anything already measured tonight at the default of 3.")
 color cBuySig    = input.color(#00e676, "Buy Color", group=G_CSIG)
 color cSellSig   = input.color(#ff1744, "Sell Color", group=G_CSIG)
 
@@ -596,7 +598,7 @@ color cFdvDn  = input.color(#ef5350, "Forming Bear", inline="fdv", group=G_FDV)
 string G_AUD = "26 - GATE AUDIT  (diagnostic)"
 string audPos = input.string("Middle Left", "Audit Table Position",
      options=["Top Left", "Top Center", "Top Right", "Middle Left", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"], group=G_AUD)
-bool  audOn = input.bool(true, "Show Gate Audit", group=G_AUD,
+bool  audOn = input.bool(false, "Show Gate Audit", group=G_AUD,
      tooltip="Counts, over every bar this chart has loaded, how often each of the four gates was open, how often all four were open together, and how many of those became signals.\n\nThis answers one question and it is the most important question you can ask a rule set: is the LOGIC selecting the trades, or is the cooldown? If all four gates are open on a large share of bars, the four-layer hierarchy is decoration and the Cooldown input is the real strategy. The PROOF breakdown says the same thing about divergence specifically - if divergence supplies a small share of proofs, then divergence is not what the system trades on, whatever the description says.")
 
 string G_GEX = "25 - GAMMA EXPOSURE  (levels you supply)"
@@ -1297,32 +1299,33 @@ string lowQual  = "n/a"
 // hundreds of periods. A verdict that lands on one side 99% of the time is not
 // classifying anything. Showing the number lets the threshold be set from the
 // instrument's own distribution rather than guessed.
-float topPct = na
-float botPct = na
-if devOk
-    float mxB = devBins.max()
-    if mxB > 0
-        int dEdge = math.max(1, int(profRows * excBand / 100))
-        float dTopSum = 0.0
-        float dBotSum = 0.0
-        for e = 0 to dEdge - 1
-            dTopSum += devBins.get(profRows - 1 - e)
-            dBotSum += devBins.get(e)
-        topPct := dTopSum / dEdge / mxB * 100
-        botPct := dBotSum / dEdge / mxB * 100
-        float poorCut = excThresh * poorMult
-        if topPct < excThresh
-            highQual := "EXCESS"
-        else if topPct > poorCut
-            highQual := "POOR"
-        else
-            highQual := "Flat"
-        if botPct < excThresh
-            lowQual := "EXCESS"
-        else if botPct > poorCut
-            lowQual := "POOR"
-        else
-            lowQual := "Flat"
+// Moved into a function to keep the main body under Pine's size cap. Four
+// globals, so they come back as a tuple and are seeded from the values they
+// already hold - this must not blank a verdict it did not compute.
+f_extremes() =>
+    float oTop = na
+    float oBot = na
+    string oHi = highQual
+    string oLo = lowQual
+    if devOk
+        float mxB = devBins.max()
+        if mxB > 0
+            int dEdge = math.max(1, int(profRows * excBand / 100))
+            float dTopSum = 0.0
+            float dBotSum = 0.0
+            for e = 0 to dEdge - 1
+                dTopSum += devBins.get(profRows - 1 - e)
+                dBotSum += devBins.get(e)
+            oTop := dTopSum / dEdge / mxB * 100
+            oBot := dBotSum / dEdge / mxB * 100
+            float poorCut = excThresh * poorMult
+            oHi := oTop < excThresh ? "EXCESS" : oTop > poorCut ? "POOR" : "Flat"
+            oLo := oBot < excThresh ? "EXCESS" : oBot > poorCut ? "POOR" : "Flat"
+    [oTop, oBot, oHi, oLo]
+
+[topPct, botPct, highQual2, lowQual2] = f_extremes()
+highQual := highQual2
+lowQual  := lowQual2
 
 // ============================================================================
 // 10. LOW VOLUME NODES
@@ -1431,12 +1434,19 @@ else if inPeriod
 
 float runRange = na(runHi) or na(runLo) ? na : runHi - runLo
 
-bool acceptedAbove = false
-bool acceptedBelow = false
-if not na(priorVah)
-    acceptedAbove := close > priorVah and close[1] > priorVah and close[2] > priorVah
-if not na(priorVal)
-    acceptedBelow := close < priorVal and close[1] < priorVal and close[2] < priorVal
+// Generalized from a hardcoded "3 closes in a row" - see regimeConfirm's
+// tooltip. Loops over close[0..n-1] rather than naming each offset, so the
+// bar count is no longer baked into the expression itself.
+f_regAccept(float lvl, bool above) =>
+    bool ok = not na(lvl)
+    if ok
+        for i = 0 to regimeConfirm - 1
+            if above ? close[i] <= lvl : close[i] >= lvl
+                ok := false
+    ok
+
+bool acceptedAbove = f_regAccept(priorVah, true)
+bool acceptedBelow = f_regAccept(priorVal, false)
 
 string regimeLive = "TRANSITION"
 if not na(avgRange) and avgRange > 0 and not na(runRange)
@@ -4184,11 +4194,29 @@ if csigStrict
 // Every barssince here is a HOISTED value, never a fresh call. A call placed
 // behind an `and` in this expression would be short-circuited away on most
 // bars and would return a stale count forever after.
+// Named separately so the dashboards below can report on THESE four instead
+// of ctxBuy/atLowEdge/trigBuy/proofBuy - the window gates, which is what every
+// strict-mode readout (Gate Audit, the live Buy/Sell gates row, and the
+// Sensitivity input) was silently doing until now. Sensitivity only ever fed
+// needGates, and needGates is never read on the strict-mode branch below - so
+// turning that dial did nothing whenever Gate Mode was left on its default.
+// This does not change what fires a signal. f_evtBuy()'s four terms are
+// exactly what they were; they just now have names a dashboard can point to.
+bool evDivBuy  = divProofBuy
+bool evRejBuy  = math.abs(barsSinceRejLow - divLbR) <= gateTol
+bool evCrsBuy  = barsSinceCrossUp <= divLbR + gateTol
+bool evConBuy  = confAtLowRej >= csigConfMin
+
+bool evDivSell = divProofSell
+bool evRejSell = math.abs(barsSinceRejHigh - divLbR) <= gateTol
+bool evCrsSell = barsSinceCrossDn <= divLbR + gateTol
+bool evConSell = confAtHighRej >= csigConfMin
+
 f_evtBuy() =>
-    divProofBuy and math.abs(barsSinceRejLow - divLbR) <= gateTol and barsSinceCrossUp <= divLbR + gateTol and confAtLowRej >= csigConfMin
+    evDivBuy and evRejBuy and evCrsBuy and evConBuy
 
 f_evtSell() =>
-    divProofSell and math.abs(barsSinceRejHigh - divLbR) <= gateTol and barsSinceCrossDn <= divLbR + gateTol and confAtHighRej >= csigConfMin
+    evDivSell and evRejSell and evCrsSell and evConSell
 
 bool strictMode = gateMode == "Same event (strict)"
 bool evtBuy  = strictMode and f_evtBuy()
@@ -4234,7 +4262,12 @@ if oiVetoBuy
 if oiVetoSell
     rawSellSig := false
 
-if riskOn and riskMinR > 0
+// riskOn used to gate this too, which meant "Draw Stop / Target / R" - a
+// purely cosmetic toggle for whether the boxes get drawn - silently disabled
+// the entire risk-minimum FILTER as a side effect. Turning off the drawing
+// should never change which signals fire. rkOkL/rkOkS are computed
+// unconditionally above, so the veto only needs its own threshold now.
+if riskMinR > 0
     // a setup whose target is nearer than the stop is not a setup
     if not rkOkL
         rawBuySig := false
@@ -4307,27 +4340,60 @@ var int lastSellBar = -9999
 // may not assign a global but may mutate an array it is handed, and the tally
 // has to live in a function to keep the main body under the size cap.
 // ============================================================================
-var array<float> gaud = array.new<float>(16, 0.0)
+// 16 and 17 hold strict mode's confluence check on its own. Window mode has no
+// equivalent slot because it never separates confluence out - csigConfMin is
+// already folded into atLowEdge/atHighEdge there, so "Location open" (slot 2/8)
+// is doing double duty. Strict mode scores confluence as its own term
+// (evConBuy/evConSell) instead, and the audit needs a place to count it.
+// 18-22 are for a SECOND thing found only once real numbers came back from a
+// strict-mode chart: "PROOF came from" (13/14/15 below) still tallied
+// divProofBuy/mfTurnUp/absorbUp/etc unconditionally, which is exactly right
+// for Window mode's five-source OR but reads as "81% of proof was money flow"
+// on a mode where money flow supplies none of it - divDivBuy is the ONLY
+// proof source f_evtBuy ever checks. 18 counts a raw divergence event (either
+// side, before divMinQual filters it); 19-22 count how often each of the four
+// quality sub-checks was ALSO true on that same event, so a strict-mode chart
+// gets a breakdown of what its one real proof source is backed by, instead of
+// a breakdown of sources it cannot use.
+var array<float> gaud = array.new<float>(23, 0.0)
 
+// lB/tB/pB carry DIFFERENT things depending on mode - the call site below
+// passes atLowEdge/trigBuy/proofBuy in Window mode and evDivBuy/evRejBuy/
+// evCrsBuy in Same-event mode, so slot 5's "all open" tally and f_drawAudit's
+// labels always agree on what they are counting, whichever mode is live.
 f_audit(bool cB, bool lB, bool tB, bool pB, bool sB,
          bool cS, bool lS, bool tS, bool pS, bool sS,
-         bool pDiv, bool pMf, bool pAbs) =>
+         bool pDivB, bool pMfB, bool pAbsB,
+         bool pDivS, bool pMfS, bool pAbsS,
+         bool qB, bool qS,
+         bool rawDiv, bool qPart, bool qOi, bool qLoc, bool qRef) =>
     gaud.set(0,  gaud.get(0)  + 1)
     gaud.set(1,  gaud.get(1)  + (cB ? 1 : 0))
     gaud.set(2,  gaud.get(2)  + (lB ? 1 : 0))
     gaud.set(3,  gaud.get(3)  + (tB ? 1 : 0))
     gaud.set(4,  gaud.get(4)  + (pB ? 1 : 0))
-    gaud.set(5,  gaud.get(5)  + (cB and lB and tB and pB ? 1 : 0))
+    gaud.set(5,  gaud.get(5)  + ((strictMode ? cB and lB and tB and pB and qB : cB and lB and tB and pB) ? 1 : 0))
     gaud.set(6,  gaud.get(6)  + (sB ? 1 : 0))
     gaud.set(7,  gaud.get(7)  + (cS ? 1 : 0))
     gaud.set(8,  gaud.get(8)  + (lS ? 1 : 0))
     gaud.set(9,  gaud.get(9)  + (tS ? 1 : 0))
     gaud.set(10, gaud.get(10) + (pS ? 1 : 0))
-    gaud.set(11, gaud.get(11) + (cS and lS and tS and pS ? 1 : 0))
+    gaud.set(11, gaud.get(11) + ((strictMode ? cS and lS and tS and pS and qS : cS and lS and tS and pS) ? 1 : 0))
     gaud.set(12, gaud.get(12) + (sS ? 1 : 0))
-    gaud.set(13, gaud.get(13) + (pDiv ? 1 : 0))
-    gaud.set(14, gaud.get(14) + (pMf  ? 1 : 0))
-    gaud.set(15, gaud.get(15) + (pAbs ? 1 : 0))
+    // FOUND WHILE FIXING THE MODE-BLINDNESS ABOVE: this breakdown only ever
+    // tallied the BUY-side proof source (divProofBuy/mfTurnUp/absorbUp), so
+    // every sell-driven signal was invisible to its own "where did proof come
+    // from" panel. Both sides count now.
+    gaud.set(13, gaud.get(13) + (pDivB or pDivS ? 1 : 0))
+    gaud.set(14, gaud.get(14) + (pMfB  or pMfS  ? 1 : 0))
+    gaud.set(15, gaud.get(15) + (pAbsB or pAbsS ? 1 : 0))
+    gaud.set(16, gaud.get(16) + (qB ? 1 : 0))
+    gaud.set(17, gaud.get(17) + (qS ? 1 : 0))
+    gaud.set(18, gaud.get(18) + (rawDiv ? 1 : 0))
+    gaud.set(19, gaud.get(19) + (qPart  ? 1 : 0))
+    gaud.set(20, gaud.get(20) + (qOi    ? 1 : 0))
+    gaud.set(21, gaud.get(21) + (qLoc   ? 1 : 0))
+    gaud.set(22, gaud.get(22) + (qRef   ? 1 : 0))
 
 bool chartBuy = false
 bool chartSell = false
@@ -4338,10 +4404,51 @@ if rawSellSig and bar_index - lastSellBar > csigCool
     chartSell := true
     lastSellBar := bar_index
 
-// Tally AFTER cooldown, so the gap between "all four gates open" and "a signal
-// fired" is exactly the number of setups the cooldown threw away.
+// Which booleans mean "location" and "trigger" depends on Gate Mode. Selecting
+// them here, once, is what keeps the tally and the dashboard labels in sync -
+// there is now exactly one place that decides what strict mode's dashboard
+// numbers are made of, instead of the audit silently reading window gates
+// while the mode selector said something else.
+bool audLB = strictMode ? evDivBuy  : atLowEdge
+bool audTB = strictMode ? evRejBuy  : trigBuy
+bool audPB = strictMode ? evCrsBuy  : proofBuy
+bool audLS = strictMode ? evDivSell : atHighEdge
+bool audTS = strictMode ? evRejSell : trigSell
+bool audPS = strictMode ? evCrsSell : proofSell
+
+// Raw divergence event, BEFORE divMinQual filters it - the denominator for
+// 19-22 above. Using divProofBuy/Sell instead would be circular whenever
+// Minimum Divergence Quality is above 0, since that already excludes the
+// low-quality events this breakdown exists to measure.
+//
+// BUG FOUND IN MY OWN FIX: qPartBull/qOiBull/qLocBull/qRefBull are evaluated
+// EVERY bar, not only on the bar a divergence confirms - they compare the
+// current bar against whatever pivot was last stored, which is almost always
+// true of SOME bar regardless of whether today is a divergence bar. Tallying
+// them unconditionally, as the first version of this fix did, counts "how
+// often is this comparison true on any bar" - a number that can run past the
+// raw divergence count entirely, which is what produced percentages over
+// 100%. Each side's quality flag only means anything gated to THAT side's own
+// divergence event on the SAME bar - rawDivBull with qPartBull, never with
+// qPartBear - which is also what keeps the numerator from ever exceeding the
+// denominator.
+bool rawDivBull = wtBullDiv or cvBullDiv
+bool rawDivBear = wtBearDiv or cvBearDiv
+bool qtyRawDiv  = rawDivBull or rawDivBear
+bool qtyPart    = (rawDivBull and qPartBull) or (rawDivBear and qPartBear)
+bool qtyOi      = (rawDivBull and qOiBull)   or (rawDivBear and qOiBear)
+bool qtyLoc     = (rawDivBull and qLocBull)  or (rawDivBear and qLocBear)
+bool qtyRef     = (rawDivBull and qRefBull)  or (rawDivBear and qRefBear)
+
+// Tally AFTER cooldown, so the gap between "all gates open" and "a signal
+// fired" is exactly the number of setups cooldown AND every other post-gate
+// filter (same-bar conflict, the noise gate, the OI veto, the risk minimum,
+// one-trade-at-a-time) threw away. f_drawAudit labels that gap "Filtered
+// after gates" rather than blaming cooldown alone - see the note there.
 if audOn and barClosed
-    f_audit(ctxBuy, atLowEdge, trigBuy, proofBuy, chartBuy, ctxSell, atHighEdge, trigSell, proofSell, chartSell, divProofBuy, mfTurnUp, absorbUp)
+    f_audit(ctxBuy, audLB, audTB, audPB, chartBuy, ctxSell, audLS, audTS, audPS, chartSell,
+         divProofBuy, mfTurnUp, absorbUp, divProofSell, mfTurnDn, absorbDn, evConBuy, evConSell,
+         qtyRawDiv, qtyPart, qtyOi, qtyLoc, qtyRef)
 
 
 // --- draw the trade
@@ -4738,7 +4845,7 @@ f_pair2(int r, string k, string v, color c) =>
     table.cell(stat, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
 
 var table aud = table.new(f_tablePos(audPos),
-     2, 13, bgcolor=cTblBg, border_color=color.new(#000000, 75), border_width=1,
+     2, 15, bgcolor=cTblBg, border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
 f_aud(int r, string k, string v, color c) =>
@@ -4751,32 +4858,70 @@ f_audPct(float hit, float tot) =>
 f_drawAudit() =>
     float bars = gaud.get(0)
     // A gate open on most bars is not a gate. Red is the warning.
-    f_aud(0, "GATE AUDIT", str.tostring(int(bars)) + " bars", cTxt)
+    f_aud(0, "GATE AUDIT", str.tostring(int(bars)) + " bars  [" + (strictMode ? "strict" : "window") + "]", cTxt)
     f_aud(1, "Context open",  f_audPct(gaud.get(1), bars) + " / " + f_audPct(gaud.get(7), bars),
          gaud.get(1) > bars * 0.8 ? C_DN : C_NE)
-    f_aud(2, "Location open", f_audPct(gaud.get(2), bars) + " / " + f_audPct(gaud.get(8), bars),
-         gaud.get(2) > bars * 0.5 ? C_DN : C_NE)
-    f_aud(3, "Trigger open",  f_audPct(gaud.get(3), bars) + " / " + f_audPct(gaud.get(9), bars),
-         gaud.get(3) > bars * 0.5 ? C_DN : C_NE)
-    f_aud(4, "Proof open",    f_audPct(gaud.get(4), bars) + " / " + f_audPct(gaud.get(10), bars),
-         gaud.get(4) > bars * 0.7 ? C_DN : C_NE)
-    f_aud(5, "ALL FOUR open", f_audPct(gaud.get(5), bars) + " / " + f_audPct(gaud.get(11), bars),
-         gaud.get(5) > bars * 0.1 ? C_DN : C_UP)
-    f_aud(6, "Signals fired", str.tostring(int(gaud.get(6))) + " / " + str.tostring(int(gaud.get(12))), cTxt)
-    // The number that decides whether the logic or the cooldown is the strategy.
+    // Rows 2-5 are the SAME four rows in both modes - what they measure just
+    // changes with them, via audLB/audTB/audPB above. Row 5 only exists in
+    // strict mode, which has a fifth requirement window mode does not.
+    if strictMode
+        f_aud(2, "Divergence proof",  f_audPct(gaud.get(2), bars) + " / " + f_audPct(gaud.get(8), bars),
+             gaud.get(2) > bars * 0.5 ? C_DN : C_NE)
+        f_aud(3, "Rejection aligned", f_audPct(gaud.get(3), bars) + " / " + f_audPct(gaud.get(9), bars),
+             gaud.get(3) > bars * 0.5 ? C_DN : C_NE)
+        f_aud(4, "Cross aligned",     f_audPct(gaud.get(4), bars) + " / " + f_audPct(gaud.get(10), bars),
+             gaud.get(4) > bars * 0.5 ? C_DN : C_NE)
+        f_aud(5, "Confluence met",    f_audPct(gaud.get(16), bars) + " / " + f_audPct(gaud.get(17), bars),
+             gaud.get(16) > bars * 0.7 ? C_DN : C_NE)
+        f_aud(6, "ALL FIVE open",     f_audPct(gaud.get(5), bars) + " / " + f_audPct(gaud.get(11), bars),
+             gaud.get(5) > bars * 0.1 ? C_DN : C_UP)
+    else
+        f_aud(2, "Location open", f_audPct(gaud.get(2), bars) + " / " + f_audPct(gaud.get(8), bars),
+             gaud.get(2) > bars * 0.5 ? C_DN : C_NE)
+        f_aud(3, "Trigger open",  f_audPct(gaud.get(3), bars) + " / " + f_audPct(gaud.get(9), bars),
+             gaud.get(3) > bars * 0.5 ? C_DN : C_NE)
+        f_aud(4, "Proof open",    f_audPct(gaud.get(4), bars) + " / " + f_audPct(gaud.get(10), bars),
+             gaud.get(4) > bars * 0.7 ? C_DN : C_NE)
+        f_aud(5, "", "", color(na))
+        f_aud(6, "ALL FOUR open", f_audPct(gaud.get(5), bars) + " / " + f_audPct(gaud.get(11), bars),
+             gaud.get(5) > bars * 0.1 ? C_DN : C_UP)
+    f_aud(7, "Signals fired", str.tostring(int(gaud.get(6))) + " / " + str.tostring(int(gaud.get(12))), cTxt)
+    // Renamed from "Cooldown discarded": this gap is everything that zeroes a
+    // qualified signal AFTER all the gates above passed - cooldown, but also
+    // the same-bar conflict guard, the noise gate, the OI veto, the risk
+    // minimum and one-trade-at-a-time. One label was blaming the cooldown
+    // input alone for six other filters' work; this one does not claim more
+    // precision than the number actually has.
     float qual = gaud.get(5) + gaud.get(11)
     float took = gaud.get(6) + gaud.get(12)
-    f_aud(7, "Cooldown discarded", str.tostring(int(qual - took)) + "  (" + f_audPct(qual - took, qual) + ")",
+    f_aud(8, "Filtered after gates", str.tostring(int(qual - took)) + "  (" + f_audPct(qual - took, qual) + ")",
          qual > 0 and (qual - took) / qual > 0.8 ? C_DN : C_NE)
-    f_aud(8, "PROOF came from", "", color.new(cTxt, 40))
-    float pd = gaud.get(13)
-    float pm = gaud.get(14)
-    float pa = gaud.get(15)
-    float ptot = pd + pm + pa
-    f_aud(9,  "  divergence", str.tostring(int(pd)) + "  " + f_audPct(pd, ptot), ptot > 0 and pd / ptot < 0.2 ? C_DN : C_UP)
-    f_aud(10, "  money flow", str.tostring(int(pm)) + "  " + f_audPct(pm, ptot), C_NE)
-    f_aud(11, "  absorption", str.tostring(int(pa)) + "  " + f_audPct(pa, ptot), C_NE)
-    f_aud(12, "red = too permissive", "", color.new(cTxt, 55))
+    if strictMode
+        // Not "PROOF came from" - in strict mode there is only one source
+        // (divProofBuy/Sell), so that panel would always read "divergence
+        // 100%" and tell you nothing. This is the breakdown that IS
+        // informative here: of the divergences that actually fired, how many
+        // also carried each of the four optional quality confirmations
+        // Minimum Divergence Quality can require. denom is raw divergence
+        // count, BEFORE that threshold filters anything out - see qtyRawDiv
+        // above.
+        f_aud(9, "DIVERGENCE QUALITY", "", color.new(cTxt, 40))
+        float dq = gaud.get(18)
+        f_aud(10, "  participation", str.tostring(int(gaud.get(19))) + "  " + f_audPct(gaud.get(19), dq), C_NE)
+        f_aud(11, "  open interest", str.tostring(int(gaud.get(20))) + "  " + f_audPct(gaud.get(20), dq), C_NE)
+        f_aud(12, "  at a level",    str.tostring(int(gaud.get(21))) + "  " + f_audPct(gaud.get(21), dq), C_NE)
+        f_aud(13, "  ref market",   str.tostring(int(gaud.get(22))) + "  " + f_audPct(gaud.get(22), dq), C_NE)
+    else
+        f_aud(9, "PROOF came from", "", color.new(cTxt, 40))
+        float pd = gaud.get(13)
+        float pm = gaud.get(14)
+        float pa = gaud.get(15)
+        float ptot = pd + pm + pa
+        f_aud(10, "  divergence", str.tostring(int(pd)) + "  " + f_audPct(pd, ptot), ptot > 0 and pd / ptot < 0.2 ? C_DN : C_UP)
+        f_aud(11, "  money flow", str.tostring(int(pm)) + "  " + f_audPct(pm, ptot), C_NE)
+        f_aud(12, "  absorption", str.tostring(int(pa)) + "  " + f_audPct(pa, ptot), C_NE)
+        f_aud(13, "", "", color(na))
+    f_aud(14, "red = too permissive", "", color.new(cTxt, 55))
 
 // Moved into a function to keep the main body under Pine's size cap.
 f_drawStats() =>
@@ -5296,19 +5441,31 @@ f_drawDash() =>
              (na(f_gx(gexPut)) ? "-" : str.tostring(f_gx(gexPut), format.mintick)) + " / " +
              (na(f_gx(gexCall)) ? "-" : str.tostring(f_gx(gexCall), format.mintick)), cGexFlip)
 
-    // Which gates are currently open, so a silent chart is explainable
-    // C context - L location - T trigger - P proof, then the OI verdict:
-    // OK = open interest backs this side, NO = open interest vetoes it.
-    // qN is the divergence quality score, shown only once it can reject
-    // something, so the row does not grow for people who leave it at 0.
+    // Which gates are currently open, so a silent chart is explainable.
+    // WINDOW MODE: C context - L location - T trigger - P proof, out of
+    // needGates (set by Sensitivity). SAME-EVENT MODE: Sensitivity is never
+    // read here - strict mode has five requirements of its own, shown as
+    // C context - D divergence - R rejection aligned - X cross aligned -
+    // Q confluence met, out of 5. Same OI verdict and quality suffix either
+    // way. This is the row from the screenshot that used to read "4/4" off
+    // the window gates no matter which mode was actually deciding chartBuy.
     string qB = divMinQual > 0 ? " q" + str.tostring(divQualBuy)  : ""
     string qS = divMinQual > 0 ? " q" + str.tostring(divQualSell) : ""
-    string gBuy = (ctxBuy ? "C" : "-") + (atLowEdge ? "L" : "-") + (trigBuy ? "T" : "-") + (proofBuy ? "P" : "-") +
+    int stGatesBuy  = (ctxBuy  ? 1 : 0) + (evDivBuy  ? 1 : 0) + (evRejBuy  ? 1 : 0) + (evCrsBuy  ? 1 : 0) + (evConBuy  ? 1 : 0)
+    int stGatesSell = (ctxSell ? 1 : 0) + (evDivSell ? 1 : 0) + (evRejSell ? 1 : 0) + (evCrsSell ? 1 : 0) + (evConSell ? 1 : 0)
+    string gBuy = (strictMode ?
+         (ctxBuy ? "C" : "-") + (evDivBuy ? "D" : "-") + (evRejBuy ? "R" : "-") + (evCrsBuy ? "X" : "-") + (evConBuy ? "Q" : "-") +
          "x" + str.tostring(confAtLowRej) + (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "") + qB
-    string gSell = (ctxSell ? "C" : "-") + (atHighEdge ? "L" : "-") + (trigSell ? "T" : "-") + (proofSell ? "P" : "-") +
+         : (ctxBuy ? "C" : "-") + (atLowEdge ? "L" : "-") + (trigBuy ? "T" : "-") + (proofBuy ? "P" : "-") +
+         "x" + str.tostring(confAtLowRej) + (oiVetoBuy ? " NO" : oiProofBuy ? " OK" : "") + qB)
+    string gSell = (strictMode ?
+         (ctxSell ? "C" : "-") + (evDivSell ? "D" : "-") + (evRejSell ? "R" : "-") + (evCrsSell ? "X" : "-") + (evConSell ? "Q" : "-") +
          "x" + str.tostring(confAtHighRej) + (oiVetoSell ? " NO" : oiProofSell ? " OK" : "") + qS
-    f_pair(16, 0, "Buy gates", gBuy + "  " + str.tostring(gatesBuy) + "/" + str.tostring(needGates),
-         gatesBuy >= needGates ? C_UP : C_NE)
+         : (ctxSell ? "C" : "-") + (atHighEdge ? "L" : "-") + (trigSell ? "T" : "-") + (proofSell ? "P" : "-") +
+         "x" + str.tostring(confAtHighRej) + (oiVetoSell ? " NO" : oiProofSell ? " OK" : "") + qS)
+    f_pair(16, 0, "Buy gates",
+         gBuy + "  " + (strictMode ? str.tostring(stGatesBuy) + "/5" : str.tostring(gatesBuy) + "/" + str.tostring(needGates)),
+         (strictMode ? stGatesBuy >= 5 : gatesBuy >= needGates) ? C_UP : C_NE)
     // ACTION - the single authoritative line. Everything else on both surfaces
     // is description; this is the only thing that says trade.
     string actTxt = "WAIT"
@@ -5322,10 +5479,10 @@ f_drawDash() =>
     else if chartSell
         actTxt := "SELL  " + (na(rkRS) ? "" : str.tostring(rkRS, "#.#") + "R")
         actCol := cSellSig
-    else if gatesBuy >= needGates - 1 and atLowEdge
+    else if (strictMode ? stGatesBuy >= 4 : gatesBuy >= needGates - 1 and atLowEdge)
         actTxt := "buy setting up"
         actCol := C_UP
-    else if gatesSell >= needGates - 1 and atHighEdge
+    else if (strictMode ? stGatesSell >= 4 : gatesSell >= needGates - 1 and atHighEdge)
         actTxt := "sell setting up"
         actCol := C_DN
     f_pair(0, 2, "ACTION", actTxt, actCol)
@@ -5334,8 +5491,9 @@ f_drawDash() =>
     f_pair(17, 0, "Balance area", balTxt, balActive and balArmed ? C_WN : C_NE)
     f_pair(17, 2, "ADX / Eff", str.tostring(adxVal, "#.#") + " - " + str.tostring(effRatio, "0.00"),
          csigNoiseOn and effRatio < csigErMin ? C_DN : effRatio >= csigErMin ? C_UP : C_NE)
-    f_pair(16, 2, "Sell gates", gSell + "  " + str.tostring(gatesSell) + "/" + str.tostring(needGates),
-         gatesSell >= needGates ? C_DN : C_NE)
+    f_pair(16, 2, "Sell gates",
+         gSell + "  " + (strictMode ? str.tostring(stGatesSell) + "/5" : str.tostring(gatesSell) + "/" + str.tostring(needGates)),
+         (strictMode ? stGatesSell >= 5 : gatesSell >= needGates) ? C_DN : C_NE)
 
 if showTable and barstate.islast
     f_drawDash()
