@@ -213,7 +213,6 @@ var array<float> opRisk  = array.new<float>()
 var bool  pendLong  = false
 var bool  pendShort = false
 var float pendStop  = na
-var float pendTgt   = na
 
 // A Pine function cannot assign a global, but it can mutate an array it sees.
 // Eleven counters in one array for exactly that reason.
@@ -230,14 +229,19 @@ int L_SKIP = 7
 f_led(int k, float v) =>
     led.set(k, led.get(k) + v)
 
-f_fill(bool isLong, float st, float tg) =>
+// Only the STOP is carried to the fill. The target is derived here from the
+// price actually paid, so a win is exactly tgtCap R and break-even is exactly
+// 1/(1+tgtCap). Previously the target PRICE came from the signal bar's close
+// while a win was credited the full target R, so any gapped open made the
+// credited and realised R disagree.
+f_fill(bool isLong, float stp) =>
     float fp = open
-    float rk = isLong ? fp - st : st - fp
+    float rk = isLong ? fp - stp : stp - fp
     bool ok = rk > 0
     if ok
         opEntry.push(fp)
-        opStop.push(st)
-        opTgt.push(tg)
+        opStop.push(stp)
+        opTgt.push(isLong ? fp + tgtCap * rk : fp - tgtCap * rk)
         opDir.push(isLong ? 1 : -1)
         opBar.push(bar_index)
         opRisk.push(rk)
@@ -256,16 +260,16 @@ f_fill(bool isLong, float st, float tg) =>
 // entered on, which would be reading extremes that happened before the entry
 // price existed.
 if barClosed and pendLong
-    f_fill(true, pendStop, pendTgt)
+    f_fill(true, pendStop)
     pendLong := false
 if barClosed and pendShort
-    f_fill(false, pendStop, pendTgt)
+    f_fill(false, pendStop)
     pendShort := false
 
 f_manage() =>
     for i = opEntry.size() - 1 to 0
         int d = opDir.get(i)
-        float st = opStop.get(i)
+        float stpx = opStop.get(i)
         float tg = opTgt.get(i)
         float en = opEntry.get(i)
         float rk = opRisk.get(i)
@@ -274,7 +278,7 @@ f_manage() =>
         // target there is no way to know which came first, so the pessimistic
         // reading is the only honest one.
         if d == 1
-            if low <= st
+            if low <= stpx
                 f_led(L_LOSS, 1)
                 f_led(L_RLOSS, -1.0)
                 done := true
@@ -283,7 +287,7 @@ f_manage() =>
                 f_led(L_RWIN, tgtCap)
                 done := true
         else
-            if high >= st
+            if high >= stpx
                 f_led(L_LOSS, 1)
                 f_led(L_RLOSS, -1.0)
                 done := true
@@ -309,11 +313,9 @@ if barClosed and opEntry.size() > 0
 if barClosed and rawBuy and not na(sigTgt)
     pendLong := true
     pendStop := sigStop
-    pendTgt  := sigTgt
 if barClosed and rawSell and not na(sigTgt)
     pendShort := true
     pendStop  := sigStop
-    pendTgt   := sigTgt
 
 // ============================================================================
 // 8. DRAWING
@@ -321,10 +323,10 @@ if barClosed and rawSell and not na(sigTgt)
 var array<box>   rBox = array.new<box>()
 var array<label> rLab = array.new<label>()
 
-f_drawTrade(bool isLong, float e, float st, float tg) =>
+f_drawTrade(bool isLong, float e, float stp, float tg) =>
     rBox.push(box.new(bar_index, tg, bar_index + 20, e,
          bgcolor=color.new(isLong ? cBuy : cSell, 85), border_color=color(na)))
-    rBox.push(box.new(bar_index, e, bar_index + 20, st,
+    rBox.push(box.new(bar_index, e, bar_index + 20, stp,
          bgcolor=color.new(isLong ? cSell : cBuy, 88), border_color=color(na)))
     while rBox.size() > 40
         box.delete(rBox.shift())
@@ -363,26 +365,26 @@ f_drawDash() =>
          spotOk ? (basisBp > 0 ? #26a69a : #ef5350) : #6c7080)
     f_row(5, "Funding", fundOk ? str.tostring(fundRaw, "#.####") : "no funding symbol", fundOk ? #b2b5be : #6c7080)
     // What the positioning says about THIS bar, in words.
-    string st = "-"
+    string stateTxt = "-"
     color  sc = #b2b5be
     if not oiOk
-        st := "no data"
+        stateTxt := "no data"
         sc := #ef5350
     else if flushLong
-        st := "LONG FLUSH - forced selling"
+        stateTxt := "LONG FLUSH - forced selling"
         sc := cBuy
     else if flushShort
-        st := "SHORT SQUEEZE - forced buying"
+        stateTxt := "SHORT SQUEEZE - forced buying"
         sc := cSell
     else if oiCollapse
-        st := "OI falling, range too quiet"
+        stateTxt := "OI falling, range too quiet"
         sc := #ffea00
     else if oiZ > 1.0
-        st := "NEW POSITIONING - has fuel, do not fade"
+        stateTxt := "NEW POSITIONING - has fuel, do not fade"
         sc := #ffa726
     else
-        st := "ordinary two-way"
-    f_row(6, "State", st, sc)
+        stateTxt := "ordinary two-way"
+    f_row(6, "State", stateTxt, sc)
     f_row(7, "Crowding", not needCrowd ? "not required" :
          longsCrowded and shortsCrowded ? "both / unknown" :
          longsCrowded ? "longs crowded" : shortsCrowded ? "shorts crowded" : "neither", #b2b5be)
@@ -402,12 +404,12 @@ if showDash and barstate.islast
 // just to stand still. Reading a win rate without it is how people convince
 // themselves a 33% system is broken or a 45% system is good.
 // ============================================================================
-var table st = table.new(position.bottom_left, 2, 9, bgcolor=color.new(#131722, 12),
+var table mTbl = table.new(position.bottom_left, 2, 9, bgcolor=color.new(#131722, 12),
      border_color=color.new(#000000, 60), border_width=1)
 
 f_srow(int r, string k, string v, color c) =>
-    table.cell(st, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
-    table.cell(st, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+    table.cell(mTbl, 0, r, k, text_color=color.new(#b2b5be, 35), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(mTbl, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
 
 f_drawStats() =>
     float w = led.get(L_WIN)
