@@ -1809,55 +1809,68 @@ if dnaTape and barstate.islast
 // ============================================================================
 float absDelta = math.abs(barDelta)
 
-// RUNTIME: each of these sorts its whole lookback window on every bar, and
-// there are eighteen of them across three windows and two sources. They ran
-// unconditionally - including for everyone with Volume Bubbles switched OFF,
-// which is the default. On a long chart that was the single largest block of
-// wasted work in the script and the main reason for the "Heavy script" warning.
+// TOKEN BUDGET. This block used to hold eighteen separate
+// ta.percentile_linear_interpolation calls - two sources, three windows, three
+// percentiles. Each one compiles its OWN sorted rolling buffer, and eighteen of
+// them is the single most expensive thing in this script. It is what put the
+// compiled size over Pine's 100,256-token limit the moment the mirror was
+// added.
 //
-// bubOn is fixed for the whole run (it comes from an input and the preset), so
-// the branch is taken identically on every bar. That is the condition under
-// which skipping a ta.* call is safe: what makes it unsafe is a condition that
-// VARIES bar to bar, because the function then misses the bars it was not
-// called on and its window silently desynchronises.
-float vSmS = na
-float vSmM = na
-float vSmL = na
-float vMdS = na
-float vMdM = na
-float vMdL = na
-float vBgS = na
-float vBgM = na
-float vBgL = na
-float dSmS = na
-float dSmM = na
-float dSmL = na
-float dMdS = na
-float dMdM = na
-float dMdL = na
-float dBgS = na
-float dBgM = na
-float dBgL = na
+// The three percentiles of one window do not need three buffers. They need one
+// window, read three times. So each (source, window) pair keeps a rolling array
+// and the percentiles come off it with array.percentile_linear_interpolation,
+// which sorts a list it is handed rather than maintaining state of its own.
+// Eighteen stateful buffers become six rolling arrays.
+//
+// The windows are now maintained UNCONDITIONALLY rather than under bubOn. That
+// was a runtime guard on work that is no longer heavy, and running it always
+// removes the desynchronisation trap the old comment here had to warn about.
+//
+// One behavioural difference, and only one: for the first bubLongW bars of a
+// chart the percentile is taken over the bars that exist rather than returning
+// na. The old form was also reading a partial window there; it simply did not
+// say so.
+f_roll(array<float> a, float v, int len) =>
+    a.push(v)
+    if a.size() > len
+        a.shift()
+    a.size()
 
-if bubOn
-    vSmS := ta.percentile_linear_interpolation(volume, bubShortW, bubSmallP)
-    vSmM := ta.percentile_linear_interpolation(volume, bubMidW,   bubSmallP)
-    vSmL := ta.percentile_linear_interpolation(volume, bubLongW,  bubSmallP)
-    vMdS := ta.percentile_linear_interpolation(volume, bubShortW, bubMedP)
-    vMdM := ta.percentile_linear_interpolation(volume, bubMidW,   bubMedP)
-    vMdL := ta.percentile_linear_interpolation(volume, bubLongW,  bubMedP)
-    vBgS := ta.percentile_linear_interpolation(volume, bubShortW, bubBigP)
-    vBgM := ta.percentile_linear_interpolation(volume, bubMidW,   bubBigP)
-    vBgL := ta.percentile_linear_interpolation(volume, bubLongW,  bubBigP)
-    dSmS := ta.percentile_linear_interpolation(absDelta, bubShortW, bubSmallP)
-    dSmM := ta.percentile_linear_interpolation(absDelta, bubMidW,   bubSmallP)
-    dSmL := ta.percentile_linear_interpolation(absDelta, bubLongW,  bubSmallP)
-    dMdS := ta.percentile_linear_interpolation(absDelta, bubShortW, bubMedP)
-    dMdM := ta.percentile_linear_interpolation(absDelta, bubMidW,   bubMedP)
-    dMdL := ta.percentile_linear_interpolation(absDelta, bubLongW,  bubMedP)
-    dBgS := ta.percentile_linear_interpolation(absDelta, bubShortW, bubBigP)
-    dBgM := ta.percentile_linear_interpolation(absDelta, bubMidW,   bubBigP)
-    dBgL := ta.percentile_linear_interpolation(absDelta, bubLongW,  bubBigP)
+f_pctl(array<float> a, float p) =>
+    a.size() > 0 ? a.percentile_linear_interpolation(p) : na
+
+var array<float> wVS = array.new<float>()
+var array<float> wVM = array.new<float>()
+var array<float> wVL = array.new<float>()
+var array<float> wDS = array.new<float>()
+var array<float> wDM = array.new<float>()
+var array<float> wDL = array.new<float>()
+
+f_roll(wVS, volume,   bubShortW)
+f_roll(wVM, volume,   bubMidW)
+f_roll(wVL, volume,   bubLongW)
+f_roll(wDS, absDelta, bubShortW)
+f_roll(wDM, absDelta, bubMidW)
+f_roll(wDL, absDelta, bubLongW)
+
+float vSmS = f_pctl(wVS, bubSmallP)
+float vSmM = f_pctl(wVM, bubSmallP)
+float vSmL = f_pctl(wVL, bubSmallP)
+float vMdS = f_pctl(wVS, bubMedP)
+float vMdM = f_pctl(wVM, bubMedP)
+float vMdL = f_pctl(wVL, bubMedP)
+float vBgS = f_pctl(wVS, bubBigP)
+float vBgM = f_pctl(wVM, bubBigP)
+float vBgL = f_pctl(wVL, bubBigP)
+float dSmS = f_pctl(wDS, bubSmallP)
+float dSmM = f_pctl(wDM, bubSmallP)
+float dSmL = f_pctl(wDL, bubSmallP)
+float dMdS = f_pctl(wDS, bubMedP)
+float dMdM = f_pctl(wDM, bubMedP)
+float dMdL = f_pctl(wDL, bubMedP)
+float dBgS = f_pctl(wDS, bubBigP)
+float dBgM = f_pctl(wDM, bubBigP)
+float dBgL = f_pctl(wDL, bubBigP)
 
 int needVotes = 2
 if bubConsen == "Any Window"
@@ -3570,13 +3583,14 @@ var array<float> opRPlan = array.new<float>()
 // +drift and the second is -drift, so the average is exactly zero at any
 // long/short mix. That is the estimator, and the half-difference between the
 // two strata is the drift itself, which is worth printing on its own line.
-var array<float> mkEntry = array.new<float>()
+// Four arrays, not seven. A mirror is never drawn and never contributes an R
+// to anything, so its entry price, its risk and its target multiple are dead
+// weight once the stop and target prices are computed from them at push time.
+// Only hit-or-miss is ever read back.
 var array<float> mkStop  = array.new<float>()
 var array<float> mkTgt   = array.new<float>()
 var array<int>   mkDir   = array.new<int>()
 var array<int>   mkBar   = array.new<int>()
-var array<float> mkRisk  = array.new<float>()
-var array<float> mkRPlan = array.new<float>()
 
 // 0-3 are the LONG-signal stratum, 4-7 the SHORT-signal stratum; within each,
 // signal wins, signal resolved, mirror wins, mirror resolved. Resolved means
@@ -3590,13 +3604,11 @@ f_stAdd(int i, float v) =>
 // for one entry path and silently bias the comparison.
 f_pushMirror(float en, float rk, float rp, int d) =>
     int md = -d
-    mkEntry.push(en)
     mkStop.push(md == 1 ? en - rk : en + rk)
     mkTgt.push(md == 1 ? en + rk * rp : en - rk * rp)
     mkDir.push(md)
     mkBar.push(bar_index)
-    mkRisk.push(rk)
-    mkRPlan.push(rp)
+    mkDir.size()
 
 var int sigOpen = 0
 var int sigSkip = 0
@@ -4749,45 +4761,25 @@ f_manageTrades() =>
 // effect on any R shown on the chart - the mirrors are never taken, they only
 // answer what the same plan would have done pointing the other way.
 f_manageMirrors() =>
-    for i = mkEntry.size() - 1 to 0
+    for i = mkDir.size() - 1 to 0
         int d = mkDir.get(i)
-        float st = mkStop.get(i)
-        float tg = mkTgt.get(i)
-        bool done = false
-        int  outc = 0
-        if d == 1
-            if low <= st
-                outc := 2
-                done := true
-            else if high >= tg
-                outc := 1
-                done := true
-        else
-            if high >= st
-                outc := 2
-                done := true
-            else if low <= tg
-                outc := 1
-                done := true
-        if not done and bar_index - mkBar.get(i) > statHorizon
+        int outc = d == 1 ? (low <= mkStop.get(i) ? 2 : high >= mkTgt.get(i) ? 1 : 0) :
+             (high >= mkStop.get(i) ? 2 : low <= mkTgt.get(i) ? 1 : 0)
+        if outc == 0 and bar_index - mkBar.get(i) > statHorizon
             outc := 3
-            done := true
-        if done
-            if outc == 1 or outc == 2
-                // stratum is the SIGNAL's direction, which is the opposite of
-                // the mirror's own - that is the whole point of the pairing.
+        if outc > 0
+            if outc < 3
+                // the stratum is the SIGNAL's direction, which is the opposite
+                // of the mirror's own - that is the whole point of the pairing.
                 int stB = d == -1 ? 0 : 4
                 f_stAdd(stB + 3, 1)
                 if outc == 1
                     f_stAdd(stB + 2, 1)
-            mkEntry.remove(i)
             mkStop.remove(i)
             mkTgt.remove(i)
             mkDir.remove(i)
             mkBar.remove(i)
-            mkRisk.remove(i)
-            mkRPlan.remove(i)
-    mkEntry.size()
+    mkDir.size()
 
 // if the market opened past the stop, or the move to the open ate enough of the
 // edge that the setup no longer clears its own minimum, it is not a trade any
@@ -4835,7 +4827,7 @@ if barClosed and pendShort
 if opEntry.size() > 0 and barClosed
     tpHit := f_manageTrades()
 
-if mkEntry.size() > 0 and barClosed
+if mkDir.size() > 0 and barClosed
     f_manageMirrors()
 
 if closeOnReversal and barClosed and opEntry.size() > 0
