@@ -210,10 +210,10 @@ f_results() =>
         f_cell(0, r + 1, str.tostring(f_rung(r), "#.#") + " ATR", #b2b5be, false)
         f_cell(1, r + 1, str.tostring(int(n)), n < 100 ? #ff9800 : #b2b5be, false)
         f_cell(2, r + 1, na(p2) ? "-" : str.tostring(p2 * 100, "#.#"), #b2b5be, false)
-        f_cell(3, r + 1, na(e2) ? "-" : str.tostring(e2, "+#.#"), c2, false)
+        f_cell(3, r + 1, na(e2) ? "-" : (e2 > 0 ? "+" : "") + str.tostring(e2, "#.#"), c2, false)
         f_cell(4, r + 1, na(p5) ? "-" : str.tostring(p5 * 100, "#.#"), #b2b5be, false)
-        f_cell(5, r + 1, na(e5) ? "-" : str.tostring(e5, "+#.#"), c5, false)
-        f_cell(6, r + 1, na(lsp) ? "-" : str.tostring(lsp, "+#.#"), #b2b5be, false)
+        f_cell(5, r + 1, na(e5) ? "-" : (e5 > 0 ? "+" : "") + str.tostring(e5, "#.#"), c5, false)
+        f_cell(6, r + 1, na(lsp) ? "-" : (lsp > 0 ? "+" : "") + str.tostring(lsp, "#.#"), #b2b5be, false)
         f_cell(7, r + 1, na(cr) ? "-" : str.tostring(cr, "#") + "%" +
              (not na(cr) and cr > 20 ? " !" : ""), cc, false)
     f_cell(0, 6, "random walk", #6c7080, true)

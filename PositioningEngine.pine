@@ -450,8 +450,8 @@ f_drawStats() =>
     f_srow(3, "Break-even needs", str.tostring(be * 100, "#.#") + "%", #6c7080)
     f_srow(4, "Edge", n > 0 ? str.tostring((wr - be) * 100, "+#.#") + " pp" : "-",
          na(wr) ? #b2b5be : wr > be ? #26a69a : #ef5350)
-    f_srow(5, "Total R", str.tostring(totR, "+#.#"), totR > 0 ? #26a69a : #ef5350)
-    f_srow(6, "Expectancy", allN > 0 ? str.tostring(totR / allN, "+#.##") + "R" : "-", totR > 0 ? #26a69a : #ef5350)
+    f_srow(5, "Total R", (totR > 0 ? "+" : "") + str.tostring(totR, "#.#"), totR > 0 ? #26a69a : #ef5350)
+    f_srow(6, "Expectancy", allN > 0 ? (totR > 0 ? "+" : "") + str.tostring(totR / allN, "#.##") + "R" : "-", totR > 0 ? #26a69a : #ef5350)
     f_srow(7, "Filled / skipped", str.tostring(int(led.get(L_FILL))) + " / " + str.tostring(int(led.get(L_SKIP))), #6c7080)
     f_srow(8, "Target", str.tostring(tgtCap, "#.#") + "R  fixed", #6c7080)
 

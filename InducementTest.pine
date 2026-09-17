@@ -335,7 +335,7 @@ f_row(int r, int bk, string nm) =>
         float b = f_base(bk, L)
         float e = na(p) or na(b) ? na : (p - b) * 100
         f_cell(2 + L, r, na(p) ? "-" : str.tostring(p * 100, "#.#") +
-             (bk == 0 or na(e) ? "" : " " + str.tostring(e, "+#.#")), #b2b5be, false)
+             (bk == 0 or na(e) ? "" : " " + (e > 0 ? "+" : "") + str.tostring(e, "#.#")), #b2b5be, false)
     n
 
 f_results() =>
@@ -359,7 +359,7 @@ f_results() =>
         float p2 = n2 > 0 ? hits.get(2 * NT + L) / n2 : na
         float d = na(p1) or na(p2) ? na : (p2 - p1) * 100
         color c = n2 < 300 ? #b2b5be : na(d) ? #b2b5be : d > 3 ? #26a69a : d < -3 ? #ef5350 : #b2b5be
-        f_cell(2 + L, 4, na(d) ? "-" : str.tostring(d, "+#.#"), c, true)
+        f_cell(2 + L, 4, na(d) ? "-" : (d > 0 ? "+" : "") + str.tostring(d, "#.#"), c, true)
     f_cell(0, 5, "random walk 1/(1+n)", #6c7080, false)
     f_cell(1, 5, "", #6c7080, false)
     f_cell(2, 5, "33.3", #6c7080, false)

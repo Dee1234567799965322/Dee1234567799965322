@@ -659,8 +659,8 @@ f_drawStats() =>
     // separate a real edge from the 6.4pp of noise two data feeds produce on
     // the same asset - a number this project measured directly.
     f_srow(5, "Edge", n > 0 ? str.tostring((wr - be) * 100, "+#.#") + " pp" : "-", edgeCol)
-    f_srow(6, "Total R", str.tostring(totR, "+#.#") + "R", totR > 0 ? #26a69a : #ef5350)
-    f_srow(7, "Expectancy", allN > 0 ? str.tostring(totR / allN, "+#.##") + "R" : "-",
+    f_srow(6, "Total R", (totR > 0 ? "+" : "") + str.tostring(totR, "#.#") + "R", totR > 0 ? #26a69a : #ef5350)
+    f_srow(7, "Expectancy", allN > 0 ? (totR > 0 ? "+" : "") + str.tostring(totR / allN, "#.##") + "R" : "-",
          totR > 0 ? #26a69a : #ef5350)
     f_srow(8, "Filled / skipped",
          str.tostring(int(led.get(L_FILL))) + " / " + str.tostring(int(led.get(L_SKIP))), #6c7080)

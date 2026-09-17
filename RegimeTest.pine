@@ -287,15 +287,15 @@ f_results() =>
     f_cell(0, 1, "Up  (poor hi + exc lo)", #b2b5be, false)
     f_cell(1, 1, str.tostring(int(nUp)), nUp < 20 ? #ff9800 : #b2b5be, false)
     f_cell(2, 1, na(accU) ? "-" : str.tostring(accU * 100, "#.#") + "%", #b2b5be, false)
-    f_cell(3, 1, na(edgeU) ? "-" : str.tostring(edgeU, "+#.#"), #b2b5be, false)
+    f_cell(3, 1, na(edgeU) ? "-" : (edgeU > 0 ? "+" : "") + str.tostring(edgeU, "#.#"), #b2b5be, false)
     f_cell(0, 2, "Down  (poor lo + exc hi)", #b2b5be, false)
     f_cell(1, 2, str.tostring(int(nDn)), nDn < 20 ? #ff9800 : #b2b5be, false)
     f_cell(2, 2, na(accD) ? "-" : str.tostring(accD * 100, "#.#") + "%", #b2b5be, false)
-    f_cell(3, 2, na(edgeD) ? "-" : str.tostring(edgeD, "+#.#"), #b2b5be, false)
+    f_cell(3, 2, na(edgeD) ? "-" : (edgeD > 0 ? "+" : "") + str.tostring(edgeD, "#.#"), #b2b5be, false)
     f_cell(0, 3, "BOTH", #d1d4dc, true)
     f_cell(1, 3, str.tostring(int(nC)), nC < 40 ? #ff9800 : #d1d4dc, true)
     f_cell(2, 3, nC > 0 ? str.tostring((wUp + wDn) / nC * 100, "#.#") + "%" : "-", #d1d4dc, true)
-    f_cell(3, 3, na(edge) ? "-" : str.tostring(edge, "+#.#") + "pp", ec, true)
+    f_cell(3, 3, na(edge) ? "-" : (edge > 0 ? "+" : "") + str.tostring(edge, "#.#") + "pp", ec, true)
     // The drift row is the whole reason this table can be believed. In a
     // trending sample RAW and EDGE disagree, and RAW is the one that lies.
     f_cell(0, 4, "Drift baseline  P(up wins)", #6c7080, false)

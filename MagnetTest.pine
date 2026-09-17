@@ -413,7 +413,7 @@ f_row(int r, int k, string nm) =>
         f_cell(1, r, str.tostring(int(n)), n < 30 ? #ff9800 : #b2b5be, false)
         f_cell(2, r, str.tostring(hm, "#.#") + "%", #b2b5be, false)
         f_cell(3, r, str.tostring(hx, "#.#") + "%", #6c7080, false)
-        f_cell(4, r, str.tostring(lift, "+#.#"), lc, false)
+        f_cell(4, r, (lift > 0 ? "+" : "") + str.tostring(lift, "#.#"), lc, false)
         f_cell(5, r, mn > 0 ? str.tostring(cMae.get(k) / mn, "#.##") : "-",
              mn > 0 and cMae.get(k) / mn < 1.0 ? #26a69a : #b2b5be, false)
     else
@@ -445,10 +445,10 @@ f_results() =>
     float xl = xn > 0 ? (cHitM.get(2) + cHitM.get(3) - cHitX.get(2) - cHitX.get(3)) / xn * 100 : na
     f_cell(0, 9, "POOR lift", #d1d4dc, true)
     f_cell(1, 9, str.tostring(int(pn)), #b2b5be, true)
-    f_cell(2, 9, na(pl) ? "-" : str.tostring(pl, "+#.#"), na(pl) ? #b2b5be : pl > 8 ? #26a69a : #b2b5be, true)
+    f_cell(2, 9, na(pl) ? "-" : (pl > 0 ? "+" : "") + str.tostring(pl, "#.#"), na(pl) ? #b2b5be : pl > 8 ? #26a69a : #b2b5be, true)
     f_cell(3, 9, "EXCESS lift", #d1d4dc, true)
     f_cell(4, 9, str.tostring(int(xn)), #b2b5be, true)
-    f_cell(5, 9, na(xl) ? "-" : str.tostring(xl, "+#.#"), na(xl) ? #b2b5be : xl < 0 ? #26a69a : #b2b5be, true)
+    f_cell(5, 9, na(xl) ? "-" : (xl > 0 ? "+" : "") + str.tostring(xl, "#.#"), na(xl) ? #b2b5be : xl < 0 ? #26a69a : #b2b5be, true)
     // CALIBRATION, printed where it cannot be skipped. If the classifier is not
     // finding poor extremes then the poor rows are empty and their lift is not
     // a result about markets, it is a result about the classifier.

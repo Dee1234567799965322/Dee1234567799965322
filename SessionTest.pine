@@ -261,7 +261,7 @@ f_results() =>
         f_cell(0, b + 1, str.tostring(b * 3, "00") + "-" + str.tostring(b * 3 + 3, "00"), #b2b5be, false)
         f_cell(1, b + 1, str.tostring(int(n)), n < 30 ? #ff9800 : #b2b5be, false)
         f_cell(2, b + 1, na(u) ? "-" : str.tostring(u * 100, "#.#") + "%", #b2b5be, false)
-        f_cell(3, b + 1, na(e) ? "-" : str.tostring(e, "+#.#"), ec, false)
+        f_cell(3, b + 1, na(e) ? "-" : (e > 0 ? "+" : "") + str.tostring(e, "#.#"), ec, false)
         f_cell(4, b + 1, cVn.get(b) > 0 ? str.tostring(cVol.get(b) / cVn.get(b), "#.##") : "-", #6c7080, false)
 
     f_cell(0, 9, "BASE  all blocks", #d1d4dc, true)
@@ -281,13 +281,13 @@ f_results() =>
     f_cell(0, 10, "IB break UP -> continues", #b2b5be, false)
     f_cell(1, 10, str.tostring(int(nu)), nu < 30 ? #ff9800 : #b2b5be, false)
     f_cell(2, 10, na(uu) ? "-" : str.tostring(uu * 100, "#.#") + "%", #b2b5be, false)
-    f_cell(3, 10, na(eu) ? "-" : str.tostring(eu, "+#.#"),
+    f_cell(3, 10, na(eu) ? "-" : (eu > 0 ? "+" : "") + str.tostring(eu, "#.#"),
          nu < 30 ? #b2b5be : na(eu) ? #b2b5be : eu > 5 ? #26a69a : eu < -5 ? #ef5350 : #b2b5be, false)
     f_cell(4, 10, "", #6c7080, false)
     f_cell(0, 11, "IB break DOWN -> continues", #b2b5be, false)
     f_cell(1, 11, str.tostring(int(nd)), nd < 30 ? #ff9800 : #b2b5be, false)
     f_cell(2, 11, na(ud) ? "-" : str.tostring((1 - ud) * 100, "#.#") + "%", #b2b5be, false)
-    f_cell(3, 11, na(ed) ? "-" : str.tostring(ed, "+#.#"),
+    f_cell(3, 11, na(ed) ? "-" : (ed > 0 ? "+" : "") + str.tostring(ed, "#.#"),
          nd < 30 ? #b2b5be : na(ed) ? #b2b5be : ed > 5 ? #26a69a : ed < -5 ? #ef5350 : #b2b5be, false)
     f_cell(4, 11, "", #6c7080, false)
 

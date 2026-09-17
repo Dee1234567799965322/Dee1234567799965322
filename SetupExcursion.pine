@@ -275,7 +275,7 @@ f_row(int r, int bk, string nm) =>
         float e = na(p) or na(b) ? na : (p - b) * 100
         color c = n < 60 ? #b2b5be : na(e) ? #b2b5be : e > 3 ? #26a69a : e < -3 ? #ef5350 : #b2b5be
         f_cell(2 + L, r, na(p) ? "-" : str.tostring(p * 100, "#.#") +
-             (bk == 0 or na(e) ? "" : " " + str.tostring(e, "+#.#")), c, false)
+             (bk == 0 or na(e) ? "" : " " + (e > 0 ? "+" : "") + str.tostring(e, "#.#")), c, false)
     n
 
 f_results() =>

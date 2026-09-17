@@ -212,8 +212,8 @@ f_results() =>
         f_cell(2, L + 1, na(pS) ? "-" : str.tostring(pS * 100, "#.#") + "%", #6c7080, false)
         f_cell(3, L + 1, na(pA) ? "-" : str.tostring(pA * 100, "#.#") + "%", #b2b5be, false)
         f_cell(4, L + 1, str.tostring(rw * 100, "#.#") + "%", #6c7080, false)
-        f_cell(5, L + 1, na(ed) ? "-" : str.tostring(ed, "+#.#"), ec, false)
-        f_cell(6, L + 1, na(ex) ? "-" : str.tostring(ex, "+#.##") + "R", ec, false)
+        f_cell(5, L + 1, na(ed) ? "-" : (ed > 0 ? "+" : "") + str.tostring(ed, "#.#"), ec, false)
+        f_cell(6, L + 1, na(ex) ? "-" : (ex > 0 ? "+" : "") + str.tostring(ex, "#.##") + "R", ec, false)
 
     float avgL = nL > 0 ? misc.get(1) / nL : na
     float avgS = nS > 0 ? misc.get(2) / nS : na
