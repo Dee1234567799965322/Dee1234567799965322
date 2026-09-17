@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.5
+// EDGE LAB  v1.6
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -658,8 +658,14 @@ f_cell(int c, int r, string v, color col, bool hdr) =>
 f_pct(float v) =>
     na(v) ? "-" : str.tostring(v * 100, "#.#") + "%"
 
-f_sgn(float v) =>
-    na(v) ? "-" : str.tostring(v, "+#.#")
+// Pine's "+" format specifier emits the forced plus AFTER the minus sign, so
+// str.tostring(-9.1, "+#.#") renders "-+9.1". Every negative on this panel read
+// that way for five versions, which is exactly how long I spent second-guessing
+// signs off screenshots. Sign it here and let the format carry digits only.
+f_sg(float v, string f) =>
+    na(v) ? "-" : (v > 0 ? "+" : "") + str.tostring(v, f)
+
+f_sgn(float v) => f_sg(v, "#.#")
 
 f_panel() =>
     float tg = f_tgt(selT)
@@ -703,8 +709,8 @@ f_panel() =>
         f_cell(4, b + 1, f_pct(pM), #6c7080, false)
         f_cell(5, b + 1, f_sgn(lf), #6c7080, false)
         f_cell(6, b + 1, b == 0 ? "-" : f_sgn(ls), lc, false)
-        f_cell(7, b + 1, b == 0 ? "-" : na(lz) ? "-" : str.tostring(lz, "+#.##"), lc, false)
-        f_cell(8, b + 1, na(ex) ? "-" : str.tostring(ex, "+#.##"), #6c7080, false)
+        f_cell(7, b + 1, b == 0 ? "-" : na(lz) ? "-" : f_sg(lz, "#.##"), lc, false)
+        f_cell(8, b + 1, na(ex) ? "-" : f_sg(ex, "#.##"), #6c7080, false)
         f_cell(9, b + 1, na(am) ? "-" : str.tostring(am, "#.##") + "R", #6c7080, false)
         // MDL is the smallest lift this bucket could resolve. When it exceeds
         // the noise floor the bucket cannot answer the question at all, and it
@@ -774,10 +780,10 @@ f_panel() =>
         f_cell(2, L + 9, f_pct(pB), #6c7080, false)
         f_cell(3, L + 9, f_sgn(lf), #6c7080, false)
         f_cell(4, L + 9, f_sgn(ls), lc, false)
-        f_cell(5, L + 9, na(lz) ? "-" : str.tostring(lz, "+#.##"), lc, false)
+        f_cell(5, L + 9, na(lz) ? "-" : f_sg(lz, "#.##"), lc, false)
         f_cell(6, L + 9, f_pct(rw), #6c7080, false)
         f_cell(7, L + 9, f_sgn(vr), #6c7080, false)
-        f_cell(8, L + 9, na(ex) ? "-" : str.tostring(ex, "+#.##"), #6c7080, false)
+        f_cell(8, L + 9, na(ex) ? "-" : f_sg(ex, "#.##"), #6c7080, false)
         f_cell(9, L + 9, na(oSt.get(3)) ? "-" : str.tostring(f_mdl(oSt.get(3)), "#.#"),
              na(oSt.get(3)) ? #6c7080 : f_mdl(oSt.get(3)) > NOISE_PP ? #ff9800 : #26a69a, false)
         f_cell(10, L + 9, "", #6c7080, false)
@@ -944,11 +950,11 @@ f_panel() =>
          "same sign both halves"
     color stabc = na(h1Lf) or na(h2Lf) ? #6c7080 : not same ? #ef5350 :
          not na(dZ) and math.abs(dZ) > 2.0 ? #ff9800 : #26a69a
-    f_cell(0, 20, "SPLIT   1st half " + (na(h1Lf) ? "-" : str.tostring(h1Lf, "+#.#") + "pp") +
+    f_cell(0, 20, "SPLIT   1st half " + (na(h1Lf) ? "-" : f_sg(h1Lf, "#.#") + "pp") +
          " (n " + str.tostring(int(h1N)) + ")    2nd half " +
-         (na(h2Lf) ? "-" : str.tostring(h2Lf, "+#.#") + "pp") +
+         (na(h2Lf) ? "-" : f_sg(h2Lf, "#.#") + "pp") +
          " (n " + str.tostring(int(h2N)) + ")    diff z " +
-         (na(dZ) ? "-" : str.tostring(dZ, "+#.##")) + "   ->  " + stab, stabc, false)
+         (na(dZ) ? "-" : f_sg(dZ, "#.##")) + "   ->  " + stab, stabc, false)
 
     // The same question asked of trades that never shared a bar.
     f_stratInd(selBk, selT)
@@ -961,8 +967,8 @@ f_panel() =>
     color ic = na(iLf) ? #6c7080 : na(iZ) ? #6c7080 :
          math.abs(iLf) >= NOISE_PP and math.abs(iZ) >= Z_BAR ? (iLf > 0 ? #26a69a : #ef5350) : #ff9800
     f_cell(0, 22, "IND (no overlap)   n " + str.tostring(int(iN)) + " of " + str.tostring(int(nL)) +
-         "   LIFT* " + (na(iLf) ? "-" : str.tostring(iLf, "+#.#") + "pp") +
-         "   z* " + (na(iZ) ? "-" : str.tostring(iZ, "+#.##")) +
+         "   LIFT* " + (na(iLf) ? "-" : f_sg(iLf, "#.#") + "pp") +
+         "   z* " + (na(iZ) ? "-" : f_sg(iZ, "#.##")) +
          "   MDL " + (na(iMd) ? "-" : str.tostring(iMd, "#.#") + "pp") +
          "   ->  " + (na(iLf) ? "no data" :
               not iAgree ? "DISAGREES with the full sample - the full-sample z was overlap" :
