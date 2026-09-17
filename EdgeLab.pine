@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.8
+// EDGE LAB  v1.9
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -699,7 +699,25 @@ f_panel() =>
         // floor. Below that it stays grey whatever the z says, because a
         // difference smaller than the data vendor's own disagreement with itself
         // cannot be attributed to a signal.
-        color lc = b == 0 ? #6c7080 : na(ls) ? #6c7080 : math.abs(ls) < NOISE_PP ? #6c7080 : ls > 0 ? #26a69a : #ef5350
+        // CORRECTION 14 - THE COLOURS NEVER TESTED SIGNIFICANCE EITHER.
+        //
+        // This painted a cell green or red on magnitude alone: clear the 6.4pp
+        // floor and you got a verdict colour, whatever your z or your N. Across
+        // every panel produced in this project, 27 cells were painted as
+        // findings and NOT ONE of them cleared the |z*| >= 3.0 gate printed two
+        // lines below them on the same panel. Not one was even larger than its
+        // own MDL. BTC 15m SWEEP+HTF was painted green at N=32, needing 32pp
+        // more lift before it could be seen at all - while the MDL column beside
+        // it printed orange, saying exactly that. The panel contradicted itself
+        // in adjacent columns for the whole session.
+        //
+        // Three states now. Grey below the floor. AMBER for big-but-unresolved,
+        // which is where essentially everything lands. A verdict colour only
+        // when the number clears the floor AND the bar.
+        color lc = b == 0 or na(ls) ? #6c7080 :
+             math.abs(ls) < NOISE_PP ? #6c7080 :
+             na(lz) or math.abs(lz) < Z_BAR ? #ff9800 :
+             ls > 0 ? #26a69a : #ef5350
         color nc = nS < N_MIN ? #ff9800 : #b2b5be
         bool  sel = b == selBk
         f_cell(0, b + 1, (sel ? "> " : "  ") + f_name(b) + (b == 0 ? "  (drift)" : ""), sel ? #ffffff : #b2b5be, false)
@@ -768,7 +786,10 @@ f_panel() =>
         f_strat(selBk, L)
         float ls  = oSt.get(0)
         float lz  = oSt.get(1)
-        color lc  = na(ls) ? #6c7080 : math.abs(ls) < NOISE_PP ? #6c7080 : ls > 0 ? #26a69a : #ef5350
+        color lc  = na(ls) ? #6c7080 :
+             math.abs(ls) < NOISE_PP ? #6c7080 :
+             na(lz) or math.abs(lz) < Z_BAR ? #ff9800 :
+             ls > 0 ? #26a69a : #ef5350
         if not na(ex) and ex > bestE
             bestE := ex
             bestL := L
@@ -910,7 +931,9 @@ f_panel() =>
     f_cell(0, 17, "Bars " + str.tostring(bar_index + 1) +
          "    MDL " + (na(bMd) ? "-" : str.tostring(bMd, "#.#") + "pp") +
          " = smallest lift resolvable here at 80% power. Orange means the bucket cannot answer the question, whatever it prints.", #6c7080, false)
-    f_cell(0, 18, "LIFT is raw and still carries  skew x drift.  LIFT* is computed inside each direction and is drift-free whatever the L/S mix. Read LIFT*.", #6c7080, false)
+    f_cell(0, 18, "LIFT is raw and carries  skew x drift.  LIFT* is drift-free whatever the L/S mix - read LIFT*.   Colour: grey under the " +
+         str.tostring(NOISE_PP, "#.#") + "pp floor, AMBER over it but under |z*| " + str.tostring(Z_BAR, "#.#") +
+         ", green/red only when both clear.", #6c7080, false)
     // CORRECTION 9 - THE EFFECT EXISTS PER INSTRUMENT. THAT IS NOT THE SAME AS
     // IT BEING TRADEABLE.
     //
