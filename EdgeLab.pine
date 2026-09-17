@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.6
+// EDGE LAB  v1.7
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -944,12 +944,27 @@ f_panel() =>
     float dSe  = na(h1Se) or na(h2Se) ? na : math.sqrt(h1Se * h1Se + h2Se * h2Se)
     float dZ   = na(h1Lf) or na(h2Lf) or na(dSe) or dSe <= 0 ? na : (h1Lf - h2Lf) / dSe
     bool  same = not na(h1Lf) and not na(h2Lf) and h1Lf * h2Lf > 0
+    // CORRECTION 12 - FLIPS WAS FIRING ON THE SIGN ALONE.
+    //
+    // The old order tested "do the halves disagree in sign" BEFORE testing
+    // whether they disagree by more than noise, so a second half sitting at
+    // -1.7pp against a first half of +11.7pp - a difference of z 1.45, entirely
+    // consistent with one common value - was reported as FLIPS, sign is not a
+    // property of the instrument. That is the same mistake this whole panel
+    // exists to prevent, committed by the panel itself: a verdict that reads a
+    // difference without asking whether the difference is bigger than the noise.
+    //
+    // Significance is now tested first. A sign disagreement that does not clear
+    // it reads as what it is - the sign was never established either way.
+    bool  wide = not na(dZ) and math.abs(dZ) > 2.0
     string stab = na(h1Lf) or na(h2Lf) ? "no data" :
-         not same ? "FLIPS - sign is not a property of the instrument" :
-         not na(dZ) and math.abs(dZ) > 2.0 ? "UNSTABLE - halves differ by more than noise" :
+         wide and not same ? "FLIPS - opposite signs, and beyond noise" :
+         wide ? "UNSTABLE - same sign, but halves differ beyond noise" :
+         not same ? "sign not established - halves disagree within noise" :
          "same sign both halves"
-    color stabc = na(h1Lf) or na(h2Lf) ? #6c7080 : not same ? #ef5350 :
-         not na(dZ) and math.abs(dZ) > 2.0 ? #ff9800 : #26a69a
+    color stabc = na(h1Lf) or na(h2Lf) ? #6c7080 :
+         wide and not same ? #ef5350 : wide ? #ff9800 :
+         not same ? #ff9800 : #26a69a
     f_cell(0, 20, "SPLIT   1st half " + (na(h1Lf) ? "-" : f_sg(h1Lf, "#.#") + "pp") +
          " (n " + str.tostring(int(h1N)) + ")    2nd half " +
          (na(h2Lf) ? "-" : f_sg(h2Lf, "#.#") + "pp") +
