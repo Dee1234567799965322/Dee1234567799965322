@@ -38,7 +38,7 @@ been written up.
 | 3 | **The noise floor is 6.4pp**, measured feed-to-feed on one asset | Every result smaller than two exchanges' disagreement with each other |
 | 4 | **Multiplicity** — the z bar rises with the cell count | `z = 2.25` across 15 cells: 31% likely by chance |
 | 5 | **Censoring and cost in R** | The speed ladder, unreadable; every crypto result, on cost alone |
-| 6 | **Direction stratification** (`LIFT*` inside each stratum) | Nothing, as it turned out — the buckets were already balanced. A guarantee, not a repair |
+| 6 | **Direction stratification** (`LIFT*` inside each stratum) | Nothing at 30m, where buckets were balanced — then 1.3pp of gold's 4h result, exactly as the algebra predicted |
 | 7 | **Power** — state the smallest effect the sample could see | Six "nulls" that were empty instruments rather than measurements |
 | 8 | **Fix the target rung before looking** | A verdict that picked its own best cell and reported a different cell's power |
 | 9 | **Non-overlapping trades only** | The pooled `z = −3.12` — the one number that cleared the bar |
@@ -93,6 +93,25 @@ Not "no edge" — something narrower:
 It is also smaller than the 6.4pp noise floor, worth about **+0.02R per trade**
 against a 0.035R CFD cost, and would need roughly **4,100 sweeps — about nine
 years of 30-minute history** — to establish at the standard `EdgeLab` enforces.
+
+### Raising the timeframe does not help
+
+Sweeps arrive at a near-constant rate per bar — 1 per 27.8 bars at 30m, 1 per
+30.4 at 4h — so sample size is set by how many bars the platform will load, and
+it loads fewer at 4h. The test gets *weaker* going up:
+
+| Chart | Bars | Sweeps | Smallest lift resolvable |
+|---|---|---|---|
+| XAUUSD 30m | 8,413 | 303 | 14.7pp |
+| XAUUSD 4h | 5,744 | 189 | 18.6pp |
+
+Resolving the noise floor at 4h would take about **22 years** of gold. 30m is
+the sweet spot, not a compromise.
+
+The 4h run did earn one thing: it is the only sample where drift (+10.9pp) and
+bucket skew (83/106) were both large enough for correction 6 to bite. Predicted
+artefact `skew × drift = −1.33pp`; observed raw-minus-`LIFT*` difference
+`−1.11pp`. The correction removes what the arithmetic says it should.
 
 Across 14 instruments the between-instrument spread is **τ = 4.4pp**, larger
 than the pooled effect itself, and the effect also varies *within* an instrument
