@@ -4938,9 +4938,13 @@ f_drawStats() =>
     float beRate = na(avgPlanR) or avgPlanR <= 0 ? na : 100.0 / (1.0 + avgPlanR)
     float winRate = sigTot > 0 ? sigWin * 100.0 / sigTot : na
     float wEdge = na(winRate) or na(beRate) ? na : winRate - beRate
-    f_pair2(1, "Hit target (resolved)", f_pct(sigWin, sigTot) +
-         (na(beRate) ? "" : "   be " + str.tostring(beRate, "#.#") + "%"),
-         sigTot < 20 or na(wEdge) ? C_NE : wEdge > 0 ? C_UP : C_DN)
+    // Colour is deferred until mdlPP exists a few lines below. On gold this row
+    // was painting GREEN on a +6.3pp edge while the verdict row three lines
+    // later read UNDERPOWERED, because only one of them tested power. Two
+    // answers from one number is exactly the fault this panel was rebuilt to
+    // remove, and I left it in the row the eye reads first.
+    string hitTxt = f_pct(sigWin, sigTot) +
+         (na(beRate) ? "" : "   be " + str.tostring(beRate, "#.#") + "%")
     f_pair2(2, "Hit target (all)", f_pct(sigWin, sigAll), sigAll < 20 ? C_NE : C_WN)
     f_pair2(3, "Win/Loss/Exp/Flat", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" +
          str.tostring(sigExpired) + "/" + str.tostring(sigFlat), C_NE)
@@ -4962,6 +4966,11 @@ f_drawStats() =>
     // win-rate test actually describes.
     color expCol = nClosed < 20 or sigTot < 20 or na(expectR) ? C_NE :
          not powOk ? C_WN : expectR > 0 ? C_UP : C_DN
+    // Same three states as everything else: grey below the sample gate, amber
+    // over it but unresolvable, a verdict colour only when the edge clears what
+    // the sample can see.
+    f_pair2(1, "Hit target (resolved)", hitTxt,
+         sigTot < 20 or na(wEdge) ? C_NE : not powOk ? C_WN : wEdge > 0 ? C_UP : C_DN)
     f_pair2(4, "Expectancy  R/trade", na(expectR) ? "-" : str.tostring(expectR, "#.##") + "R", expCol)
     f_pair2(5, "Total R", na(expectR) ? "-" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
     f_pair2(6, "Avg R targeted", na(avgPlanR) ? "-" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
@@ -4984,17 +4993,17 @@ f_drawStats() =>
     float phL = poorHiTotal > 0 ? poorHiHit * 100.0 / poorHiTotal - MIRROR_BASE : na
     float plL = poorLoTotal > 0 ? poorLoHit * 100.0 / poorLoTotal - MIRROR_BASE : na
     f_pair2(9, "Poor high vs 76% base", na(phL) ? "-" :
-         (phL > 0 ? "+" : "") + str.tostring(phL, "#.#") + "pp",
+         (phL > 0 ? "+" : "") + str.tostring(phL, "#.#") + "pp  n " + str.tostring(poorHiTotal),
          poorHiTotal < 20 or na(phL) or math.abs(phL) < 6.4 ? C_NE : phL > 0 ? C_UP : C_DN)
     f_pair2(10, "Poor low vs 76% base", na(plL) ? "-" :
-         (plL > 0 ? "+" : "") + str.tostring(plL, "#.#") + "pp",
+         (plL > 0 ? "+" : "") + str.tostring(plL, "#.#") + "pp  n " + str.tostring(poorLoTotal),
          poorLoTotal < 20 or na(plL) or math.abs(plL) < 6.4 ? C_NE : plL > 0 ? C_UP : C_DN)
     // Balance break held was green at ANY value once n cleared 20 - a colour
     // carrying no information whatever. Its null is a coin flip, so read it
     // against 50, and only once the gap clears the same floor.
     float bbL = balTotal > 0 ? balHold * 100.0 / balTotal - 50.0 : na
     f_pair2(11, "Balance break vs 50%", na(bbL) ? "-" :
-         (bbL > 0 ? "+" : "") + str.tostring(bbL, "#.#") + "pp",
+         (bbL > 0 ? "+" : "") + str.tostring(bbL, "#.#") + "pp  n " + str.tostring(balTotal),
          balTotal < 20 or na(bbL) or math.abs(bbL) < 6.4 ? C_NE : bbL > 0 ? C_UP : C_DN)
     // THE CAP, STATED RATHER THAN INFERRED.
     // "Avg R targeted" cannot tell you whether the cap is on, and I spent
