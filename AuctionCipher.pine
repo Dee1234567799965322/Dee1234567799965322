@@ -4834,7 +4834,7 @@ f_pct(int hit, int tot) =>
     // only ever read 0% or 100%. Multiplying first keeps it in floating point.
     tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "-"
 
-var table stat = table.new(f_tablePos(statPos), 2, 15, bgcolor=cTblBg,
+var table stat = table.new(f_tablePos(statPos), 2, 17, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -4931,12 +4931,30 @@ f_drawStats() =>
 
     int sigTot = sigWin + sigLoss
     int sigAll = sigWin + sigLoss + sigExpired + sigFlat
-    f_pair2(1, "Hit target (resolved)", f_pct(sigWin, sigTot), sigTot < 20 ? C_NE : (sigWin * 2 > sigTot ? C_UP : C_DN))
+    // BREAK-EVEN IS NOT 50%. This row used to go green above a 50% win rate,
+    // which at a 2R target is fifty percent ABOVE the level that actually pays.
+    // Break-even is 1/(1 + avg R targeted): about 34% at 2R. A 40% win rate is
+    // profitable and this panel was printing it red.
+    float beRate = na(avgPlanR) or avgPlanR <= 0 ? na : 100.0 / (1.0 + avgPlanR)
+    float winRate = sigTot > 0 ? sigWin * 100.0 / sigTot : na
+    float wEdge = na(winRate) or na(beRate) ? na : winRate - beRate
+    f_pair2(1, "Hit target (resolved)", f_pct(sigWin, sigTot) +
+         (na(beRate) ? "" : "   be " + str.tostring(beRate, "#.#") + "%"),
+         sigTot < 20 or na(wEdge) ? C_NE : wEdge > 0 ? C_UP : C_DN)
     f_pair2(2, "Hit target (all)", f_pct(sigWin, sigAll), sigAll < 20 ? C_NE : C_WN)
     f_pair2(3, "Win/Loss/Exp/Flat", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" +
          str.tostring(sigExpired) + "/" + str.tostring(sigFlat), C_NE)
-    // THE row. Under 20 closed trades it is grey, because it means nothing yet.
-    color expCol = nClosed < 20 ? C_NE : (nz(expectR) > 0 ? C_UP : C_DN)
+    // THE row - and 20 trades was never the right bar. The smallest win-rate
+    // edge a sample can resolve, at 80% power and two sigma, is
+    //     MDL = 2.8 * sqrt(p(1-p)/n)
+    // which at n=20 and p=1/3 is about 29 points. A panel that goes green on an
+    // edge of 6 points at n=20 is reporting the noise in its own denominator.
+    // Green now needs the observed edge to exceed what the sample can see.
+    float pHat = na(winRate) ? na : winRate / 100.0
+    float mdlPP = na(pHat) or sigTot <= 0 ? na : 2.8 * math.sqrt(pHat * (1 - pHat) / sigTot) * 100
+    bool  powOk = not na(mdlPP) and not na(wEdge) and math.abs(wEdge) >= mdlPP
+    color expCol = nClosed < 20 or na(expectR) ? C_NE :
+         not powOk ? C_WN : expectR > 0 ? C_UP : C_DN
     f_pair2(4, "Expectancy  R/trade", na(expectR) ? "-" : str.tostring(expectR, "#.##") + "R", expCol)
     f_pair2(5, "Total R", na(expectR) ? "-" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
     f_pair2(6, "Avg R targeted", na(avgPlanR) ? "-" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
@@ -4948,9 +4966,29 @@ f_drawStats() =>
     f_pair2(8, "R  expired / flat",
          str.tostring(sumRExp, "#.#") + " / " + str.tostring(sumRFlat, "#.#"),
          sumRExp + sumRFlat > 0 ? C_UP : C_DN)
-    f_pair2(9, "Poor high revisited", f_pct(poorHiHit, poorHiTotal), poorHiTotal < 20 ? C_NE : C_WN)
-    f_pair2(10, "Poor low revisited", f_pct(poorLoHit, poorLoTotal), poorLoTotal < 20 ? C_NE : C_WN)
-    f_pair2(11, "Balance break held", f_pct(balHold, balTotal), balTotal < 20 ? C_NE : C_UP)
+    // THESE TWO ROWS HAVE A BASELINE NOW, AND IT COSTS THEM EVERYTHING.
+    // A separate controlled test registered every level with a MIRROR - same
+    // distance, same instant, opposite side - and found that ANY level near
+    // price is revisited about 76% of the time over 200 bars. So "poor high
+    // revisited 80%" was 80% against 76%. Four points, against a 6.4pp floor
+    // measured between two exchanges on the same asset. Nothing.
+    // The rate alone was never the claim. The lift over the baseline is.
+    float MIRROR_BASE = 76.0
+    float phL = poorHiTotal > 0 ? poorHiHit * 100.0 / poorHiTotal - MIRROR_BASE : na
+    float plL = poorLoTotal > 0 ? poorLoHit * 100.0 / poorLoTotal - MIRROR_BASE : na
+    f_pair2(9, "Poor high vs 76% base", na(phL) ? "-" :
+         (phL > 0 ? "+" : "") + str.tostring(phL, "#.#") + "pp",
+         poorHiTotal < 20 or na(phL) or math.abs(phL) < 6.4 ? C_NE : phL > 0 ? C_UP : C_DN)
+    f_pair2(10, "Poor low vs 76% base", na(plL) ? "-" :
+         (plL > 0 ? "+" : "") + str.tostring(plL, "#.#") + "pp",
+         poorLoTotal < 20 or na(plL) or math.abs(plL) < 6.4 ? C_NE : plL > 0 ? C_UP : C_DN)
+    // Balance break held was green at ANY value once n cleared 20 - a colour
+    // carrying no information whatever. Its null is a coin flip, so read it
+    // against 50, and only once the gap clears the same floor.
+    float bbL = balTotal > 0 ? balHold * 100.0 / balTotal - 50.0 : na
+    f_pair2(11, "Balance break vs 50%", na(bbL) ? "-" :
+         (bbL > 0 ? "+" : "") + str.tostring(bbL, "#.#") + "pp",
+         balTotal < 20 or na(bbL) or math.abs(bbL) < 6.4 ? C_NE : bbL > 0 ? C_UP : C_DN)
     // THE CAP, STATED RATHER THAN INFERRED.
     // "Avg R targeted" cannot tell you whether the cap is on, and I spent
     // several rounds wrongly insisting it could. With next-bar-open fills the R
@@ -4964,6 +5002,17 @@ f_drawStats() =>
     f_pair2(14, "Target cap", riskTgtCap > 0 ? str.tostring(riskTgtCap, "#.#") + "R  ON" : "OFF",
          riskTgtCap > 0 ? C_UP : C_WN)
     f_pair2(12, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
+    // WHAT THIS SAMPLE COULD HAVE SEEN. Printed whether or not anything was
+    // found, because "no edge" and "could not have detected one" are different
+    // statements and this panel used to make only the first.
+    f_pair2(15, "Smallest edge visible", na(mdlPP) ? "-" : str.tostring(mdlPP, "#.#") + "pp",
+         na(mdlPP) ? C_NE : mdlPP > 6.4 ? C_WN : C_UP)
+    f_pair2(16, "Verdict", sigTot < 20 ? "too few trades" :
+         na(mdlPP) or na(wEdge) ? "-" :
+         math.abs(wEdge) < mdlPP ? "UNDERPOWERED" :
+         wEdge > 0 ? "edge clears its own noise" : "negative, and resolvable",
+         sigTot < 20 or na(mdlPP) or na(wEdge) ? C_NE :
+         math.abs(wEdge) < mdlPP ? C_WN : wEdge > 0 ? C_UP : C_DN)
     f_pair2(13, "Open now  (live R)",
          str.tostring(sigOpen) + (na(openR) ? "" : "   " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"),
          na(openR) ? C_NE : (openR > 0 ? C_UP : C_DN))
