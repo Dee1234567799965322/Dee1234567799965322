@@ -1,0 +1,665 @@
+//@version=6
+// ============================================================================
+// EDGE LAB  v1.0
+// ----------------------------------------------------------------------------
+// ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
+// NECESSARY.
+//
+// Ten hypotheses were measured across this repo - value edges, sweeps, open
+// interest, magnets, regime, session clock, excursion shape, setup quality,
+// inducement, stop speed - across roughly fifteen thousand trades. Not one
+// produced a positive edge that survived its own control. What the day DID
+// produce is a list of the ways a result can look real and not be, and every
+// one of those ways is now wired into this file as a gate a number has to pass
+// before it is allowed to read as an edge.
+//
+// This file does not contain a signal. It contains the five corrections that
+// killed the signals, so that the next candidate has to get past them.
+//
+// ----------------------------------------------------------------------------
+// CORRECTION 1 - THE MIRROR. Every signal opens its own opposite.
+//
+// The single biggest upgrade over anything built today. When a sweep fires a
+// short, this file also opens a LONG from the same bar, at the same distance,
+// with the same stop. The mirror shares the entry bar, so it shares the drift,
+// the volatility regime, the session, the news, and the position in the trend.
+// Anything that is a property of the MOMENT rather than of the SIGNAL helps
+// both sides equally and cancels in the difference.
+//
+// LIFT = signal reach - mirror reach. Under every null this session found a way
+// to be fooled by, LIFT is zero. It is the only column on this panel that is
+// hard to fake.
+//
+// The earlier files used a timer baseline blended to each bucket's long/short
+// mix. That was correct but weaker: it matched the direction, not the bar.
+//
+// ----------------------------------------------------------------------------
+// CORRECTION 2 - THE NULL IS ARITHMETIC, NOT ESTIMATED.
+//
+// For a driftless walk stopped at -1R, P(touch +nR first) = 1/(1+n) exactly.
+//   1R 50.0%   2R 33.3%   3R 25.0%   5R 16.7%   8R 11.1%
+// Measured on 8,302 timer trades, every one of the six targets landed within
+// 0.40pp of that line. The market has no fat right tail at stop-anchored
+// horizons. RW is printed beside every rung so no reach rate can be admired
+// on its own.
+//
+// ----------------------------------------------------------------------------
+// CORRECTION 3 - THE NOISE FLOOR IS 6.4 POINTS.
+//
+// The same asset on two exchanges, same period, same settings, disagreed by
+// 6.4pp on a reach rate. That is the data feed alone. A lift smaller than that
+// is not a small edge, it is a different data vendor. LIFT is only coloured
+// once it clears the floor.
+//
+// ----------------------------------------------------------------------------
+// CORRECTION 4 - SIX BUCKETS TIMES FIVE RUNGS IS THIRTY LOOKS.
+//
+// The original suite's best cell was z = 2.25 across fifteen cells, which comes
+// up by chance about 31% of the time. Thirty cells is worse. The verdict gate
+// therefore asks for |z| >= 3.0, not 2.0, and the ladder rung is chosen by best
+// net R, which is itself a look and is counted.
+//
+// ----------------------------------------------------------------------------
+// CORRECTION 5 - CENSORING AND COST ARE NOT ROUNDING.
+//
+// A trade abandoned at the horizon records as "did not reach", which pushes far
+// targets down mechanically - and it does so HARDER at wide stops, which is the
+// confound that made the speed ladder unreadable. Censoring is printed per
+// bucket and gates the verdict at 20%.
+//
+// Cost is subtracted in R before any expectancy is shown. Gold CFD is about
+// 0.035R on a 1 ATR stop; a Binance perp is 0.16R, which is four times the
+// entire measured spread of anything found today.
+//
+// ----------------------------------------------------------------------------
+// HOW TO READ THE PANEL, IN ONE LINE.
+//
+// Look at LIFT. If it is under 6.4 the bucket does nothing the mirror does not.
+// Everything else on the screen is there to stop LIFT from lying.
+//
+// SET UP FOR GOLD: XAUUSD 30m, ATR 14, 1 ATR stop, 200 bar horizon, cost 0.035R.
+// ============================================================================
+indicator("Edge Lab", shorttitle="EDGELAB", overlay=true,
+     max_boxes_count=100, max_lines_count=100, max_labels_count=200, max_bars_back=500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_T = "1 - THE TEST"
+float stopK   = input.float(1.0, "Stop Distance (ATR) = 1R", minval=0.2, maxval=5.0, step=0.1, group=G_T,
+     tooltip="The stop defines R. Everything on the panel is a multiple of it, so its absolute size does not matter - only that it is fixed.\n\nDo not widen this hoping the numbers improve. Measured today: avg max excursion falls 4.82R -> 2.10R as the stop goes 0.5 -> 8 ATR. Quadrupling the stop roughly halves the reachable R, and it raises censoring at the same time, so a wide stop flatters the near rungs and starves the far ones.")
+int   horizon = input.int(200, "Give Up After (bars)", minval=50, maxval=2000, group=G_T,
+     tooltip="A trade that neither stops out nor reaches is CENSORED, and its excursion is a lower bound. Censoring is printed per bucket and gates the verdict at 20%.")
+float costR   = input.float(0.035, "Round-trip Cost (R)", minval=0.0, maxval=1.0, step=0.005, group=G_T,
+     tooltip="Spread plus commission plus slippage, expressed as a fraction of the 1 ATR stop. Subtracted from every expectancy before it is shown.\n\nMeasured references on a 1 ATR stop: gold CFD ~0.035R, index CFD ~0.013R, Binance perp ~0.16R.")
+int   spacing = input.int(10, "Timer Entry Every N Bars", minval=1, maxval=100, group=G_T,
+     tooltip="The TIMER bucket takes an entry on a clock with no view at all. Its long-vs-short gap is the sample's DRIFT, printed so you can see how much of any other result is just the market having gone one way.")
+
+string G_S = "2 - THE SETUPS"
+int   pivLen  = input.int(5, "Swing Strength (bars)", minval=2, maxval=20, group=G_S,
+     tooltip="Bars either side that a pivot must dominate. A real free parameter - fix it before looking at results, not after.")
+int   seqMax  = input.int(60, "Swing Memory (bars)", minval=10, maxval=500, group=G_S,
+     tooltip="How long a swing stays in the register and can still be swept. Also the window inside which an inducement must have been grabbed.")
+float rejPct  = input.float(0.33, "Rejection: close within this third", minval=0.1, maxval=0.5, step=0.01, group=G_S,
+     tooltip="For a swept HIGH the bar must close in the bottom third of its own range - a rejection rather than a drift through.")
+float htfTol  = input.float(0.25, "HTF Confluence Tolerance (ATR)", minval=0.05, maxval=2.0, step=0.05, group=G_S,
+     tooltip="How close the swept swing must sit to the prior day's high or low to count as confluence.")
+
+string G_V = "3 - THE VERDICT"
+int   selBk  = input.int(1, "Ladder / Verdict Bucket", minval=0, maxval=5, group=G_V,
+     tooltip="0 TIMER  1 SWEEP  2 SWEEP+REJ  3 INDUCED  4 PLAIN  5 SWEEP+HTF\n\nThe ladder section and the verdict both read this bucket. Buckets 3 and 4 PARTITION bucket 1 - every sweep is one or the other - so their counts must add back to it. A partition that does not reconcile is a bug, and that check is why this design was chosen over a nested filter stack.")
+int   selT   = input.int(1, "Summary Target (0=1R 1=2R 2=3R 3=5R 4=8R)", minval=0, maxval=4, group=G_V,
+     tooltip="Which rung the top summary table reports. The ladder below always shows all five.")
+
+string G_D = "4 - DISPLAY"
+bool showMk  = input.bool(true, "Mark Selected Bucket", group=G_D)
+bool showTbl = input.bool(true, "Results Panel", group=G_D)
+
+// ----------------------------------------------------------------------------
+// The two constants the day paid for. Not inputs, because the whole point is
+// that they are not adjustable to taste.
+// ----------------------------------------------------------------------------
+float NOISE_PP = 6.4    // measured feed-to-feed disagreement, same asset
+float Z_BAR    = 3.0    // multiplicity-corrected, ~30 cells on this panel
+int   N_MIN    = 200
+
+// ============================================================================
+// 2. PRIMITIVES
+// ----------------------------------------------------------------------------
+// Top level, every bar, unconditional. Pine's ta.* functions carry rolling
+// state and return stale values if they are reached behind an `and` or a
+// ternary, which is a bug that does not announce itself.
+// ============================================================================
+bool  barClosed = barstate.isconfirmed
+float atr       = ta.atr(14)
+float pvH       = ta.pivothigh(high, pivLen, pivLen)
+float pvL       = ta.pivotlow(low,  pivLen, pivLen)
+bool  newDay    = ta.change(time("D")) != 0
+
+var float pdH = na
+var float pdL = na
+var float cdH = na
+var float cdL = na
+
+if barClosed
+    if newDay
+        pdH := cdH
+        pdL := cdL
+        cdH := high
+        cdL := low
+    else
+        cdH := na(cdH) ? high : math.max(cdH, high)
+        cdL := na(cdL) ? low  : math.min(cdL, low)
+
+// ============================================================================
+// 3. SWING REGISTER
+// ----------------------------------------------------------------------------
+// Each swing stores the bar it FORMED on and the bar it was first traded
+// THROUGH. Storing both means "was a nearer level grabbed before this one was
+// swept" is answered from state rather than recomputed at sweep time, so the
+// sequence cannot be read two ways depending on when you ask.
+// ============================================================================
+var array<float> hPx = array.new<float>()   // level
+var array<int>   hBr = array.new<int>()     // bar it formed on
+var array<int>   hGr = array.new<int>()     // bar first traded through, -1 if never
+var array<int>   hUs = array.new<int>()     // already used as a sweep target
+var array<float> lPx = array.new<float>()
+var array<int>   lBr = array.new<int>()
+var array<int>   lGr = array.new<int>()
+var array<int>   lUs = array.new<int>()
+
+f_age() =>
+    if hPx.size() > 0
+        for i = hPx.size() - 1 to 0
+            if bar_index - hBr.get(i) > seqMax
+                hPx.remove(i)
+                hBr.remove(i)
+                hGr.remove(i)
+                hUs.remove(i)
+    if lPx.size() > 0
+        for i = lPx.size() - 1 to 0
+            if bar_index - lBr.get(i) > seqMax
+                lPx.remove(i)
+                lBr.remove(i)
+                lGr.remove(i)
+                lUs.remove(i)
+    hPx.size()
+
+f_mark() =>
+    if hPx.size() > 0
+        for i = 0 to hPx.size() - 1
+            if hGr.get(i) < 0 and high > hPx.get(i)
+                hGr.set(i, bar_index)
+    if lPx.size() > 0
+        for i = 0 to lPx.size() - 1
+            if lGr.get(i) < 0 and low < lPx.get(i)
+                lGr.set(i, bar_index)
+    lPx.size()
+
+if barClosed
+    f_age()
+    if not na(pvH)
+        hPx.push(pvH)
+        hBr.push(bar_index - pivLen)
+        hGr.push(-1)
+        hUs.push(0)
+    if not na(pvL)
+        lPx.push(pvL)
+        lBr.push(bar_index - pivLen)
+        lGr.push(-1)
+        lUs.push(0)
+
+// ============================================================================
+// 4. THE SWEEP, AND WHETHER IT WAS INDUCED
+// ----------------------------------------------------------------------------
+// A sweep is price trading THROUGH the most extreme unused swing and closing
+// back inside it. It is INDUCED if a nearer swing - lower for a high sweep -
+// that formed LATER had already been traded through on an EARLIER bar. That is
+// the textbook sequence: bait the close level first, then run the real one.
+// ============================================================================
+var array<float> outS = array.new<float>(3, 0.0)   // 0 fired  1 induced  2 level
+var array<float> outL = array.new<float>(3, 0.0)
+
+f_sweepHi() =>
+    outS.set(0, 0.0)
+    outS.set(1, 0.0)
+    int best = -1
+    float bestPx = 0.0
+    if hPx.size() > 0
+        for i = 0 to hPx.size() - 1
+            if hUs.get(i) == 0 and hPx.get(i) > bestPx
+                bestPx := hPx.get(i)
+                best := i
+    if best >= 0 and high > bestPx and close < bestPx
+        hUs.set(best, 1)
+        outS.set(0, 1.0)
+        outS.set(2, bestPx)
+        int mb = hBr.get(best)
+        if hPx.size() > 0
+            for j = 0 to hPx.size() - 1
+                if hPx.get(j) < bestPx and hBr.get(j) > mb and hGr.get(j) >= 0 and hGr.get(j) < bar_index
+                    outS.set(1, 1.0)
+    outS.get(0)
+
+f_sweepLo() =>
+    outL.set(0, 0.0)
+    outL.set(1, 0.0)
+    int best = -1
+    float bestPx = 1.0e18
+    if lPx.size() > 0
+        for i = 0 to lPx.size() - 1
+            if lUs.get(i) == 0 and lPx.get(i) < bestPx
+                bestPx := lPx.get(i)
+                best := i
+    if best >= 0 and low < bestPx and close > bestPx
+        lUs.set(best, 1)
+        outL.set(0, 1.0)
+        outL.set(2, bestPx)
+        int mb = lBr.get(best)
+        if lPx.size() > 0
+            for j = 0 to lPx.size() - 1
+                if lPx.get(j) > bestPx and lBr.get(j) > mb and lGr.get(j) >= 0 and lGr.get(j) < bar_index
+                    outL.set(1, 1.0)
+    outL.get(0)
+
+if barClosed
+    f_mark()
+    f_sweepHi()
+    f_sweepLo()
+
+float rng = high - low
+
+// A swept HIGH is a SHORT. Direction is the fade, not the break.
+bool swpS = barClosed and outS.get(0) == 1.0
+bool swpL = barClosed and outL.get(0) == 1.0
+bool rejS = swpS and rng > 0 and (close - low) / rng <= rejPct
+bool rejL = swpL and rng > 0 and (high - close) / rng <= rejPct
+bool indS = swpS and outS.get(1) == 1.0
+bool indL = swpL and outL.get(1) == 1.0
+bool plnS = swpS and not indS
+bool plnL = swpL and not indL
+bool htfS = swpS and not na(pdH) and not na(atr) and math.abs(outS.get(2) - pdH) <= htfTol * atr
+bool htfL = swpL and not na(pdL) and not na(atr) and math.abs(outL.get(2) - pdL) <= htfTol * atr
+
+// ============================================================================
+// 5. TRADES - EVERY SIGNAL WITH ITS MIRROR
+// ----------------------------------------------------------------------------
+// bucket 0 TIMER  1 SWEEP  2 SWEEP+REJ  3 INDUCED  4 PLAIN  5 SWEEP+HTF
+//
+// Slot = bucket * 2 + mirror. The mirror is the same bar, the same risk, the
+// opposite direction. For the TIMER bucket the "signal" is arbitrarily the long
+// and the "mirror" the short, which makes its LIFT column read as the sample's
+// drift rather than as an edge - and that is exactly what it is for.
+// ============================================================================
+int NB = 6
+int NT = 5
+
+var array<float> tEn  = array.new<float>()
+var array<float> tRk  = array.new<float>()
+var array<int>   tDir = array.new<int>()
+var array<int>   tBar = array.new<int>()
+var array<int>   tSlt = array.new<int>()
+var array<float> tMax = array.new<float>()
+
+var array<float> hits = array.new<float>(NB * 2 * NT, 0.0)   // [slot * NT + target]
+var array<float> cnt  = array.new<float>(NB * 2, 0.0)
+var array<float> smx  = array.new<float>(NB * 2, 0.0)
+var array<float> cns  = array.new<float>(NB * 2, 0.0)
+
+f_tgt(int i) =>
+    i == 0 ? 1.0 : i == 1 ? 2.0 : i == 2 ? 3.0 : i == 3 ? 5.0 : 8.0
+
+f_name(int b) =>
+    b == 0 ? "TIMER" : b == 1 ? "SWEEP" : b == 2 ? "SWEEP+REJ" : b == 3 ? "INDUCED" : b == 4 ? "PLAIN" : "SWEEP+HTF"
+
+// One call opens the pair. Nothing in this file may open a signal without its
+// mirror, which is why there is no single-sided entry function to reach for.
+f_pair(int bucket, int d) =>
+    bool ok = false
+    if not na(atr) and atr > 0
+        float rk = stopK * atr
+        tEn.push(close)
+        tRk.push(rk)
+        tDir.push(d)
+        tBar.push(bar_index)
+        tSlt.push(bucket * 2)
+        tMax.push(0.0)
+        tEn.push(close)
+        tRk.push(rk)
+        tDir.push(-d)
+        tBar.push(bar_index)
+        tSlt.push(bucket * 2 + 1)
+        tMax.push(0.0)
+        ok := true
+    ok
+
+if barClosed and not na(atr) and atr > 0 and bar_index % spacing == 0
+    f_pair(0, 1)
+if swpS
+    f_pair(1, -1)
+if swpL
+    f_pair(1, 1)
+if rejS
+    f_pair(2, -1)
+if rejL
+    f_pair(2, 1)
+if indS
+    f_pair(3, -1)
+if indL
+    f_pair(3, 1)
+if plnS
+    f_pair(4, -1)
+if plnL
+    f_pair(4, 1)
+if htfS
+    f_pair(5, -1)
+if htfL
+    f_pair(5, 1)
+
+// ============================================================================
+// 6. TRACKING
+// ----------------------------------------------------------------------------
+// Reverse loop because settled trades are removed in place. The empty-array
+// guard is not defensive noise: `for i = size()-1 to 0` on an empty array runs
+// i = 0 then i = -1 in Pine and throws on the first get.
+// ============================================================================
+f_track() =>
+    if tEn.size() > 0
+        for i = tEn.size() - 1 to 0
+            float en  = tEn.get(i)
+            float rk  = tRk.get(i)
+            int   d   = tDir.get(i)
+            int   sl  = tSlt.get(i)
+            int   age = bar_index - tBar.get(i)
+            bool  done = false
+            bool  cens = false
+            // NOTHING IS JUDGED ON THE ENTRY BAR. It was registered at that
+            // bar's close, but its high and low were made before that close
+            // existed. Counting them credits excursions that were never
+            // available at the entry price, which is lookahead wearing a
+            // plausible face.
+            if age >= 1
+                float fav = d == 1 ? (high - en) / rk : (en - low) / rk
+                if fav > tMax.get(i)
+                    tMax.set(i, fav)
+                // The stop is tested AFTER the favourable excursion is
+                // recorded. Inside one bar there is no way to know which came
+                // first; crediting the excursion is the reading that keeps the
+                // question "what was REACHABLE" honest, and it is applied
+                // identically to the signal and its mirror so it cannot create
+                // a lift.
+                if d == 1 ? low <= en - rk : high >= en + rk
+                    done := true
+                else if age >= horizon
+                    done := true
+                    cens := true
+            if done
+                float mx = tMax.get(i)
+                for L = 0 to NT - 1
+                    if mx >= f_tgt(L)
+                        hits.set(sl * NT + L, hits.get(sl * NT + L) + 1)
+                cnt.set(sl, cnt.get(sl) + 1)
+                smx.set(sl, smx.get(sl) + mx)
+                if cens
+                    cns.set(sl, cns.get(sl) + 1)
+                tEn.remove(i)
+                tRk.remove(i)
+                tDir.remove(i)
+                tBar.remove(i)
+                tSlt.remove(i)
+                tMax.remove(i)
+    tEn.size()
+
+if barClosed
+    f_track()
+
+// ============================================================================
+// 7. MARKERS
+// ============================================================================
+bool mkS = selBk == 0 ? false : selBk == 1 ? swpS : selBk == 2 ? rejS : selBk == 3 ? indS : selBk == 4 ? plnS : htfS
+bool mkL = selBk == 0 ? false : selBk == 1 ? swpL : selBk == 2 ? rejL : selBk == 3 ? indL : selBk == 4 ? plnL : htfL
+
+plotshape(showMk and mkS, "Sell Setup", shape.triangledown, location.abovebar, color.new(#ef5350, 0), size=size.tiny)
+plotshape(showMk and mkL, "Buy Setup",  shape.triangleup,   location.belowbar, color.new(#26a69a, 0), size=size.tiny)
+
+// ============================================================================
+// 8. STATISTICS
+// ----------------------------------------------------------------------------
+// Two-proportion z on signal against its own mirror. The pair shares a bar, so
+// this is conservative about bar selection and generous about independence -
+// overlapping holding periods mean the effective sample is smaller than N and
+// the true z is therefore SMALLER than the one printed. That is one more reason
+// the gate asks for 3.0 rather than 2.0.
+// ============================================================================
+f_z(float h1, float n1, float h2, float n2) =>
+    float z = na
+    if n1 > 0 and n2 > 0
+        float p1 = h1 / n1
+        float p2 = h2 / n2
+        float pp = (h1 + h2) / (n1 + n2)
+        float se = math.sqrt(pp * (1 - pp) * (1 / n1 + 1 / n2))
+        z := se > 0 ? (p1 - p2) / se : na
+    z
+
+// Expectancy in R at a fixed target, net of cost. Zero everywhere under the
+// random walk by construction, so any positive number here is either an edge or
+// one of the five corrections above being ignored.
+f_exp(float p, float tg) =>
+    na(p) ? na : p * tg - (1 - p) * 1.0 - costR
+
+// ============================================================================
+// 9. PANEL
+// ============================================================================
+var table pnl = table.new(position.bottom_left, 8, 20, bgcolor=color.new(#131722, 8),
+     border_color=color.new(#000000, 55), border_width=1)
+
+f_cell(int c, int r, string v, color col, bool hdr) =>
+    table.cell(pnl, c, r, v, text_color=col, text_size=size.tiny,
+         text_halign=c == 0 ? text.align_left : text.align_right,
+         bgcolor=hdr ? color.new(#2a2e39, 20) : color(na))
+
+f_pct(float v) =>
+    na(v) ? "-" : str.tostring(v * 100, "#.#") + "%"
+
+f_panel() =>
+    // ---- summary, one row per bucket, read at the selected rung ------------
+    float tg = f_tgt(selT)
+    f_cell(0, 0, "BUCKET @" + str.tostring(tg, "#") + "R", #d1d4dc, true)
+    f_cell(1, 0, "N", #d1d4dc, true)
+    f_cell(2, 0, "SIGNAL", #d1d4dc, true)
+    f_cell(3, 0, "MIRROR", #d1d4dc, true)
+    f_cell(4, 0, "LIFT", #d1d4dc, true)
+    f_cell(5, 0, "z", #d1d4dc, true)
+    f_cell(6, 0, "NET R", #d1d4dc, true)
+    f_cell(7, 0, "AVGMAX", #d1d4dc, true)
+
+    for b = 0 to NB - 1
+        int   sS = b * 2
+        int   sM = b * 2 + 1
+        float nS = cnt.get(sS)
+        float nM = cnt.get(sM)
+        float hS = hits.get(sS * NT + selT)
+        float hM = hits.get(sM * NT + selT)
+        float pS = nS > 0 ? hS / nS : na
+        float pM = nM > 0 ? hM / nM : na
+        float lf = na(pS) or na(pM) ? na : (pS - pM) * 100
+        float z  = f_z(hS, nS, hM, nM)
+        float ex = f_exp(pS, tg)
+        float am = nS > 0 ? smx.get(sS) / nS : na
+        // LIFT is only coloured once it clears the measured feed-to-feed noise
+        // floor. Below that it is grey no matter how large the z, because a
+        // difference smaller than the data vendor's own disagreement cannot be
+        // attributed to the signal.
+        color lc = b == 0 ? #6c7080 : na(lf) ? #6c7080 : math.abs(lf) < NOISE_PP ? #6c7080 : lf > 0 ? #26a69a : #ef5350
+        color nc = nS < N_MIN ? #ff9800 : #b2b5be
+        bool  sel = b == selBk
+        f_cell(0, b + 1, (sel ? "> " : "  ") + f_name(b) + (b == 0 ? "  (drift)" : ""), sel ? #ffffff : #b2b5be, false)
+        f_cell(1, b + 1, str.tostring(int(nS)), nc, false)
+        f_cell(2, b + 1, f_pct(pS), #b2b5be, false)
+        f_cell(3, b + 1, f_pct(pM), #6c7080, false)
+        f_cell(4, b + 1, na(lf) ? "-" : str.tostring(lf, "+#.#"), lc, false)
+        f_cell(5, b + 1, na(z) ? "-" : str.tostring(z, "+#.##"), lc, false)
+        f_cell(6, b + 1, na(ex) ? "-" : str.tostring(ex, "+#.##"), lc, false)
+        f_cell(7, b + 1, na(am) ? "-" : str.tostring(am, "#.##") + "R", #6c7080, false)
+
+    // ---- the partition check ----------------------------------------------
+    // INDUCED and PLAIN are a partition of SWEEP, so they must add back to it.
+    // If they do not, the sweep classifier is double-firing or dropping bars,
+    // and every number above it is wrong. A nested filter stack cannot be
+    // checked this way, which is why this shape was chosen.
+    float nSw  = cnt.get(1 * 2)
+    float nInd = cnt.get(3 * 2)
+    float nPln = cnt.get(4 * 2)
+    float diff = nSw - (nInd + nPln)
+    bool  pOk  = math.abs(diff) < 0.5
+    f_cell(0, 7, "Partition  INDUCED + PLAIN = SWEEP", #6c7080, false)
+    f_cell(1, 7, str.tostring(int(nInd)) + "+" + str.tostring(int(nPln)), #6c7080, false)
+    f_cell(2, 7, (pOk ? "= " : "!= ") + str.tostring(int(nSw)), pOk ? #6c7080 : #ef5350, false)
+    f_cell(3, 7, pOk ? "ok" : "RECONCILE FAILED", pOk ? #6c7080 : #ef5350, false)
+    f_cell(4, 7, "", #6c7080, false)
+    f_cell(5, 7, "", #6c7080, false)
+    f_cell(6, 7, "", #6c7080, false)
+    f_cell(7, 7, "", #6c7080, false)
+
+    // ---- ladder for the selected bucket ------------------------------------
+    int   lS = selBk * 2
+    int   lM = selBk * 2 + 1
+    float nL = cnt.get(lS)
+    float nR = cnt.get(lM)
+    f_cell(0, 8, "LADDER  " + f_name(selBk), #d1d4dc, true)
+    f_cell(1, 8, "SIGNAL", #d1d4dc, true)
+    f_cell(2, 8, "MIRROR", #d1d4dc, true)
+    f_cell(3, 8, "LIFT", #d1d4dc, true)
+    f_cell(4, 8, "RW", #d1d4dc, true)
+    f_cell(5, 8, "vs RW", #d1d4dc, true)
+    f_cell(6, 8, "NET R", #d1d4dc, true)
+    f_cell(7, 8, "z", #d1d4dc, true)
+
+    int   bestL = -1
+    float bestE = -1.0e18
+    for L = 0 to NT - 1
+        float tgL = f_tgt(L)
+        float hA  = hits.get(lS * NT + L)
+        float hB  = hits.get(lM * NT + L)
+        float pA  = nL > 0 ? hA / nL : na
+        float pB  = nR > 0 ? hB / nR : na
+        float rw  = 1.0 / (1.0 + tgL)
+        float lf  = na(pA) or na(pB) ? na : (pA - pB) * 100
+        float vr  = na(pA) ? na : (pA - rw) * 100
+        float ex  = f_exp(pA, tgL)
+        float z   = f_z(hA, nL, hB, nR)
+        color lc  = na(lf) ? #6c7080 : math.abs(lf) < NOISE_PP ? #6c7080 : lf > 0 ? #26a69a : #ef5350
+        if not na(ex) and ex > bestE
+            bestE := ex
+            bestL := L
+        f_cell(0, L + 9, "  " + str.tostring(tgL, "#") + "R", #b2b5be, false)
+        f_cell(1, L + 9, f_pct(pA), #b2b5be, false)
+        f_cell(2, L + 9, f_pct(pB), #6c7080, false)
+        f_cell(3, L + 9, na(lf) ? "-" : str.tostring(lf, "+#.#"), lc, false)
+        f_cell(4, L + 9, f_pct(rw), #6c7080, false)
+        f_cell(5, L + 9, na(vr) ? "-" : str.tostring(vr, "+#.#"), #6c7080, false)
+        f_cell(6, L + 9, na(ex) ? "-" : str.tostring(ex, "+#.##"), lc, false)
+        f_cell(7, L + 9, na(z) ? "-" : str.tostring(z, "+#.##"), lc, false)
+
+    // ---- verdict -----------------------------------------------------------
+    // Five gates, all of which have to pass. Each one is a way a number on this
+    // panel was fooled today, and none of them is adjustable from the settings.
+    //
+    // There are THREE outcomes, not two. A setup that reaches its targets
+    // significantly LESS often than its own mirror is not a null result - it is
+    // a signal with the sign backwards, and the trade is the mirror. Today every
+    // sweep bucket measured negative against its baseline (18 of 20 cells), so
+    // this is the outcome to expect, and refusing to name it would be throwing
+    // away the only directional information the day produced.
+    float cr  = nL > 0 ? cns.get(lS) / nL * 100 : na
+    float crM = nR > 0 ? cns.get(lM) / nR * 100 : na
+
+    // best rung for the mirror side, found the same way
+    int   bestM = -1
+    float bestEM = -1.0e18
+    for L = 0 to NT - 1
+        float pB2 = nR > 0 ? hits.get(lM * NT + L) / nR : na
+        float eB2 = f_exp(pB2, f_tgt(L))
+        if not na(eB2) and eB2 > bestEM
+            bestEM := eB2
+            bestM := L
+
+    float bTg = bestL >= 0 ? f_tgt(bestL) : na
+    float bpA = bestL >= 0 and nL > 0 ? hits.get(lS * NT + bestL) / nL : na
+    float bpB = bestL >= 0 and nR > 0 ? hits.get(lM * NT + bestL) / nR : na
+    float bLf = na(bpA) or na(bpB) ? na : (bpA - bpB) * 100
+    float bZ  = bestL >= 0 ? f_z(hits.get(lS * NT + bestL), nL, hits.get(lM * NT + bestL), nR) : na
+
+    float mTg = bestM >= 0 ? f_tgt(bestM) : na
+    float mpA = bestM >= 0 and nR > 0 ? hits.get(lM * NT + bestM) / nR : na
+    float mpB = bestM >= 0 and nL > 0 ? hits.get(lS * NT + bestM) / nL : na
+    float mLf = na(mpA) or na(mpB) ? na : (mpA - mpB) * 100
+    float mZ  = bestM >= 0 ? f_z(hits.get(lM * NT + bestM), nR, hits.get(lS * NT + bestM), nL) : na
+
+    bool g1 = nL >= N_MIN
+    bool g2 = not na(cr) and cr <= 20.0
+    bool g3 = not na(bLf) and bLf >= NOISE_PP
+    bool g4 = not na(bZ) and bZ >= Z_BAR
+    bool g5 = bestL >= 0 and bestE > 0
+    bool fwd = g1 and g2 and g3 and g4 and g5 and pOk
+
+    bool m1 = nR >= N_MIN
+    bool m2 = not na(crM) and crM <= 20.0
+    bool m3 = not na(mLf) and mLf >= NOISE_PP
+    bool m4 = not na(mZ) and mZ >= Z_BAR
+    bool m5 = bestM >= 0 and bestEM > 0
+    bool inv = m1 and m2 and m3 and m4 and m5 and pOk
+
+    string fails = ""
+    if not g1
+        fails := fails + "N<" + str.tostring(N_MIN) + "  "
+    if not g2
+        fails := fails + "censored>20%  "
+    if not g3
+        fails := fails + "lift<" + str.tostring(NOISE_PP, "#.#") + "pp  "
+    if not g4
+        fails := fails + "z<" + str.tostring(Z_BAR, "#.#") + "  "
+    if not g5
+        fails := fails + "net R<=0  "
+    if not pOk
+        fails := fails + "PARTITION BROKEN  "
+
+    string vtxt = ""
+    color  vcol = #ef5350
+    if fwd
+        vtxt := "CANDIDATE - trade " + f_name(selBk) + " AS SIGNALLED, target " +
+             str.tostring(bTg, "#") + "R.  All five gates clear."
+        vcol := #26a69a
+    else if inv
+        // The mirror is the trade. Say so in the direction the user has to act
+        // in, not as "the signal is negative", because those are the same fact
+        // and only one of them is executable.
+        vtxt := "INVERTED - " + f_name(selBk) + " is significantly WORSE than its mirror. " +
+             "The trade is the OPPOSITE side, target " + str.tostring(mTg, "#") + "R."
+        vcol := #ffb74d
+    else
+        vtxt := "NO EDGE - " + f_name(selBk) + " fails: " + fails
+        vcol := #ef5350
+    f_cell(0, 14, vtxt, vcol, true)
+    for c = 1 to 7
+        f_cell(c, 14, "", #6c7080, true)
+
+    f_cell(0, 15, "Gates  N>=" + str.tostring(N_MIN) + "   censored<=20%   |lift|>=" +
+         str.tostring(NOISE_PP, "#.#") + "pp   |z|>=" + str.tostring(Z_BAR, "#.#") +
+         "   net R>0 after " + str.tostring(costR, "#.###") + "R cost", #6c7080, false)
+    f_cell(0, 16, "Censored " + (na(cr) ? "-" : str.tostring(cr, "#.#") + "%") +
+         (not na(cr) and cr > 10 ? "  FAR RUNGS UNDERSTATED" : "") +
+         "    open " + str.tostring(tEn.size()) +
+         "    best rung by net R: " + (bestL >= 0 ? str.tostring(f_tgt(bestL), "#") + "R" : "-"),
+         not na(cr) and cr > 20 ? #ef5350 : not na(cr) and cr > 10 ? #ff9800 : #6c7080, false)
+    f_cell(0, 17, "MIRROR = same bar, same risk, opposite side. LIFT is the only column here that is hard to fake.", #6c7080, false)
+    f_cell(0, 18, "RW = 1/(1+n), exact. Noise floor 6.4pp measured feed-to-feed. z bar raised to 3.0 for ~30 cells.", #6c7080, false)
+    for c = 1 to 7
+        f_cell(c, 15, "", #6c7080, false)
+        f_cell(c, 16, "", #6c7080, false)
+        f_cell(c, 17, "", #6c7080, false)
+        f_cell(c, 18, "", #6c7080, false)
+    nL
+
+if showTbl and barstate.islast
+    f_panel()
