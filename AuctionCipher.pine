@@ -141,12 +141,25 @@ bool  showLvn_in    = input.bool(true,  "Low Volume Nodes", group=G_AUC,
 float lvnThresh  = input.float(20.0, "LVN Threshold (% of POC)", minval=2.0, maxval=60.0, group=G_AUC)
 int   maxLvn     = input.int(6, "Max LVNs", minval=1, maxval=25, group=G_AUC)
 int   excBars    = input.int(1, "Excess: at most N bars at the extreme", minval=1, maxval=5, group=G_AUC,
-     tooltip="ONE bar topping within a profile row of the period high is a spike that was rejected - a tail, a finished auction. EXCESS.\n\nThis replaced a threshold on volume in the extreme band as a percentage of the POC bin. In any distribution that band is thin by construction, so the old rule returned EXCESS about 99% of the time and POOR two to four times across hundreds of periods. It measured the shape of a distribution and called it the shape of an auction.")
+     tooltip="ONE bar topping inside the extreme band below the period high is a spike that was rejected - a tail, a finished auction. EXCESS.\n\nThis replaced a threshold on volume in the extreme band as a percentage of the POC bin. In any distribution that band is thin by construction, so the old rule returned EXCESS about 99% of the time and POOR two to four times across hundreds of periods. It measured the shape of a distribution and called it the shape of an auction.")
 // excBand is gone with the volume classifier it served. It widened the band
 // the old rule measured, which treated the symptom - the band was thin at any
 // width, because distribution tails are thin. The bar count does not need it.
+//
+// It needs a band of its own, though, and that is what this input is. When the
+// bar-count test was ported in, "within one profile row of the extreme" was
+// taken literally and the row came from profRows. profRows is a RENDERING
+// number - it sets how finely the histogram is drawn, and it defaults to 250
+// here against the 24 the test was validated on. That made the band a tenth
+// the width, and the test roughly ten times harder to satisfy, for a reason
+// that has nothing to do with auctions. Worse, it meant dragging a cosmetic
+// resolution slider silently retuned the auction classification underneath it.
+// The band is now stated separately and defaults to the width the test was
+// measured at, so the two numbers can no longer move each other.
+int   excDiv     = input.int(24, "Extreme band = period range / N", minval=4, maxval=200, group=G_AUC,
+     tooltip="How close to the period high a bar has to top before it counts as a bar AT the extreme. The band is the period's range divided by this number, so 24 means the top 1/24th - about 4% of the range.\n\nThis used to borrow the Profile Rows number, which is a drawing-resolution setting. At its default of 250 the band was 0.4% of the range, ten times tighter than the width the excess/poor test was actually validated at, and changing how finely the histogram drew also changed what counted as a poor high. Those are now separate numbers.\n\nRaise it to tighten the band (fewer POOR reads), lower it to widen (more). Check the n column on the stats panel after moving it: single-digit counts over a long chart mean the classifier is mis-set either way.")
 int   poorBars   = input.int(3, "Poor: at least N bars at the extreme", minval=2, maxval=12, group=G_AUC,
-     tooltip="THREE or more bars all stalling within a profile row of the extreme means the auction stopped because the clock ran out rather than because it was rejected. POOR.\n\nSANITY CHECK before reading any poor-revisit number: the stats panel prints n beside each row. If it sits in single digits across a chart spanning hundreds of periods the classifier is mis-set, and the lift means nothing whatever it says.")
+     tooltip="THREE or more bars all stalling inside the extreme band means the auction stopped because the clock ran out rather than because it was rejected. POOR.\n\nSANITY CHECK before reading any poor-revisit number: the stats panel prints n beside each row. If it sits in single digits across a chart spanning hundreds of periods the classifier is mis-set, and the lift means nothing whatever it says.")
 
 string G_AC = "2b - AUCTION COLORS"
 color cHistTot   = input.color(color.new(#b2b5be, 62), "Total Volume", group=G_AC)
@@ -1109,11 +1122,11 @@ if isNewPeriod and aucOn and barClosed
         // profile happens to have.
         //
         // Textbook definition instead, as a bar count: how many bars in the
-        // period topped within one profile row of the period high. ONE is a
+        // period topped inside the extreme band below the period high. ONE is a
         // single spike that was rejected - a tail, EXCESS. THREE or more all
         // stalling at the same price is an auction that ran out of clock - POOR.
         if fHi > fLo and curH.size() > 0
-            float fStep = (fHi - fLo) / profRows
+            float fStep = (fHi - fLo) / excDiv
             int fTopN = 0
             int fBotN = 0
             for i = 0 to curH.size() - 1
@@ -1333,7 +1346,7 @@ f_extremes() =>
         float dHi = curH.max()
         float dLo = curL.min()
         if dHi > dLo
-            float dStep = (dHi - dLo) / profRows
+            float dStep = (dHi - dLo) / excDiv
             int dTopN = 0
             int dBotN = 0
             for i = 0 to curH.size() - 1
