@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.3
+// EDGE LAB  v1.4
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -323,11 +323,12 @@ var array<int>   tDir = array.new<int>()
 var array<int>   tBar = array.new<int>()
 var array<int>   tSlt = array.new<int>()
 var array<int>   tSd  = array.new<int>()     // signal direction: 0 long, 1 short
+var array<int>   tHf  = array.new<int>()     // which half of the chart it opened in
 var array<float> tMax = array.new<float>()
 
-// index = (slot * 2 + sd) * NT + target
-var array<float> hits = array.new<float>(NB * 2 * 2 * NT, 0.0)
-var array<float> cnt  = array.new<float>(NB * 2 * 2, 0.0)
+// ix = ((slot * 2 + sd) * 2 + half);  hits index = ix * NT + target
+var array<float> hits = array.new<float>(NB * 2 * 2 * 2 * NT, 0.0)
+var array<float> cnt  = array.new<float>(NB * 2 * 2 * 2, 0.0)
 var array<float> smx  = array.new<float>(NB * 2 * 2, 0.0)
 var array<float> cns  = array.new<float>(NB * 2 * 2, 0.0)
 
@@ -337,10 +338,12 @@ f_tgt(int i) =>
 f_name(int b) =>
     b == 0 ? "TIMER" : b == 1 ? "SWEEP" : b == 2 ? "SWEEP+REJ" : b == 3 ? "INDUCED" : b == 4 ? "PLAIN" : "SWEEP+HTF"
 
-f_h(int slot, int sd, int L) => hits.get((slot * 2 + sd) * NT + L)
-f_n(int slot, int sd)        => cnt.get(slot * 2 + sd)
-f_hT(int slot, int L)        => f_h(slot, 0, L) + f_h(slot, 1, L)
-f_nT(int slot)               => f_n(slot, 0) + f_n(slot, 1)
+f_nH(int slot, int sd, int hf)        => cnt.get((slot * 2 + sd) * 2 + hf)
+f_hH(int slot, int sd, int hf, int L) => hits.get(((slot * 2 + sd) * 2 + hf) * NT + L)
+f_n(int slot, int sd)                 => f_nH(slot, sd, 0) + f_nH(slot, sd, 1)
+f_h(int slot, int sd, int L)          => f_hH(slot, sd, 0, L) + f_hH(slot, sd, 1, L)
+f_hT(int slot, int L)                 => f_h(slot, 0, L) + f_h(slot, 1, L)
+f_nT(int slot)                        => f_n(slot, 0) + f_n(slot, 1)
 
 // One call opens the pair. Nothing in this file may open a signal without its
 // mirror, which is why there is no single-sided entry function to reach for.
@@ -349,12 +352,17 @@ f_pair(int bucket, int d) =>
     if not na(atr) and atr > 0
         float rk = stopK * atr
         int   sd = d == 1 ? 0 : 1
+        // Which half of the loaded history this trade opened in. last_bar_index
+        // is known on historical bars, so the split point is fixed in advance
+        // rather than chosen after seeing where the effect sits.
+        int   hf = bar_index < last_bar_index / 2 ? 0 : 1
         tEn.push(close)
         tRk.push(rk)
         tDir.push(d)
         tBar.push(bar_index)
         tSlt.push(bucket * 2)
         tSd.push(sd)
+        tHf.push(hf)
         tMax.push(0.0)
         tEn.push(close)
         tRk.push(rk)
@@ -362,6 +370,7 @@ f_pair(int bucket, int d) =>
         tBar.push(bar_index)
         tSlt.push(bucket * 2 + 1)
         tSd.push(sd)
+        tHf.push(hf)
         tMax.push(0.0)
         ok := true
     ok
@@ -404,6 +413,7 @@ f_track() =>
             int   d   = tDir.get(i)
             int   sl  = tSlt.get(i)
             int   sd  = tSd.get(i)
+            int   hf  = tHf.get(i)
             int   age = bar_index - tBar.get(i)
             bool  done = false
             bool  cens = false
@@ -430,10 +440,11 @@ f_track() =>
             if done
                 float mx = tMax.get(i)
                 int   ix = sl * 2 + sd
+                int   iy = ix * 2 + hf
                 for L = 0 to NT - 1
                     if mx >= f_tgt(L)
-                        hits.set(ix * NT + L, hits.get(ix * NT + L) + 1)
-                cnt.set(ix, cnt.get(ix) + 1)
+                        hits.set(iy * NT + L, hits.get(iy * NT + L) + 1)
+                cnt.set(iy, cnt.get(iy) + 1)
                 smx.set(ix, smx.get(ix) + mx)
                 if cens
                     cns.set(ix, cns.get(ix) + 1)
@@ -443,6 +454,7 @@ f_track() =>
                 tBar.remove(i)
                 tSlt.remove(i)
                 tSd.remove(i)
+                tHf.remove(i)
                 tMax.remove(i)
     tEn.size()
 
@@ -495,18 +507,19 @@ plotshape(showMk and mkL, "Buy Setup",  shape.triangleup,   location.belowbar, c
 // ============================================================================
 var array<float> oSt = array.new<float>(4, 0.0)   // 0 lift* pp  1 z*  2 strata  3 se pp
 
-f_strat(int b, int L) =>
+// hf: 0 first half, 1 second half, 2 both.
+f_stratH(int b, int L, int hf) =>
     int   slotS = b * 2
     int   slotM = b * 2 + 1
     float sumL  = 0.0
     float sumV  = 0.0
     int   k     = 0
     for sd = 0 to 1
-        float n1 = f_n(slotS, sd)
-        float n2 = f_n(slotM, sd)
+        float n1 = hf == 2 ? f_n(slotS, sd) : f_nH(slotS, sd, hf)
+        float n2 = hf == 2 ? f_n(slotM, sd) : f_nH(slotM, sd, hf)
         if n1 > 0 and n2 > 0
-            float p1 = f_h(slotS, sd, L) / n1
-            float p2 = f_h(slotM, sd, L) / n2
+            float p1 = (hf == 2 ? f_h(slotS, sd, L) : f_hH(slotS, sd, hf, L)) / n1
+            float p2 = (hf == 2 ? f_h(slotM, sd, L) : f_hH(slotM, sd, hf, L)) / n2
             sumL := sumL + (p1 - p2)
             sumV := sumV + p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2
             k := k + 1
@@ -517,6 +530,8 @@ f_strat(int b, int L) =>
     oSt.set(2, k)
     oSt.set(3, na(vr) or vr <= 0 ? na : math.sqrt(vr) * 100)
     k
+
+f_strat(int b, int L) => f_stratH(b, L, 2)
 
 // ----------------------------------------------------------------------------
 // CORRECTION 7 - "NO EDGE" AND "COULD NOT HAVE SEEN ONE" ARE NOT THE SAME.
@@ -812,7 +827,52 @@ f_panel() =>
          "    MDL " + (na(bMd) ? "-" : str.tostring(bMd, "#.#") + "pp") +
          " = smallest lift resolvable here at 80% power. Orange means the bucket cannot answer the question, whatever it prints.", #6c7080, false)
     f_cell(0, 18, "LIFT is raw and still carries  skew x drift.  LIFT* is computed inside each direction and is drift-free whatever the L/S mix. Read LIFT*.", #6c7080, false)
-    f_cell(0, 20, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
+    // CORRECTION 9 - THE EFFECT EXISTS PER INSTRUMENT. THAT IS NOT THE SAME AS
+    // IT BEING TRADEABLE.
+    //
+    // Nine instruments, 3,274 sweeps. Pooled LIFT* is -2.7pp, but the spread
+    // BETWEEN instruments (tau = 5.0pp) is larger than the average itself, and
+    // it is real rather than noise: the two direction-strata inside a single
+    // instrument agree with each other (Q/df = 1.30) while different instruments
+    // do not (Q/df = 3.04, p = 0.002). So some markets fade their sweeps and
+    // others follow them, and the 95% prediction interval for an instrument not
+    // yet measured runs from -15pp to +10pp. Knowing the average is useless;
+    // you would have to know THIS instrument's sign.
+    //
+    // Which turns the whole question into one about persistence, and that is
+    // what SPLIT asks. Each trade is stamped with the half of the chart it
+    // opened in, using last_bar_index so the cut is fixed before any result is
+    // seen. If an instrument's edge is a property of the instrument, the two
+    // halves agree. If it is a property of the window - a trend, a regime, one
+    // crowded month - they will not, and there is nothing here to trade however
+    // good the full-sample number looks.
+    //
+    // FLIPS is the answer that matters. A sign that does not survive being cut
+    // in half will not survive next month either.
+    f_stratH(selBk, selT, 0)
+    float h1Lf = oSt.get(0)
+    float h1Se = oSt.get(3)
+    float h1N  = f_nH(lS, 0, 0) + f_nH(lS, 1, 0)
+    f_stratH(selBk, selT, 1)
+    float h2Lf = oSt.get(0)
+    float h2Se = oSt.get(3)
+    float h2N  = f_nH(lS, 0, 1) + f_nH(lS, 1, 1)
+    float dSe  = na(h1Se) or na(h2Se) ? na : math.sqrt(h1Se * h1Se + h2Se * h2Se)
+    float dZ   = na(h1Lf) or na(h2Lf) or na(dSe) or dSe <= 0 ? na : (h1Lf - h2Lf) / dSe
+    bool  same = not na(h1Lf) and not na(h2Lf) and h1Lf * h2Lf > 0
+    string stab = na(h1Lf) or na(h2Lf) ? "no data" :
+         not same ? "FLIPS - sign is not a property of the instrument" :
+         not na(dZ) and math.abs(dZ) > 2.0 ? "UNSTABLE - halves differ by more than noise" :
+         "same sign both halves"
+    color stabc = na(h1Lf) or na(h2Lf) ? #6c7080 : not same ? #ef5350 :
+         not na(dZ) and math.abs(dZ) > 2.0 ? #ff9800 : #26a69a
+    f_cell(0, 20, "SPLIT   1st half " + (na(h1Lf) ? "-" : str.tostring(h1Lf, "+#.#") + "pp") +
+         " (n " + str.tostring(int(h1N)) + ")    2nd half " +
+         (na(h2Lf) ? "-" : str.tostring(h2Lf, "+#.#") + "pp") +
+         " (n " + str.tostring(int(h2N)) + ")    diff z " +
+         (na(dZ) ? "-" : str.tostring(dZ, "+#.##")) + "   ->  " + stab, stabc, false)
+
+    f_cell(0, 21, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
     for c = 1 to 10
         f_cell(c, 15, "", #6c7080, false)
         f_cell(c, 16, "", #6c7080, false)
@@ -820,6 +880,7 @@ f_panel() =>
         f_cell(c, 18, "", #6c7080, false)
         f_cell(c, 19, "", #6c7080, false)
         f_cell(c, 20, "", #6c7080, false)
+        f_cell(c, 21, "", #6c7080, false)
     nL
 
 if showTbl and barstate.islast
