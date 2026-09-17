@@ -1,0 +1,245 @@
+//@version=6
+// ============================================================================
+// SPEED LADDER  v1.0
+// ----------------------------------------------------------------------------
+// EVERYTHING SO FAR WAS MEASURED AT ONE SPEED.
+//
+// Nine hypotheses on this repo, roughly 15,000 trades, and every one of them
+// used a stop of about 1 ATR on a 30-minute chart. The excursion test then
+// proved the market is exactly random-walk AT THAT SCALE - 8,302 trades landing
+// on 1/(1+n) to within 0.4pp at every target.
+//
+// That is a precise statement about one speed. It says nothing about wider
+// risk and longer holds, and that is exactly where the documented effects
+// live. Risk premia and multi-week momentum are real, survive publication, and
+// are structurally incapable of showing up inside a 1 ATR stop on a 30m chart:
+// they need weeks, and a 1 ATR stop gives them hours.
+//
+// So this runs the same machinery at FIVE stop widths at once. Same bars, same
+// entries, same exact null, five speeds. One script, one chart.
+//
+// THE COLUMN THAT CHANGES MEANING AS YOU GO DOWN THE LADDER.
+//
+// Every entry is still taken both ways, and pooling them still cancels drift.
+// At 0.5 ATR that is exactly what you want: drift is a confound, noise is the
+// subject, and the pooled figure is the honest one.
+//
+// At 8 ATR it inverts. A trade that needs weeks to resolve is precisely the
+// trade a risk premium can pay for, and pooling long against short DESTROYS
+// that signal by construction. So the L-S column is printed separately, and
+// down the ladder it stops being a diagnostic and becomes the finding:
+//
+//   narrow stops   pooled edge is the question, L-S should be small
+//   wide stops     L-S is the question, pooled edge should still be ~0
+//
+// A market with a real premium and no tail asymmetry reads: pooled flat all
+// the way down, L-S growing. A market with genuine fat tails reads: pooled
+// departing from zero as the stop widens. They are different findings and this
+// table separates them.
+//
+// READ THE GRADIENT, NOT A RUNG.
+//
+// Five rungs times two targets is ten cells and some will look impressive by
+// chance - that trap has been sprung twice in this project already. A real
+// structural effect appears as a MONOTONE trend down the ladder. One rung
+// popping while its neighbours sit flat is noise, and the rungs are not
+// independent anyway since they share the same entries and the same bars.
+//
+// CENSORING IS THE HONEST LIMIT HERE AND IT IS PRINTED PER ROW.
+//
+// An 8 ATR stop on a 30m chart can take thousands of bars to resolve. Trades
+// abandoned at the horizon are counted as censored and their row is flagged
+// above 20%, because past that the reach rates are lower bounds rather than
+// measurements and the row should not be read as a result.
+// ============================================================================
+indicator("Speed Ladder", shorttitle="LADDER", overlay=false,
+     max_boxes_count=50, max_lines_count=50, max_labels_count=50, max_bars_back=500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_T = "1 - THE LADDER"
+int   spacing = input.int(20, "Entry Every N Bars", minval=5, maxval=200, group=G_T,
+     tooltip="Wider than the excursion test's 10 because five rungs times two directions run concurrently. Wider spacing also means less overlap between outcomes, so the effective sample is closer to the printed one.")
+int   horizon = input.int(1000, "Give Up After (bars)", minval=100, maxval=5000, group=G_T,
+     tooltip="Deliberately long, because the wide rungs need it. Even so the widest will censor heavily - the per-row censoring figure is the guard.")
+
+string G_D = "2 - DISPLAY"
+bool showTbl = input.bool(true, "Results Table", group=G_D)
+
+// ============================================================================
+// 2. PRIMITIVES
+// ============================================================================
+bool  barClosed = barstate.isconfirmed
+float atr       = ta.atr(14)
+
+// ============================================================================
+// 3. THE LADDER
+// ----------------------------------------------------------------------------
+// Five stop widths, each its own definition of 1R. A trade at rung r risks
+// f_rung(r) ATR, and its targets are multiples of THAT, so every rung is
+// measured against the same 1/(1+n) null despite risking different money.
+// ============================================================================
+int NR = 5
+int NT = 2
+
+f_rung(int r) =>
+    r == 0 ? 0.5 : r == 1 ? 1.0 : r == 2 ? 2.0 : r == 3 ? 4.0 : 8.0
+
+f_tgt(int i) =>
+    i == 0 ? 2.0 : 5.0
+
+var array<float> tEn  = array.new<float>()
+var array<float> tRk  = array.new<float>()
+var array<int>   tDir = array.new<int>()
+var array<int>   tBar = array.new<int>()
+var array<int>   tRg  = array.new<int>()
+var array<float> tMax = array.new<float>()
+
+// hits[rung*NT + target], split by direction so the ladder's drift is visible
+var array<float> hitL = array.new<float>(NR * NT, 0.0)
+var array<float> hitS = array.new<float>(NR * NT, 0.0)
+var array<float> nL   = array.new<float>(NR, 0.0)
+var array<float> nS   = array.new<float>(NR, 0.0)
+var array<float> cens = array.new<float>(NR, 0.0)
+var array<float> sumX = array.new<float>(NR, 0.0)
+
+if barClosed and not na(atr) and atr > 0 and bar_index % spacing == 0
+    for r = 0 to NR - 1
+        float rk = f_rung(r) * atr
+        tEn.push(close)
+        tRk.push(rk)
+        tDir.push(1)
+        tBar.push(bar_index)
+        tRg.push(r)
+        tMax.push(0.0)
+        tEn.push(close)
+        tRk.push(rk)
+        tDir.push(-1)
+        tBar.push(bar_index)
+        tRg.push(r)
+        tMax.push(0.0)
+
+f_track() =>
+    if tEn.size() > 0
+        for i = tEn.size() - 1 to 0
+            float en = tEn.get(i)
+            float rk = tRk.get(i)
+            int   d  = tDir.get(i)
+            int   r  = tRg.get(i)
+            int   age = bar_index - tBar.get(i)
+            bool  done = false
+            bool  cn = false
+            // Nothing judged on the entry bar, whose extremes predate the close
+            // that registered it.
+            if age >= 1
+                float fav = d == 1 ? (high - en) / rk : (en - low) / rk
+                if fav > tMax.get(i)
+                    tMax.set(i, fav)
+                // Favourable excursion credited BEFORE the stop is checked:
+                // within one bar the order is unknowable and this reading stays
+                // honest about what was reachable.
+                if d == 1 ? low <= en - rk : high >= en + rk
+                    done := true
+                else if age >= horizon
+                    done := true
+                    cn := true
+            if done
+                float mx = tMax.get(i)
+                if d == 1
+                    nL.set(r, nL.get(r) + 1)
+                else
+                    nS.set(r, nS.get(r) + 1)
+                sumX.set(r, sumX.get(r) + mx)
+                if cn
+                    cens.set(r, cens.get(r) + 1)
+                for L = 0 to NT - 1
+                    if mx >= f_tgt(L)
+                        if d == 1
+                            hitL.set(r * NT + L, hitL.get(r * NT + L) + 1)
+                        else
+                            hitS.set(r * NT + L, hitS.get(r * NT + L) + 1)
+                tEn.remove(i)
+                tRk.remove(i)
+                tDir.remove(i)
+                tBar.remove(i)
+                tRg.remove(i)
+                tMax.remove(i)
+    tEn.size()
+
+if barClosed
+    f_track()
+
+// ============================================================================
+// 4. RESULTS
+// ----------------------------------------------------------------------------
+// POOLED is long and short together - drift cancelled, so it isolates tail
+// shape. L-S is the drift itself, and it is the column that matters at the
+// bottom of the ladder where a premium would live.
+// ============================================================================
+var table t = table.new(position.bottom_left, 8, 10, bgcolor=color.new(#131722, 10),
+     border_color=color.new(#000000, 55), border_width=1)
+
+f_cell(int c, int r, string v, color col, bool hdr) =>
+    table.cell(t, c, r, v, text_color=col, text_size=size.tiny,
+         text_halign=c == 0 ? text.align_left : text.align_right,
+         bgcolor=hdr ? color.new(#2a2e39, 20) : color(na))
+
+f_results() =>
+    f_cell(0, 0, "STOP", #d1d4dc, true)
+    f_cell(1, 0, "N", #d1d4dc, true)
+    f_cell(2, 0, "2R", #d1d4dc, true)
+    f_cell(3, 0, "vs RW", #d1d4dc, true)
+    f_cell(4, 0, "5R", #d1d4dc, true)
+    f_cell(5, 0, "vs RW", #d1d4dc, true)
+    f_cell(6, 0, "L-S", #d1d4dc, true)
+    f_cell(7, 0, "CENS", #d1d4dc, true)
+    for r = 0 to NR - 1
+        float a = nL.get(r)
+        float b = nS.get(r)
+        float n = a + b
+        float p2 = n > 0 ? (hitL.get(r * NT) + hitS.get(r * NT)) / n : na
+        float p5 = n > 0 ? (hitL.get(r * NT + 1) + hitS.get(r * NT + 1)) / n : na
+        float e2 = na(p2) ? na : (p2 - 1.0 / 3.0) * 100
+        float e5 = na(p5) ? na : (p5 - 1.0 / 6.0) * 100
+        float lsp = a > 0 and b > 0 ? (hitL.get(r * NT) / a - hitS.get(r * NT) / b) * 100 : na
+        float cr = n > 0 ? cens.get(r) / n * 100 : na
+        color c2 = n < 100 ? #b2b5be : na(e2) ? #b2b5be : e2 > 2 ? #26a69a : e2 < -2 ? #ef5350 : #b2b5be
+        color c5 = n < 100 ? #b2b5be : na(e5) ? #b2b5be : e5 > 2 ? #26a69a : e5 < -2 ? #ef5350 : #b2b5be
+        color cc = na(cr) ? #6c7080 : cr > 20 ? #ef5350 : #6c7080
+        f_cell(0, r + 1, str.tostring(f_rung(r), "#.#") + " ATR", #b2b5be, false)
+        f_cell(1, r + 1, str.tostring(int(n)), n < 100 ? #ff9800 : #b2b5be, false)
+        f_cell(2, r + 1, na(p2) ? "-" : str.tostring(p2 * 100, "#.#"), #b2b5be, false)
+        f_cell(3, r + 1, na(e2) ? "-" : str.tostring(e2, "+#.#"), c2, false)
+        f_cell(4, r + 1, na(p5) ? "-" : str.tostring(p5 * 100, "#.#"), #b2b5be, false)
+        f_cell(5, r + 1, na(e5) ? "-" : str.tostring(e5, "+#.#"), c5, false)
+        f_cell(6, r + 1, na(lsp) ? "-" : str.tostring(lsp, "+#.#"), #b2b5be, false)
+        f_cell(7, r + 1, na(cr) ? "-" : str.tostring(cr, "#") + "%" +
+             (not na(cr) and cr > 20 ? " !" : ""), cc, false)
+    f_cell(0, 6, "random walk", #6c7080, true)
+    f_cell(1, 6, "", #6c7080, true)
+    f_cell(2, 6, "33.3", #6c7080, true)
+    f_cell(3, 6, "0.0", #6c7080, true)
+    f_cell(4, 6, "16.7", #6c7080, true)
+    f_cell(5, 6, "0.0", #6c7080, true)
+    f_cell(6, 6, "0.0", #6c7080, true)
+    f_cell(7, 6, "", #6c7080, true)
+    f_cell(0, 7, "avg max excursion by rung", #6c7080, false)
+    for r = 0 to NR - 1
+        float n = nL.get(r) + nS.get(r)
+        if r < 6
+            f_cell(r + 1, 7, n > 0 ? str.tostring(sumX.get(r) / n, "#.#") + "R" : "-", #6c7080, false)
+    f_cell(6, 7, "", #6c7080, false)
+    f_cell(7, 7, "open " + str.tostring(tEn.size()), #6c7080, false)
+    f_cell(0, 8, "narrow: read POOLED   wide: read L-S", #6c7080, false)
+    for c = 1 to 7
+        f_cell(c, 8, "", #6c7080, false)
+    f_cell(0, 9, "READ THE GRADIENT, NOT A RUNG", #ff9800, false)
+    for c = 1 to 7
+        f_cell(c, 9, "", #ff9800, false)
+    nL.get(0)
+
+if showTbl and barstate.islast
+    f_results()
+
+plot(na, "")
