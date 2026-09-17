@@ -26,7 +26,7 @@ Read one column: **`LIFT*`**. Everything else on the panel exists to stop
 
 ---
 
-## The eleven corrections
+## The thirteen corrections
 
 Each one killed a result that looked real. Four killed results that had already
 been written up.
@@ -43,13 +43,37 @@ been written up.
 | 8 | **Fix the target rung before looking** | A verdict that picked its own best cell and reported a different cell's power |
 | 9 | **Non-overlapping trades only** | The pooled `z = −3.12` — the one number that cleared the bar |
 | 10 | **Split-half persistence** | Gold's −9.7pp and GBPJPY's −6.3pp. Both were windows, not instruments |
-| 11 | **Resolution invariance** — does it survive halving the bar size? | Bitcoin, the last survivor: −8.2pp at 30m, **+8.5pp at 15m**, z 3.20 apart |
+| 11 | **Resolution invariance** — does it survive changing the bar size? | Bitcoin, the last survivor — then gold, whose −9.6pp at 30m is a lone spike among +3.9, +4.6, −4.2 |
+| 12 | Test significance **before** sign, in the persistence verdict | A false `FLIPS` on gold 15m: +11.7 vs −1.7 at z 1.45 |
+| 13 | The same in the independence verdict, and require the full sample to have made a claim | A false `DISAGREES` on gold 5m: "the full-sample z was overlap" where that z was +0.84 |
 
-Four of the eleven are about the *denominator* — what a number is compared
+Four of the thirteen are about the *denominator* — what a number is compared
 against, and how many chances it had. Two are about what counts as one
 observation. One is about whether the thing being measured belongs to the market
-or to the chart. **None is about trading logic.** Every result this repo lost,
+or to the chart. Two are the panel caught making the exact mistake it exists to
+prevent. **None is about trading logic.** Every result this repo lost,
 it lost to measurement.
+
+### Gold across four bar sizes
+
+| Chart | N | LIFT* | z* |
+|---|---|---|---|
+| 5 minutes | 208 | +3.9pp | +0.84 |
+| 15 minutes | 213 | +4.6pp | +1.00 |
+| **30 minutes** | 303 | **−9.6pp** | **−2.53** |
+| 4 hours | 189 | −4.2pp | −0.86 |
+
+A single spike at 30m between near-zero neighbours — and 30m is the timeframe
+this whole investigation was built on. This repo's own log had already named
+that shape, about the *original* result: *"an isolated spike between a zero and
+a negative is what a single lucky cell looks like."*
+
+Caveat that cuts both ways: the four charts are four different experiments, not
+four views of one. Stop is 1 ATR *of that timeframe* and horizon is 200 bars *of
+that timeframe*, so bar size, stop size and holding window move together. What
+the ladder establishes is that the **sign of the answer is set by the
+parameterisation** — which is fatal either way. An effect that inverts when you
+change a chart setting is a parameter choice, not an edge.
 
 ### The test that closed the circle
 
