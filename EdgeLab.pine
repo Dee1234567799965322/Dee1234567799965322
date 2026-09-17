@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.7
+// EDGE LAB  v1.8
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -978,17 +978,33 @@ f_panel() =>
     float iSe = oSt.get(3)
     float iN  = iCnt.get(lS * 2) + iCnt.get(lS * 2 + 1)
     float iMd = f_mdl(iSe)
+    // CORRECTION 13 - DISAGREES HAD THE SAME FAULT, ONE ROW DOWN.
+    //
+    // It fired whenever the independent estimate differed in SIGN from the full
+    // sample, without asking two things it had to ask. Whether the difference
+    // clears the noise - and whether the full sample ever made a claim for the
+    // independent trades to contradict. Gold at 5m read +3.9pp at z +0.84 and
+    // the non-overlap chain read -20pp on 59 trades against its own MDL of 32pp,
+    // and the panel announced "the full-sample z was overlap". There was no z.
+    // Two numbers that cannot resolve themselves, disagreeing in sign.
     bool  iAgree = not na(iLf) and not na(bLf) and iLf * bLf > 0
-    color ic = na(iLf) ? #6c7080 : na(iZ) ? #6c7080 :
-         math.abs(iLf) >= NOISE_PP and math.abs(iZ) >= Z_BAR ? (iLf > 0 ? #26a69a : #ef5350) : #ff9800
+    bool  iRes   = not na(iZ) and math.abs(iZ) >= Z_BAR
+    bool  fClaim = not na(bZ) and math.abs(bZ) >= 2.0
+    // The independent chain is a subset of the full sample and the noisier of
+    // the two, so its own se is the conservative yardstick for the gap.
+    float dGap   = na(iLf) or na(bLf) or na(iSe) or iSe <= 0 ? na : (iLf - bLf) / iSe
+    bool  iContra = not iAgree and not na(dGap) and math.abs(dGap) > 2.0 and fClaim
+    color ic = na(iLf) or na(iZ) ? #6c7080 :
+         iAgree and iRes ? (iLf > 0 ? #26a69a : #ef5350) : iContra ? #ef5350 : #ff9800
     f_cell(0, 22, "IND (no overlap)   n " + str.tostring(int(iN)) + " of " + str.tostring(int(nL)) +
          "   LIFT* " + (na(iLf) ? "-" : f_sg(iLf, "#.#") + "pp") +
          "   z* " + (na(iZ) ? "-" : f_sg(iZ, "#.##")) +
          "   MDL " + (na(iMd) ? "-" : str.tostring(iMd, "#.#") + "pp") +
          "   ->  " + (na(iLf) ? "no data" :
-              not iAgree ? "DISAGREES with the full sample - the full-sample z was overlap" :
-              na(iZ) or math.abs(iZ) < Z_BAR ? "same sign, not significant on independent trades" :
-              "SURVIVES on independent trades"), ic, false)
+              iAgree and iRes ? "SURVIVES on independent trades" :
+              iContra ? "DISAGREES with the full sample - the full-sample z was overlap" :
+              iAgree ? "same sign, not significant on independent trades" :
+              "signs differ, but neither estimate resolves - too few independent trades"), ic, false)
 
     f_cell(0, 21, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
     for c = 1 to 10
