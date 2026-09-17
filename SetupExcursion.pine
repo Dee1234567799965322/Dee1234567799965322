@@ -1,0 +1,324 @@
+//@version=6
+// ============================================================================
+// SETUP EXCURSION  v1.0
+// ----------------------------------------------------------------------------
+// THE OBJECTION THAT WAS RIGHT, AND WHAT IT ACTUALLY IMPLIES.
+//
+// The excursion test entered on a TIMER with no view and found the excursion
+// distribution to be exactly random-walk: 1/(1+n) at every target across 8,302
+// trades. It was read here as "this explains the six nulls". That was too
+// strong, and the objection that caught it is correct:
+//
+//   A timer entry is not a setup. Nobody waits for a bar count. They wait for
+//   a swing failure, a sweep of liquidity, an inducement. Measuring random
+//   entries only proves random entries are random.
+//
+// True. The unconditional distribution being random-walk does NOT mean every
+// conditioned subset is. It means the subsets must AVERAGE to random-walk - so
+// a setup can only be good by being selective, and some other subset has to be
+// correspondingly worse. That is conservation, not an argument against setups.
+//
+// WHAT THOSE 8,302 STOP-OUTS ACTUALLY BOUGHT.
+//
+// They bought the exact number a setup has to beat, measured on the same bars,
+// at every target. Every earlier test on this repo measured ONE target and
+// called it. The Trap Engine tested a liquidity sweep, read -0.7pp at a fixed
+// 2R, and stopped there. If sweep entries carry a worse near-target rate and a
+// FATTER far tail, that measurement could not have seen it. This one can.
+//
+// THE BASELINE IS DIRECTION-MATCHED, WHICH MATTERS MORE HERE THAN ANYWHERE.
+//
+// A conditioned entry has a direction the condition chose - a swept high is a
+// short - so it cannot be taken both ways, and the drift control that made the
+// excursion test airtight is unavailable. Instead the timer runs alongside in
+// the same bars and its LONG and SHORT reach rates are tracked separately.
+// Each setup bucket is then compared against a baseline blended to its own
+// long/short mix. A short-heavy bucket in a falling market is measured against
+// what a short-heavy timer did in that same falling market, not against 1/(1+n).
+//
+// DOSE-RESPONSE IS THE REAL TEST, NOT ANY SINGLE ROW.
+//
+// Four buckets of increasing selectivity:
+//
+//   TIMER   no view at all - the control, and it must reproduce the baseline
+//   SFP     swing failure: takes out a prior swing point, closes back inside
+//   +REJ    the same, but the sweep bar closes in the far third of its range
+//   +HTF    the same, but the swept level sits at a prior-day extreme
+//
+// If these conditions carry information the numbers should improve MONOTONICALLY
+// as conditions stack. One bucket popping while its neighbours do not is what
+// noise looks like, and with four buckets and five targets there are twenty
+// cells for noise to pop in. Read the trend down the column, never one cell.
+//
+// N falls fast as conditions stack. That is the cost of selectivity and it is
+// the honest reason this question is hard: the more textbook the setup, the
+// less of it there is to measure.
+// ============================================================================
+indicator("Setup Excursion", shorttitle="SETUP-EXC", overlay=true,
+     max_boxes_count=50, max_lines_count=100, max_labels_count=300, max_bars_back=500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_T = "1 - THE TEST"
+float stopK   = input.float(1.0, "Stop Distance (ATR) = 1R", minval=0.2, maxval=5.0, step=0.1, group=G_T)
+int   spacing = input.int(10, "Timer Entry Every N Bars", minval=1, maxval=100, group=G_T,
+     tooltip="The control bucket. It runs on the same bars as the setups so its long and short reach rates give each setup bucket a direction-matched baseline measured in the same market.")
+int   horizon = input.int(500, "Give Up After (bars)", minval=50, maxval=2000, group=G_T)
+
+string G_S = "2 - THE SETUP"
+int   pivLen  = input.int(5, "Swing Strength (bars)", minval=2, maxval=20, group=G_S,
+     tooltip="Bars either side a pivot must dominate. This is a real free parameter - do not tune it after seeing results.")
+float rejPct  = input.float(0.33, "Rejection: close within this third", minval=0.1, maxval=0.5, step=0.01, group=G_S,
+     tooltip="For a swept HIGH the bar must close in the bottom third of its own range - a real rejection rather than a drift through. This is the +REJ condition.")
+float htfTol  = input.float(0.25, "HTF Confluence Tolerance (ATR)", minval=0.05, maxval=2.0, step=0.05, group=G_S,
+     tooltip="How close the swept swing must sit to the prior day's high or low to count as confluence. This is the +HTF condition.")
+
+string G_D = "3 - DISPLAY"
+bool showMk  = input.bool(true, "Mark Setups", group=G_D)
+bool showTbl = input.bool(true, "Results Table", group=G_D)
+
+// ============================================================================
+// 2. PRIMITIVES
+// ----------------------------------------------------------------------------
+// Top level, every bar, unconditional. ta.* carries rolling state and returns
+// stale values behind an `and` or a ternary.
+// ============================================================================
+bool  barClosed = barstate.isconfirmed
+float atr       = ta.atr(14)
+float pvH       = ta.pivothigh(high, pivLen, pivLen)
+float pvL       = ta.pivotlow(low,  pivLen, pivLen)
+bool  newDay    = ta.change(time("D")) != 0
+
+var float swH = na
+var float swL = na
+var float pdH = na
+var float pdL = na
+var float cdH = na
+var float cdL = na
+
+if barClosed
+    if not na(pvH)
+        swH := pvH
+    if not na(pvL)
+        swL := pvL
+    if newDay
+        pdH := cdH
+        pdL := cdL
+        cdH := high
+        cdL := low
+    else
+        cdH := na(cdH) ? high : math.max(cdH, high)
+        cdL := na(cdL) ? low  : math.min(cdL, low)
+
+// ============================================================================
+// 3. SETUP DETECTION
+// ----------------------------------------------------------------------------
+// SFP: price trades THROUGH a prior swing point and closes back inside. The
+// direction is the fade - a swept high is a short.
+// ============================================================================
+bool sfpS = barClosed and not na(swH) and high > swH and close < swH
+bool sfpL = barClosed and not na(swL) and low  < swL and close > swL
+
+float rng = high - low
+bool rejS = sfpS and rng > 0 and (close - low) / rng <= rejPct
+bool rejL = sfpL and rng > 0 and (high - close) / rng <= rejPct
+
+bool htfS = rejS and not na(pdH) and not na(atr) and math.abs(swH - pdH) <= htfTol * atr
+bool htfL = rejL and not na(pdL) and not na(atr) and math.abs(swL - pdL) <= htfTol * atr
+
+// ============================================================================
+// 4. OPEN TRADES
+// ----------------------------------------------------------------------------
+// bucket 0 timer  1 SFP  2 SFP+REJ  3 SFP+REJ+HTF
+// A setup that qualifies for a deeper bucket is entered in EVERY bucket it
+// meets, so the buckets nest. That is what makes the dose-response reading
+// valid: each row is a strict subset of the one above it.
+// ============================================================================
+var array<float> tEn  = array.new<float>()
+var array<float> tRk  = array.new<float>()
+var array<int>   tDir = array.new<int>()
+var array<int>   tBar = array.new<int>()
+var array<int>   tBk  = array.new<int>()
+var array<float> tMax = array.new<float>()
+
+int NB = 4
+int NT = 5
+// hits[bucket*NT + target]
+var array<float> hits = array.new<float>(NB * NT, 0.0)
+var array<float> bN   = array.new<float>(NB, 0.0)
+var array<float> bL   = array.new<float>(NB, 0.0)
+// timer split by direction: tl[target], ts[target]
+var array<float> tlHit = array.new<float>(NT, 0.0)
+var array<float> tsHit = array.new<float>(NT, 0.0)
+var array<float> tDirN = array.new<float>(2, 0.0)
+var array<float> misc  = array.new<float>(1, 0.0)
+
+f_tgt(int i) =>
+    i == 0 ? 2.0 : i == 1 ? 3.0 : i == 2 ? 5.0 : i == 3 ? 8.0 : 12.0
+
+f_open(int bucket, int d) =>
+    bool ok = false
+    if not na(atr) and atr > 0
+        tEn.push(close)
+        tRk.push(stopK * atr)
+        tDir.push(d)
+        tBar.push(bar_index)
+        tBk.push(bucket)
+        tMax.push(0.0)
+        ok := true
+    ok
+
+if barClosed and not na(atr) and atr > 0 and bar_index % spacing == 0
+    f_open(0, 1)
+    f_open(0, -1)
+if sfpS
+    f_open(1, -1)
+if sfpL
+    f_open(1, 1)
+if rejS
+    f_open(2, -1)
+if rejL
+    f_open(2, 1)
+if htfS
+    f_open(3, -1)
+if htfL
+    f_open(3, 1)
+
+f_track() =>
+    if tEn.size() > 0
+        for i = tEn.size() - 1 to 0
+            float en = tEn.get(i)
+            float rk = tRk.get(i)
+            int   d  = tDir.get(i)
+            int   bk = tBk.get(i)
+            int   age = bar_index - tBar.get(i)
+            bool  done = false
+            // Nothing is judged on the entry bar, whose high and low were made
+            // before the close that registered it.
+            if age >= 1
+                float fav = d == 1 ? (high - en) / rk : (en - low) / rk
+                if fav > tMax.get(i)
+                    tMax.set(i, fav)
+                // Favourable excursion is credited BEFORE the stop is checked:
+                // within one bar there is no way to know which came first, and
+                // this is the reading that stays honest about what was reachable.
+                if d == 1 ? low <= en - rk : high >= en + rk
+                    done := true
+                else if age >= horizon
+                    done := true
+                    misc.set(0, misc.get(0) + 1)
+            if done
+                float mx = tMax.get(i)
+                bN.set(bk, bN.get(bk) + 1)
+                if d == 1
+                    bL.set(bk, bL.get(bk) + 1)
+                if bk == 0
+                    tDirN.set(d == 1 ? 0 : 1, tDirN.get(d == 1 ? 0 : 1) + 1)
+                for L = 0 to NT - 1
+                    if mx >= f_tgt(L)
+                        hits.set(bk * NT + L, hits.get(bk * NT + L) + 1)
+                        if bk == 0
+                            if d == 1
+                                tlHit.set(L, tlHit.get(L) + 1)
+                            else
+                                tsHit.set(L, tsHit.get(L) + 1)
+                tEn.remove(i)
+                tRk.remove(i)
+                tDir.remove(i)
+                tBar.remove(i)
+                tBk.remove(i)
+                tMax.remove(i)
+    tEn.size()
+
+if barClosed
+    f_track()
+
+plotshape(showMk and rejS, "SFP short", shape.triangledown, location.abovebar, #ef5350, size=size.tiny)
+plotshape(showMk and rejL, "SFP long",  shape.triangleup,   location.belowbar, #26a69a, size=size.tiny)
+
+// ============================================================================
+// 5. RESULTS
+// ----------------------------------------------------------------------------
+// Each setup row is compared against a timer baseline BLENDED to that row's own
+// long/short mix, so a short-heavy bucket in a falling market is measured
+// against what short-heavy random entries did in that same falling market.
+//
+// Read DOWN the column. Four buckets times five targets is twenty cells, and
+// with that many a few will look impressive by chance. Only a monotone
+// improvement as conditions stack means anything.
+// ============================================================================
+var table t = table.new(position.bottom_left, 7, 10, bgcolor=color.new(#131722, 10),
+     border_color=color.new(#000000, 55), border_width=1)
+
+f_cell(int c, int r, string v, color col, bool hdr) =>
+    table.cell(t, c, r, v, text_color=col, text_size=size.tiny,
+         text_halign=c == 0 ? text.align_left : text.align_right,
+         bgcolor=hdr ? color.new(#2a2e39, 20) : color(na))
+
+f_base(int bk, int L) =>
+    float nL = tDirN.get(0)
+    float nS = tDirN.get(1)
+    float pL = nL > 0 ? tlHit.get(L) / nL : na
+    float pS = nS > 0 ? tsHit.get(L) / nS : na
+    float n  = bN.get(bk)
+    float l  = bL.get(bk)
+    n > 0 and not na(pL) and not na(pS) ? (l * pL + (n - l) * pS) / n : na
+
+f_row(int r, int bk, string nm) =>
+    float n = bN.get(bk)
+    f_cell(0, r, nm, #b2b5be, false)
+    f_cell(1, r, str.tostring(int(n)), n < 60 ? #ff9800 : #b2b5be, false)
+    for L = 0 to NT - 1
+        float p = n > 0 ? hits.get(bk * NT + L) / n : na
+        float b = f_base(bk, L)
+        float e = na(p) or na(b) ? na : (p - b) * 100
+        color c = n < 60 ? #b2b5be : na(e) ? #b2b5be : e > 3 ? #26a69a : e < -3 ? #ef5350 : #b2b5be
+        f_cell(2 + L, r, na(p) ? "-" : str.tostring(p * 100, "#.#") +
+             (bk == 0 or na(e) ? "" : " " + str.tostring(e, "+#.#")), c, false)
+    n
+
+f_results() =>
+    f_cell(0, 0, "BUCKET", #d1d4dc, true)
+    f_cell(1, 0, "N", #d1d4dc, true)
+    f_cell(2, 0, "2R", #d1d4dc, true)
+    f_cell(3, 0, "3R", #d1d4dc, true)
+    f_cell(4, 0, "5R", #d1d4dc, true)
+    f_cell(5, 0, "8R", #d1d4dc, true)
+    f_cell(6, 0, "12R", #d1d4dc, true)
+    f_row(1, 0, "TIMER  (control)")
+    f_row(2, 1, "SFP")
+    f_row(3, 2, "SFP +REJ")
+    f_row(4, 3, "SFP +REJ +HTF")
+    // The control must land on the analytic null or nothing else can be read.
+    f_cell(0, 5, "random walk 1/(1+n)", #6c7080, true)
+    f_cell(1, 5, "", #6c7080, true)
+    f_cell(2, 5, "33.3", #6c7080, true)
+    f_cell(3, 5, "25.0", #6c7080, true)
+    f_cell(4, 5, "16.7", #6c7080, true)
+    f_cell(5, 5, "11.1", #6c7080, true)
+    f_cell(6, 5, "7.7", #6c7080, true)
+    f_cell(0, 6, "timer LONG / SHORT n", #6c7080, false)
+    f_cell(1, 6, str.tostring(int(tDirN.get(0))) + "/" + str.tostring(int(tDirN.get(1))), #6c7080, false)
+    f_cell(2, 6, "baselines are blended", #6c7080, false)
+    f_cell(3, 6, "", #6c7080, false)
+    f_cell(4, 6, "", #6c7080, false)
+    f_cell(5, 6, "", #6c7080, false)
+    f_cell(6, 6, "", #6c7080, false)
+    f_cell(0, 7, "setup long share", #6c7080, false)
+    for bk = 1 to 3
+        float n = bN.get(bk)
+        f_cell(bk + 1, 7, n > 0 ? str.tostring(bL.get(bk) / n * 100, "#") + "%L" : "-", #6c7080, false)
+    f_cell(1, 7, "", #6c7080, false)
+    f_cell(5, 7, "", #6c7080, false)
+    f_cell(6, 7, "", #6c7080, false)
+    f_cell(0, 8, "censored " + str.tostring(int(misc.get(0))) + "   open " + str.tostring(tEn.size()), #6c7080, false)
+    for c = 1 to 6
+        f_cell(c, 8, "", #6c7080, false)
+    f_cell(0, 9, "READ DOWN THE COLUMN, NOT ONE CELL", #ff9800, false)
+    for c = 1 to 6
+        f_cell(c, 9, "", #ff9800, false)
+    bN.get(0)
+
+if showTbl and barstate.islast
+    f_results()
