@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.1
+// EDGE LAB  v1.2
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -493,7 +493,7 @@ plotshape(showMk and mkL, "Buy Setup",  shape.triangleup,   location.belowbar, c
 // smaller than N and the true z is SMALLER than the one printed. That is one
 // more reason the gate asks for 3.0 rather than 2.0.
 // ============================================================================
-var array<float> oSt = array.new<float>(3, 0.0)   // 0 lift* in pp  1 z*  2 strata used
+var array<float> oSt = array.new<float>(4, 0.0)   // 0 lift* pp  1 z*  2 strata  3 se pp
 
 f_strat(int b, int L) =>
     int   slotS = b * 2
@@ -515,7 +515,37 @@ f_strat(int b, int L) =>
     oSt.set(0, na(lf) ? na : lf * 100)
     oSt.set(1, na(lf) or na(vr) or vr <= 0 ? na : lf / math.sqrt(vr))
     oSt.set(2, k)
+    oSt.set(3, na(vr) or vr <= 0 ? na : math.sqrt(vr) * 100)
     k
+
+// ----------------------------------------------------------------------------
+// CORRECTION 7 - "NO EDGE" AND "COULD NOT HAVE SEEN ONE" ARE NOT THE SAME.
+//
+// Every null reported in this session came off a sample of a few hundred, and
+// none of them ever said what they were capable of detecting. They should have.
+// The smallest lift a bucket can resolve, at this panel's own z bar and 80%
+// power, is
+//
+//     MDL  =  (3.0 + 0.84) * se(LIFT*)
+//
+// and on the first four instruments that number came back between 12 and 25
+// points - two to four times the 6.4pp noise floor the gate is written around.
+// Gold's 302 sweeps cannot resolve anything under 14.7pp. Its INDUCED bucket,
+// at 115, cannot resolve anything under 24pp. A "NO EDGE" from a bucket like
+// that is not a measurement, it is an empty instrument, and the panel now says
+// UNDERPOWERED instead of pretending otherwise.
+//
+// Resolving the noise floor itself takes about 1,600 signal trades. That is the
+// real admission price, and it is reachable on gold only by loading far more
+// history than a default chart shows - scroll back until the bar count stops
+// climbing before reading anything here.
+// ----------------------------------------------------------------------------
+f_mdl(float sePP) =>
+    na(sePP) ? na : (Z_BAR + 0.84) * sePP
+
+f_needN(float nCur, float sePP) =>
+    float m = f_mdl(sePP)
+    na(m) or nCur <= 0 or m <= 0 ? na : math.ceil(nCur * math.pow(m / NOISE_PP, 2))
 
 // Expectancy in R at a fixed target, net of cost. Zero everywhere under the
 // random walk by construction. This one is REALIZED - it still contains
@@ -527,7 +557,7 @@ f_exp(float p, float tg) =>
 // ============================================================================
 // 9. PANEL
 // ============================================================================
-var table pnl = table.new(position.bottom_left, 10, 20, bgcolor=color.new(#131722, 8),
+var table pnl = table.new(position.bottom_left, 11, 20, bgcolor=color.new(#131722, 8),
      border_color=color.new(#000000, 55), border_width=1)
 
 f_cell(int c, int r, string v, color col, bool hdr) =>
@@ -553,6 +583,7 @@ f_panel() =>
     f_cell(7, 0, "z*", #d1d4dc, true)
     f_cell(8, 0, "NET R", #d1d4dc, true)
     f_cell(9, 0, "AVGMAX", #d1d4dc, true)
+    f_cell(10, 0, "MDL", #d1d4dc, true)
 
     for b = 0 to NB - 1
         int   sS = b * 2
@@ -565,6 +596,7 @@ f_panel() =>
         f_strat(b, selT)
         float ls = oSt.get(0)
         float lz = oSt.get(1)
+        float md = f_mdl(oSt.get(3))
         float ex = f_exp(pS, tg)
         float am = nS > 0 ? (smx.get(sS * 2) + smx.get(sS * 2 + 1)) / nS : na
         // LIFT* is only coloured once it clears the measured feed-to-feed noise
@@ -584,6 +616,11 @@ f_panel() =>
         f_cell(7, b + 1, b == 0 ? "-" : na(lz) ? "-" : str.tostring(lz, "+#.##"), lc, false)
         f_cell(8, b + 1, na(ex) ? "-" : str.tostring(ex, "+#.##"), #6c7080, false)
         f_cell(9, b + 1, na(am) ? "-" : str.tostring(am, "#.##") + "R", #6c7080, false)
+        // MDL is the smallest lift this bucket could resolve. When it exceeds
+        // the noise floor the bucket cannot answer the question at all, and it
+        // is flagged so that its blank result is not read as a finding.
+        f_cell(10, b + 1, b == 0 ? "-" : na(md) ? "-" : str.tostring(md, "#.#"),
+             na(md) ? #6c7080 : md > NOISE_PP ? #ff9800 : #26a69a, false)
 
     // ---- the partition check ----------------------------------------------
     // INDUCED and PLAIN are a partition of SWEEP, so they must add back to it.
@@ -599,7 +636,7 @@ f_panel() =>
     f_cell(1, 7, str.tostring(int(nInd)) + "+" + str.tostring(int(nPln)), #6c7080, false)
     f_cell(2, 7, (pOk ? "= " : "!= ") + str.tostring(int(nSw)), pOk ? #6c7080 : #ef5350, false)
     f_cell(3, 7, pOk ? "ok" : "RECONCILE FAILED", pOk ? #6c7080 : #ef5350, false)
-    for c = 4 to 9
+    for c = 4 to 10
         f_cell(c, 7, "", #6c7080, false)
 
     // ---- ladder for the selected bucket ------------------------------------
@@ -616,7 +653,8 @@ f_panel() =>
     f_cell(6, 8, "RW", #d1d4dc, true)
     f_cell(7, 8, "vs RW", #d1d4dc, true)
     f_cell(8, 8, "NET R", #d1d4dc, true)
-    f_cell(9, 8, "", #d1d4dc, true)
+    f_cell(9, 8, "MDL", #d1d4dc, true)
+    f_cell(10, 8, "", #d1d4dc, true)
 
     int   bestL = -1
     float bestE = -1.0e18
@@ -650,7 +688,9 @@ f_panel() =>
         f_cell(6, L + 9, f_pct(rw), #6c7080, false)
         f_cell(7, L + 9, f_sgn(vr), #6c7080, false)
         f_cell(8, L + 9, na(ex) ? "-" : str.tostring(ex, "+#.##"), #6c7080, false)
-        f_cell(9, L + 9, "", #6c7080, false)
+        f_cell(9, L + 9, na(oSt.get(3)) ? "-" : str.tostring(f_mdl(oSt.get(3)), "#.#"),
+             na(oSt.get(3)) ? #6c7080 : f_mdl(oSt.get(3)) > NOISE_PP ? #ff9800 : #26a69a, false)
+        f_cell(10, L + 9, "", #6c7080, false)
 
     // ---- verdict -----------------------------------------------------------
     // Five gates, all of which have to pass, none of them adjustable from the
@@ -667,6 +707,9 @@ f_panel() =>
     f_strat(selBk, bestL >= 0 ? bestL : 0)
     float bLf = bestL >= 0 ? oSt.get(0) : na
     float bZ  = bestL >= 0 ? oSt.get(1) : na
+    float bSe = bestL >= 0 ? oSt.get(3) : na
+    float bMd = f_mdl(bSe)
+    float bNn = f_needN(nL, bSe)
     float bTg = bestL >= 0 ? f_tgt(bestL) : na
 
     f_strat(selBk, bestM >= 0 ? bestM : 0)
@@ -716,11 +759,19 @@ f_panel() =>
         vtxt := "INVERTED - " + f_name(selBk) + " is significantly WORSE than its mirror. " +
              "The trade is the OPPOSITE side, target " + str.tostring(mTg, "#") + "R."
         vcol := #ffb74d
+    else if na(bMd) or bMd > NOISE_PP
+        // The instrument is empty, not the market. Saying NO EDGE here would be
+        // claiming a measurement that was never taken.
+        vtxt := "UNDERPOWERED - " + f_name(selBk) + " can only resolve a lift of " +
+             (na(bMd) ? "?" : str.tostring(bMd, "#.#")) + "pp or bigger at N=" +
+             str.tostring(int(nL)) + ".  Needs N~" + (na(bNn) ? "?" : str.tostring(int(bNn))) +
+             " to see the 6.4pp floor.  Load more history."
+        vcol := #ff9800
     else
-        vtxt := "NO EDGE - " + f_name(selBk) + " fails: " + fails
+        vtxt := "NO EDGE - " + f_name(selBk) + " measured flat and the sample was big enough to say so. " + fails
         vcol := #ef5350
     f_cell(0, 14, vtxt, vcol, true)
-    for c = 1 to 9
+    for c = 1 to 10
         f_cell(c, 14, "", #6c7080, true)
 
     f_cell(0, 15, "Gates  N>=" + str.tostring(N_MIN) + "   censored<=20%   |LIFT*|>=" +
@@ -731,13 +782,17 @@ f_panel() =>
          "    open " + str.tostring(tEn.size()) +
          "    best rung by net R: " + (bestL >= 0 ? str.tostring(f_tgt(bestL), "#") + "R" : "-"),
          not na(cr) and cr > 20 ? #ef5350 : not na(cr) and cr > 10 ? #ff9800 : #6c7080, false)
-    f_cell(0, 17, "LIFT is raw and still carries  skew x drift.  LIFT* is computed inside each direction and is drift-free whatever the L/S mix. Read LIFT*.", #6c7080, false)
-    f_cell(0, 18, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
-    for c = 1 to 9
+    f_cell(0, 17, "Bars " + str.tostring(bar_index + 1) +
+         "    MDL " + (na(bMd) ? "-" : str.tostring(bMd, "#.#") + "pp") +
+         " = smallest lift resolvable here at 80% power. Orange means the bucket cannot answer the question, whatever it prints.", #6c7080, false)
+    f_cell(0, 18, "LIFT is raw and still carries  skew x drift.  LIFT* is computed inside each direction and is drift-free whatever the L/S mix. Read LIFT*.", #6c7080, false)
+    f_cell(0, 19, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
+    for c = 1 to 10
         f_cell(c, 15, "", #6c7080, false)
         f_cell(c, 16, "", #6c7080, false)
         f_cell(c, 17, "", #6c7080, false)
         f_cell(c, 18, "", #6c7080, false)
+        f_cell(c, 19, "", #6c7080, false)
     nL
 
 if showTbl and barstate.islast
