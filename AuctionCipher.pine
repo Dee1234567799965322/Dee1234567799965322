@@ -3560,55 +3560,38 @@ var array<float> opRisk  = array.new<float>()
 var array<float> opRPlan = array.new<float>()
 
 // ----------------------------------------------------------------------------
-// THE MIRROR.
+// DRIFT CONTROL, and why it is not a mirror.
 //
-// Everything above measures whether the signals hit their target more often
-// than gambler's ruin says they should. That null assumes a driftless walk. A
-// trending market is not one, and on a gold trend day it is not close to one:
-// a long into an uptrend clears 1.5R more often than 1/(1+1.5) whether or not
-// anything picked it. The win-edge row cannot tell those apart, which is why
-// it can read "edge clears its own noise" on a chart where the only thing
-// present is the trend.
+// The hit-rate rows above compare the signals with gambler's ruin, 1/(1+R).
+// That null assumes a driftless walk. A trending market is not one: a long
+// into a rally clears 1.5R more often than 0.4 whether or not anything
+// selected it, so the win-edge row cannot tell a signal from a trend.
 //
-// So every signal now opens its OPPOSITE from the same bar, at the same entry,
-// with the same risk distance and the same target multiple. The mirror is what
-// the same trade plan would have returned pointing the other way.
+// The exact fix is a mirror - every signal opening its own opposite from the
+// same bar - and it was built, and it compiled to 103,636 tokens against
+// Pine's limit of 100,256. This script is full. The mirror needed four arrays,
+// a second manager and a push at three entry points, and none of that fits.
 //
-// Comparing signals against mirrors POOLED does not fix it either - that was
-// the first correction this project ever made. If the signals are 60% long on
-// a rising chart, signal-minus-mirror is still mostly drift. The counters
-// below are therefore STRATIFIED BY SIGNAL DIRECTION: the long signals are
-// compared with their own short mirrors, the short signals with their own long
-// mirrors, and the two differences are averaged. Under pure drift the first is
-// +drift and the second is -drift, so the average is exactly zero at any
-// long/short mix. That is the estimator, and the half-difference between the
-// two strata is the drift itself, which is worth printing on its own line.
-// Four arrays, not seven. A mirror is never drawn and never contributes an R
-// to anything, so its entry price, its risk and its target multiple are dead
-// weight once the stop and target prices are computed from them at push time.
-// Only hit-or-miss is ever read back.
-var array<float> mkStop  = array.new<float>()
-var array<float> mkTgt   = array.new<float>()
-var array<int>   mkDir   = array.new<int>()
-var array<int>   mkBar   = array.new<int>()
-
-// 0-3 are the LONG-signal stratum, 4-7 the SHORT-signal stratum; within each,
-// signal wins, signal resolved, mirror wins, mirror resolved. Resolved means
+// What fits is the same stratification without the second set of trades.
+// Split the signals BY THEIR OWN DIRECTION and take each direction's hit rate.
+// Drift lifts the long rate and lowers the short rate by roughly the same
+// amount, so the unweighted AVERAGE of the two is the rate a driftless market
+// would have produced, and the HALF-DIFFERENCE is the drift itself. Compare
+// that average with gambler's ruin and the trend is out of the answer.
+//
+// One honest difference from the mirror, and it is not cosmetic: the mirror
+// cancelled drift EXACTLY at any long/short mix, because each stratum's
+// comparison was internally paired. This cancels it to FIRST ORDER - it
+// assumes drift moves the two rates equally and oppositely, which is true for
+// small drift and approximate for large. On a chart as one-sided as a gold
+// trend day, read the drift row before trusting the edge row.
+//
+// Slots: long wins, long resolved, short wins, short resolved. Resolved means
 // target or stop - an expiry marked to market never hit either, and counting
-// it as a miss would understate both sides by the same unknown amount.
-var array<float> strat = array.new<float>(8, 0.0)
+// it as a miss would understate both directions by the same unknown amount.
+var array<float> strat = array.new<float>(4, 0.0)
 f_stAdd(int i, float v) =>
     strat.set(i, strat.get(i) + v)
-
-// Pushed from all three sites that open a trade, so a mirror cannot go missing
-// for one entry path and silently bias the comparison.
-f_pushMirror(float en, float rk, float rp, int d) =>
-    int md = -d
-    mkStop.push(md == 1 ? en - rk : en + rk)
-    mkTgt.push(md == 1 ? en + rk * rp : en - rk * rp)
-    mkDir.push(md)
-    mkBar.push(bar_index)
-    mkDir.size()
 
 var int sigOpen = 0
 var int sigSkip = 0
@@ -4657,7 +4640,6 @@ f_fillPending(bool isLong, float st, float tg) =>
         opBar.push(bar_index)
         opRisk.push(fRisk)
         opRPlan.push(fR)
-        f_pushMirror(fillP, fRisk, fR, isLong ? 1 : -1)
         if riskOn
             f_drawTrade(isLong, fillP, st, tg, fR)
     taken
@@ -4741,7 +4723,7 @@ f_manageTrades() =>
             // it was taken in, so the mirror comparison has a stratum to sit
             // in. Only target or stop - see the note on the strat array.
             if outc == 1 or outc == 2
-                int stB = d == 1 ? 0 : 4
+                int stB = d == 1 ? 0 : 2
                 f_stAdd(stB + 1, 1)
                 if outc == 1
                     f_stAdd(stB, 1)
@@ -4760,27 +4742,6 @@ f_manageTrades() =>
 // visibly if anyone edits one and not the other. No drawings, no ledger, no
 // effect on any R shown on the chart - the mirrors are never taken, they only
 // answer what the same plan would have done pointing the other way.
-f_manageMirrors() =>
-    for i = mkDir.size() - 1 to 0
-        int d = mkDir.get(i)
-        int outc = d == 1 ? (low <= mkStop.get(i) ? 2 : high >= mkTgt.get(i) ? 1 : 0) :
-             (high >= mkStop.get(i) ? 2 : low <= mkTgt.get(i) ? 1 : 0)
-        if outc == 0 and bar_index - mkBar.get(i) > statHorizon
-            outc := 3
-        if outc > 0
-            if outc < 3
-                // the stratum is the SIGNAL's direction, which is the opposite
-                // of the mirror's own - that is the whole point of the pairing.
-                int stB = d == -1 ? 0 : 4
-                f_stAdd(stB + 3, 1)
-                if outc == 1
-                    f_stAdd(stB + 2, 1)
-            mkStop.remove(i)
-            mkTgt.remove(i)
-            mkDir.remove(i)
-            mkBar.remove(i)
-    mkDir.size()
-
 // if the market opened past the stop, or the move to the open ate enough of the
 // edge that the setup no longer clears its own minimum, it is not a trade any
 // more. Counted as unfilled, not hidden.
@@ -4827,9 +4788,6 @@ if barClosed and pendShort
 if opEntry.size() > 0 and barClosed
     tpHit := f_manageTrades()
 
-if mkDir.size() > 0 and barClosed
-    f_manageMirrors()
-
 if closeOnReversal and barClosed and opEntry.size() > 0
     f_closeReversals()
 
@@ -4846,7 +4804,6 @@ if chartBuy and not na(rkTgtL) and barClosed
         opBar.push(bar_index)
         opRisk.push(rkRiskL)
         opRPlan.push(rkRL)
-        f_pushMirror(rkEntry, rkRiskL, rkRL, 1)
         if riskOn
             f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
 if chartSell and not na(rkTgtS) and barClosed
@@ -4862,7 +4819,6 @@ if chartSell and not na(rkTgtS) and barClosed
         opBar.push(bar_index)
         opRisk.push(rkRiskS)
         opRPlan.push(rkRS)
-        f_pushMirror(rkEntry, rkRiskS, rkRS, -1)
         if riskOn
             f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
 
@@ -4985,6 +4941,22 @@ var table stat = table.new(f_tablePos(statPos), 2, 21, bgcolor=cTblBg,
 f_pair2(int r, string k, string v, color c) =>
     table.cell(stat, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
     table.cell(stat, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+// Three stats rows share one shape: a hit count against a stated null, its own
+// MDL, and a colour that stays grey unless the gap clears BOTH the 6.4pp noise
+// floor and that MDL. Written once rather than three times inline - the file is
+// at Pine's token ceiling, and three copies of one piece of arithmetic is the
+// cheapest thing in it to give up. Top level, not inside f_drawStats: Pine has
+// no nested function definitions.
+f_base(int row, string k, int hit, int tot, float nullPP) =>
+    float lf = tot > 0 ? hit * 100.0 / tot - nullPP : na
+    float ph = tot > 0 ? hit * 1.0 / tot : na
+    float md = na(ph) ? na : 2.8 * math.sqrt(ph * (1 - ph) / tot) * 100
+    f_pair2(row, k, na(lf) ? "-" :
+         (lf > 0 ? "+" : "") + str.tostring(lf, "#.#") + "pp  n " + str.tostring(tot),
+         tot < 20 or na(lf) or math.abs(lf) < 6.4 or
+         na(md) or math.abs(lf) < md ? C_NE : lf > 0 ? C_UP : C_DN)
+    lf
 
 var table aud = table.new(f_tablePos(audPos),
      2, 15, bgcolor=cTblBg, border_color=color.new(#000000, 75), border_width=1,
@@ -5139,28 +5111,11 @@ f_drawStats() =>
     // unless it clears BOTH the 6.4pp feed floor and what its sample can see.
     // Note the *1.0: hit and tot are ints, so hit/tot truncates to 0 or 1
     // before the multiply - the same trap f_pct already carries a comment about.
-    float MIRROR_BASE = 76.0
-    float phL = poorHiTotal > 0 ? poorHiHit * 100.0 / poorHiTotal - MIRROR_BASE : na
-    float phM = poorHiTotal > 0 ? 2.8 * math.sqrt((poorHiHit * 1.0 / poorHiTotal) * (1 - poorHiHit * 1.0 / poorHiTotal) / poorHiTotal) * 100 : na
-    float plL = poorLoTotal > 0 ? poorLoHit * 100.0 / poorLoTotal - MIRROR_BASE : na
-    float plM = poorLoTotal > 0 ? 2.8 * math.sqrt((poorLoHit * 1.0 / poorLoTotal) * (1 - poorLoHit * 1.0 / poorLoTotal) / poorLoTotal) * 100 : na
-    f_pair2(9, "Poor high vs 76% base", na(phL) ? "-" :
-         (phL > 0 ? "+" : "") + str.tostring(phL, "#.#") + "pp  n " + str.tostring(poorHiTotal),
-         poorHiTotal < 20 or na(phL) or math.abs(phL) < 6.4 or
-         na(phM) or math.abs(phL) < phM ? C_NE : phL > 0 ? C_UP : C_DN)
-    f_pair2(10, "Poor low vs 76% base", na(plL) ? "-" :
-         (plL > 0 ? "+" : "") + str.tostring(plL, "#.#") + "pp  n " + str.tostring(poorLoTotal),
-         poorLoTotal < 20 or na(plL) or math.abs(plL) < 6.4 or
-         na(plM) or math.abs(plL) < plM ? C_NE : plL > 0 ? C_UP : C_DN)
-    // Balance break held was green at ANY value once n cleared 20 - a colour
-    // carrying no information whatever. Its null is a coin flip, so read it
-    // against 50, and only once the gap clears the same floor.
-    float bbL = balTotal > 0 ? balHold * 100.0 / balTotal - 50.0 : na
-    float bbM = balTotal > 0 ? 2.8 * math.sqrt((balHold * 1.0 / balTotal) * (1 - balHold * 1.0 / balTotal) / balTotal) * 100 : na
-    f_pair2(11, "Balance break vs 50%", na(bbL) ? "-" :
-         (bbL > 0 ? "+" : "") + str.tostring(bbL, "#.#") + "pp  n " + str.tostring(balTotal),
-         balTotal < 20 or na(bbL) or math.abs(bbL) < 6.4 or
-         na(bbM) or math.abs(bbL) < bbM ? C_NE : bbL > 0 ? C_UP : C_DN)
+    // 76 is the mirror baseline measured on other instruments at 30m, not on
+    // this chart. Balance break's null is a coin flip, so it reads against 50.
+    f_base(9,  "Poor high vs 76% base", poorHiHit, poorHiTotal, 76.0)
+    f_base(10, "Poor low vs 76% base",  poorLoHit, poorLoTotal, 76.0)
+    f_base(11, "Balance break vs 50%",  balHold,   balTotal,    50.0)
     // THE CAP, STATED RATHER THAN INFERRED.
     // "Avg R targeted" cannot tell you whether the cap is on, and I spent
     // several rounds wrongly insisting it could. With next-bar-open fills the R
@@ -5190,54 +5145,46 @@ f_drawStats() =>
          math.abs(wEdge) < mdlPP ? C_WN : C_WN)
 
     // ------------------------------------------------------------------
-    // THE MIRROR ROWS. Everything above this line compares the signals with
-    // gambler's ruin, which assumes the market has no drift. These compare
-    // them with themselves reversed, which does not.
+    // DRIFT CONTROL. Everything above compares the signals with gambler's
+    // ruin, which assumes no drift. These split them by their own direction,
+    // where the trend shows up as a gap between the two rates instead of
+    // hiding inside one blended number.
     // ------------------------------------------------------------------
-    float nLs = strat.get(1)
-    float nLm = strat.get(3)
-    float nSs = strat.get(5)
-    float nSm = strat.get(7)
-    float p1L = nLs > 0 ? strat.get(0) / nLs : na
-    float p2L = nLm > 0 ? strat.get(2) / nLm : na
-    float p1S = nSs > 0 ? strat.get(4) / nSs : na
-    float p2S = nSm > 0 ? strat.get(6) / nSm : na
-    float dL  = na(p1L) or na(p2L) ? na : p1L - p2L
-    float dS  = na(p1S) or na(p2S) ? na : p1S - p2S
-    float vL  = na(dL) ? na : p1L * (1 - p1L) / nLs + p2L * (1 - p2L) / nLm
-    float vS  = na(dS) ? na : p1S * (1 - p1S) / nSs + p2S * (1 - p2S) / nSm
-    int   kSt = (na(dL) ? 0 : 1) + (na(dS) ? 0 : 1)
-    float lift = kSt == 0 ? na : ((na(dL) ? 0.0 : dL) + (na(dS) ? 0.0 : dS)) / kSt * 100
-    float lSe  = kSt == 0 ? na : math.sqrt(((na(vL) ? 0.0 : vL) + (na(vS) ? 0.0 : vS)) / (kSt * kSt)) * 100
-    float lMdl = na(lSe) ? na : 2.8 * lSe
-    float mirN = nLm + nSm
-    float mirW = strat.get(2) + strat.get(6)
-    // the half-difference between the two strata IS the drift: one of them
-    // carries +drift and the other -drift, so subtracting cancels the signal
-    // and leaves what the market was doing on its own.
-    float drift = na(dL) or na(dS) ? na : (dL - dS) / 2 * 100
+    float nL = strat.get(1)
+    float nS = strat.get(3)
+    float pL = nL > 0 ? strat.get(0) / nL : na
+    float pS = nS > 0 ? strat.get(2) / nS : na
+    bool  both = not na(pL) and not na(pS)
+    // average removes the drift, half-difference IS the drift
+    float dfHit = both ? (pL + pS) / 2 * 100 : na
+    float drift = both ? (pL - pS) / 2 * 100 : na
+    float dfSe  = both ? math.sqrt(pL * (1 - pL) / nL + pS * (1 - pS) / nS) / 2 * 100 : na
+    float dfEdge = na(dfHit) or na(beRate) ? na : dfHit - beRate
+    float dfMdl = na(dfSe) ? na : 2.8 * dfSe
+    bool  thin  = nL + nS < 100
+    bool  weak  = na(dfEdge) or na(dfMdl) or math.abs(dfEdge) < dfMdl
+    bool  under = not na(dfEdge) and math.abs(dfEdge) < 6.4
 
-    f_pair2(17, "Mirror hit (same bars)",
-         mirN > 0 ? str.tostring(mirW * 100.0 / mirN, "#.#") + "%  n " + str.tostring(int(mirN)) : "-", C_NE)
+    f_pair2(17, "Hit by direction",
+         na(pL) or na(pS) ? "one direction only" :
+         "L " + str.tostring(pL * 100, "#.#") + "% n " + str.tostring(int(nL)) +
+         "   S " + str.tostring(pS * 100, "#.#") + "% n " + str.tostring(int(nS)), C_NE)
     f_pair2(18, "Trend inside the headline",
-         na(drift) ? "one direction only" :
-         (drift > 0 ? "+" : "") + str.tostring(drift, "#.#") + "pp  L " +
-         str.tostring(int(nLs)) + " / S " + str.tostring(int(nSs)),
-         na(drift) ? C_WN : math.abs(drift) < 6.4 ? C_NE : C_WN)
-    f_pair2(19, "LIFT* vs mirror (n=" + str.tostring(int(nLs + nSs)) + ")",
-         na(lift) ? "-" : (lift > 0 ? "+" : "") + str.tostring(lift, "#.#") + "pp  +/- " +
-         (na(lMdl) ? "-" : str.tostring(lMdl, "#.#")),
-         na(lift) or kSt < 2 or nLs + nSs < 100 or math.abs(lift) < 6.4 or
-         na(lMdl) or math.abs(lift) < lMdl ? C_NE : lift > 0 ? C_UP : C_DN)
+         na(drift) ? "-" : (drift > 0 ? "+" : "") + str.tostring(drift, "#.#") + "pp",
+         na(drift) ? C_NE : math.abs(drift) < 6.4 ? C_NE : C_WN)
+    f_pair2(19, "Drift-free edge (n=" + str.tostring(int(nL + nS)) + ")",
+         na(dfEdge) ? "-" : (dfEdge > 0 ? "+" : "") + str.tostring(dfEdge, "#.#") +
+         "pp  +/- " + (na(dfMdl) ? "-" : str.tostring(dfMdl, "#.#")),
+         na(dfEdge) or thin or weak or under ? C_NE : dfEdge > 0 ? C_UP : C_DN)
     f_pair2(20, "Verdict (drift-controlled)",
-         kSt < 2 ? "needs both directions" :
-         nLs + nSs < 100 ? "too few resolved pairs" :
-         na(lift) or na(lMdl) ? "-" :
-         math.abs(lift) < lMdl ? "UNDERPOWERED - cannot resolve this" :
-         math.abs(lift) < 6.4 ? "resolvable, but under the 6.4pp noise floor" :
-         lift > 0 ? "EDGE SURVIVES THE MIRROR" : "negative once trend is removed",
-         kSt < 2 or nLs + nSs < 100 or na(lift) or na(lMdl) or
-         math.abs(lift) < lMdl or math.abs(lift) < 6.4 ? C_WN : lift > 0 ? C_UP : C_DN)
+         not both ? "needs both directions" :
+         thin ? "too few resolved trades" :
+         na(dfEdge) ? "-" :
+         weak ? "UNDERPOWERED - cannot resolve this" :
+         under ? "resolvable, but under the 6.4pp noise floor" :
+         dfEdge > 0 ? "EDGE SURVIVES THE TREND" : "negative once trend is removed",
+         not both or thin or weak or under ? C_WN : dfEdge > 0 ? C_UP : C_DN)
+
     f_pair2(13, "Open now  (live R)",
          str.tostring(sigOpen) + (na(openR) ? "" : "   " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"),
          na(openR) ? C_NE : (openR > 0 ? C_UP : C_DN))
