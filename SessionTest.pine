@@ -1,0 +1,319 @@
+//@version=6
+// ============================================================================
+// SESSION TEST  v1.0
+// ----------------------------------------------------------------------------
+// THE ONE THING FIVE HYPOTHESES ALL IGNORED: THE CLOCK.
+//
+// Auction Cipher, the Trap Engine, the Positioning Engine, the magnet test and
+// the regime test all derive a view from price and volume structure. Every one
+// of them is blind to the time of day. A setup at 03:00 in the Asian lull and
+// one at the New York open were counted as the same event.
+//
+// That is a different CATEGORY of claim, not another structural read, and it
+// matters for three reasons:
+//
+//   1. Intraday seasonality is a DOCUMENTED market regularity. It is one of
+//      the few effects that survives publication, because it comes from when
+//      participants are awake and when instruments settle rather than from a
+//      pattern anyone can arbitrage away by spotting it.
+//
+//   2. The drift confound that wrecked the magnet test handles itself here.
+//      Hours are compared against the pooled hour baseline, so whatever the
+//      sample's trend was, it is inside both sides of the comparison.
+//
+//   3. A clock result COMPOSES. If some hours are systematically different,
+//      that is a filter that can be applied to anything else later, rather
+//      than another standalone rule competing with the others.
+//
+// AND ONE CLAIM SITTING UNMEASURED IN YOUR OWN CODE.
+//
+// Auction Cipher computes `IB ext` and prints it on the dashboard. It has done
+// so all along and nobody has ever checked whether it means anything. Auction
+// theory says extending beyond the initial balance signals a trend day - that
+// the auction has found one-timeframe direction and will keep going. That is
+// a falsifiable claim about the rest of the session and this file tests it.
+//
+// HOW BOTH ARE RESOLVED: THE SAME SYMMETRIC RACE.
+//
+// From a start price, does +k ATR arrive before -k ATR? Equal distance both
+// ways, so the arithmetic null is 50% and no stop, target, cost or R-multiple
+// assumption enters the measurement. Ties inside one bar are discarded rather
+// than guessed, and nothing is judged on a race's starting bar, whose high and
+// low predate the close that registered it.
+//
+// This machinery is carried over unchanged from the regime test, where it
+// worked correctly. What is new is only what triggers a race.
+//
+// WHAT WOULD COUNT.
+//
+// VOL is expected to vary by block. That is not a finding, it is a sanity
+// check that the clock and the timezone are wired up correctly - if the
+// volatility profile is flat, something is broken and nothing else on the
+// panel should be believed.
+//
+// EDGE is the finding. An hour block whose up-rate departs from the pooled
+// baseline by more than a few points, consistently across instruments, is
+// directional seasonality. For the IB rows, a positive edge means extension
+// continued - the claim auction theory actually makes.
+//
+// HONEST PRIOR, STATED BEFORE THE RUN: the volatility profile will almost
+// certainly show structure, and that structure is real but not directly
+// tradeable on a CFD account. Directional seasonality at this scale is much
+// less likely and is the more competed effect. The IB claim is the one I would
+// put weight on, because it is a specific mechanism and genuinely untested.
+// ============================================================================
+indicator("Session Test", shorttitle="SESSION", overlay=true,
+     max_boxes_count=50, max_lines_count=100, max_labels_count=100, max_bars_back=500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_S = "1 - SESSION"
+string tzIn  = input.string("UTC", "Timezone", options=["UTC", "America/New_York", "Europe/London", "Asia/Tokyo"], group=G_S,
+     tooltip="UTC by default so gold, silver and crypto are directly comparable. Switch to an exchange timezone only when studying one instrument's own session.")
+int   ibMin  = input.int(60, "Initial Balance (minutes)", minval=15, maxval=480, step=15, group=G_S,
+     tooltip="Classic IB is the first 60 minutes of a regular session - about a sixth of it. A 24-hour crypto day is four times longer, so 60 minutes is a twenty-fourth and price extends past it almost every day, which makes the test meaningless. Use 240 on 24-hour instruments to keep it the same SIXTH.\\n\\nThe panel prints the extension rate. If it is above about 90% the IB is too short for this instrument and the rows below mean nothing.")
+
+string G_R = "2 - THE RACE"
+float raceK    = input.float(1.0, "Race Distance (ATR)", minval=0.2, maxval=5.0, step=0.1, group=G_R,
+     tooltip="Equal distance up and down is what makes the null exactly 50% and keeps every stop, target and cost assumption out of the measurement.")
+int   raceBars = input.int(100, "Race Horizon (bars)", minval=10, maxval=500, group=G_R,
+     tooltip="Races unresolved after this many bars are recorded as unresolved and excluded, rather than assigned to whichever side was closer.")
+
+string G_D = "3 - DISPLAY"
+bool showIB  = input.bool(true, "Draw Initial Balance", group=G_D)
+bool showTbl = input.bool(true, "Results Table", group=G_D)
+
+// ============================================================================
+// 2. PRIMITIVES
+// ----------------------------------------------------------------------------
+// Top level, every bar, unconditional. Pine's ta.* functions carry rolling
+// state and silently return stale values when reached through an `and` or a
+// ternary - a bug that has already cost this project a whole round.
+// ============================================================================
+bool  barClosed = barstate.isconfirmed
+float atr       = ta.atr(14)
+int   chartSec  = timeframe.in_seconds(timeframe.period)
+
+int   hr     = hour(time, tzIn)
+int   blk    = hr / 3                       // eight three-hour blocks
+bool  newDay = ta.change(time("D")) != 0
+bool  newBlk = ta.change(blk) != 0
+
+// ============================================================================
+// 3. INITIAL BALANCE
+// ============================================================================
+var float ibH   = na
+var float ibL   = na
+var int   ibBar = 0
+var bool  ibOn  = true
+var bool  brkUp = false
+var bool  brkDn = false
+
+int ibBars = math.max(1, int(ibMin * 60 / math.max(chartSec, 1)))
+
+if barClosed
+    if newDay
+        ibH   := high
+        ibL   := low
+        ibBar := 1
+        ibOn  := true
+        brkUp := false
+        brkDn := false
+    else if ibOn
+        ibH := math.max(ibH, high)
+        ibL := math.min(ibL, low)
+        ibBar += 1
+        if ibBar >= ibBars
+            ibOn := false
+
+// ============================================================================
+// 4. RACES
+// ----------------------------------------------------------------------------
+// bucket 0-7   the three-hour block the race started in
+// bucket 8     first close ABOVE the initial balance high, once per session
+// bucket 9     first close BELOW the initial balance low, once per session
+//
+// Block races are started one per block per session rather than one per bar,
+// which keeps overlap - and therefore correlation between outcomes - far lower
+// than a race on every bar would.
+// ============================================================================
+var array<float> rUp = array.new<float>()
+var array<float> rDn = array.new<float>()
+var array<int>   rBr = array.new<int>()
+var array<int>   rBk = array.new<int>()
+
+int NB = 10
+var array<float> cN   = array.new<float>(NB, 0.0)
+var array<float> cUp  = array.new<float>(NB, 0.0)
+var array<float> cVol = array.new<float>(NB, 0.0)
+var array<float> cVn  = array.new<float>(NB, 0.0)
+var array<float> misc = array.new<float>(4, 0.0)   // 0 sessions  1 ext up  2 ext dn  3 unresolved
+
+f_start(int bucket) =>
+    bool ok = false
+    if not na(atr) and atr > 0
+        rUp.push(close + raceK * atr)
+        rDn.push(close - raceK * atr)
+        rBr.push(bar_index)
+        rBk.push(bucket)
+        ok := true
+    ok
+
+// volatility profile - a sanity check on the clock, not a finding
+if barClosed and not na(atr) and atr > 0
+    cVol.set(blk, cVol.get(blk) + (high - low) / atr)
+    cVn.set(blk, cVn.get(blk) + 1)
+
+if barClosed and newDay
+    misc.set(0, misc.get(0) + 1)
+
+if barClosed and newBlk
+    f_start(blk)
+
+if barClosed and not ibOn and not na(ibH)
+    if not brkUp and close > ibH
+        brkUp := true
+        misc.set(1, misc.get(1) + 1)
+        f_start(8)
+    if not brkDn and close < ibL
+        brkDn := true
+        misc.set(2, misc.get(2) + 1)
+        f_start(9)
+
+f_race() =>
+    if rUp.size() > 0
+        for i = rUp.size() - 1 to 0
+            int age = bar_index - rBr.get(i)
+            int b   = rBk.get(i)
+            int won = 0
+            // Nothing is judged on the starting bar: it was registered at that
+            // bar's close, but its high and low were made before that close
+            // existed.
+            if age >= 1
+                bool up = high >= rUp.get(i)
+                bool dn = low  <= rDn.get(i)
+                // Both levels inside one bar is genuinely ambiguous, so it is
+                // discarded. Guessing would quietly favour whichever side the
+                // test hopes for.
+                won := up and dn ? 0 : up ? 1 : dn ? -1 : 0
+            if won != 0
+                cN.set(b, cN.get(b) + 1)
+                if won == 1
+                    cUp.set(b, cUp.get(b) + 1)
+                rUp.remove(i)
+                rDn.remove(i)
+                rBr.remove(i)
+                rBk.remove(i)
+            else if age >= raceBars
+                misc.set(3, misc.get(3) + 1)
+                rUp.remove(i)
+                rDn.remove(i)
+                rBr.remove(i)
+                rBk.remove(i)
+    rUp.size()
+
+if barClosed
+    f_race()
+
+var line ibHL = na
+var line ibLL = na
+if showIB and barstate.islast and not na(ibH)
+    line.delete(ibHL)
+    line.delete(ibLL)
+    ibHL := line.new(bar_index - ibBars, ibH, bar_index + 5, ibH, color=color.new(#787b86, 30))
+    ibLL := line.new(bar_index - ibBars, ibL, bar_index + 5, ibL, color=color.new(#787b86, 30))
+
+// ============================================================================
+// 5. RESULTS
+// ----------------------------------------------------------------------------
+// BASE is every block race pooled - the drift this sample actually had. EDGE
+// is each row against it, so a trending sample cannot make a block look
+// directional when it is only riding the trend. That was the magnet test's
+// confound and it is designed out here rather than discovered afterwards.
+// ============================================================================
+var table t = table.new(position.bottom_left, 5, 15, bgcolor=color.new(#131722, 10),
+     border_color=color.new(#000000, 55), border_width=1)
+
+f_cell(int c, int r, string v, color col, bool hdr) =>
+    table.cell(t, c, r, v, text_color=col, text_size=size.tiny,
+         text_halign=c == 0 ? text.align_left : text.align_right,
+         bgcolor=hdr ? color.new(#2a2e39, 20) : color(na))
+
+f_results() =>
+    float bn = 0.0
+    float bu = 0.0
+    for b = 0 to 7
+        bn += cN.get(b)
+        bu += cUp.get(b)
+    float base = bn > 0 ? bu / bn : na
+
+    f_cell(0, 0, "BLOCK (" + tzIn + ")", #d1d4dc, true)
+    f_cell(1, 0, "N", #d1d4dc, true)
+    f_cell(2, 0, "UP%", #d1d4dc, true)
+    f_cell(3, 0, "EDGE", #d1d4dc, true)
+    f_cell(4, 0, "VOL", #d1d4dc, true)
+    for b = 0 to 7
+        float n = cN.get(b)
+        float u = n > 0 ? cUp.get(b) / n : na
+        float e = na(u) or na(base) ? na : (u - base) * 100
+        color ec = n < 30 ? #b2b5be : na(e) ? #b2b5be : e > 5 ? #26a69a : e < -5 ? #ef5350 : #b2b5be
+        f_cell(0, b + 1, str.tostring(b * 3, "00") + "-" + str.tostring(b * 3 + 3, "00"), #b2b5be, false)
+        f_cell(1, b + 1, str.tostring(int(n)), n < 30 ? #ff9800 : #b2b5be, false)
+        f_cell(2, b + 1, na(u) ? "-" : str.tostring(u * 100, "#.#") + "%", #b2b5be, false)
+        f_cell(3, b + 1, na(e) ? "-" : str.tostring(e, "+#.#"), ec, false)
+        f_cell(4, b + 1, cVn.get(b) > 0 ? str.tostring(cVol.get(b) / cVn.get(b), "#.##") : "-", #6c7080, false)
+
+    f_cell(0, 9, "BASE  all blocks", #d1d4dc, true)
+    f_cell(1, 9, str.tostring(int(bn)), #d1d4dc, true)
+    f_cell(2, 9, na(base) ? "-" : str.tostring(base * 100, "#.#") + "%", #d1d4dc, true)
+    f_cell(3, 9, "drift", #6c7080, true)
+    f_cell(4, 9, "", #d1d4dc, true)
+
+    // IB extension. For the DOWN row the call is that price keeps falling, so
+    // its edge is measured against the down side of the baseline.
+    float nu = cN.get(8)
+    float uu = nu > 0 ? cUp.get(8) / nu : na
+    float eu = na(uu) or na(base) ? na : (uu - base) * 100
+    float nd = cN.get(9)
+    float ud = nd > 0 ? cUp.get(9) / nd : na
+    float ed = na(ud) or na(base) ? na : ((1 - ud) - (1 - base)) * 100
+    f_cell(0, 10, "IB break UP -> continues", #b2b5be, false)
+    f_cell(1, 10, str.tostring(int(nu)), nu < 30 ? #ff9800 : #b2b5be, false)
+    f_cell(2, 10, na(uu) ? "-" : str.tostring(uu * 100, "#.#") + "%", #b2b5be, false)
+    f_cell(3, 10, na(eu) ? "-" : str.tostring(eu, "+#.#"),
+         nu < 30 ? #b2b5be : na(eu) ? #b2b5be : eu > 5 ? #26a69a : eu < -5 ? #ef5350 : #b2b5be, false)
+    f_cell(4, 10, "", #6c7080, false)
+    f_cell(0, 11, "IB break DOWN -> continues", #b2b5be, false)
+    f_cell(1, 11, str.tostring(int(nd)), nd < 30 ? #ff9800 : #b2b5be, false)
+    f_cell(2, 11, na(ud) ? "-" : str.tostring((1 - ud) * 100, "#.#") + "%", #b2b5be, false)
+    f_cell(3, 11, na(ed) ? "-" : str.tostring(ed, "+#.#"),
+         nd < 30 ? #b2b5be : na(ed) ? #b2b5be : ed > 5 ? #26a69a : ed < -5 ? #ef5350 : #b2b5be, false)
+    f_cell(4, 11, "", #6c7080, false)
+
+    // CALIBRATION. An IB that price leaves on almost every session is not a
+    // balance, it is a formality, and the two rows above would be measuring
+    // nothing. Same failure mode as the magnet test's classifier, labelled.
+    float sess = misc.get(0)
+    float extR = sess > 0 ? (misc.get(1) + misc.get(2)) / (sess * 2) * 100 : na
+    f_cell(0, 12, "IB extension rate " + (na(extR) ? "-" : str.tostring(extR, "#.#") + "%") +
+         (not na(extR) and extR > 90 ? "  IB TOO SHORT" : ""),
+         na(extR) ? #6c7080 : extR > 90 ? #ef5350 : #6c7080, false)
+    f_cell(1, 12, str.tostring(int(sess)) + " sess", #6c7080, false)
+    f_cell(2, 12, "", #6c7080, false)
+    f_cell(3, 12, "", #6c7080, false)
+    f_cell(4, 12, "", #6c7080, false)
+    f_cell(0, 13, "VOL is a sanity check, not a finding", #6c7080, false)
+    f_cell(1, 13, "unres " + str.tostring(int(misc.get(3))), #6c7080, false)
+    f_cell(2, 13, "open " + str.tostring(rUp.size()), #6c7080, false)
+    f_cell(3, 13, str.tostring(raceK, "#.#") + " ATR", #6c7080, false)
+    f_cell(4, 13, "", #6c7080, false)
+    f_cell(0, 14, "flat VOL profile = clock is broken", #6c7080, false)
+    f_cell(1, 14, "", #6c7080, false)
+    f_cell(2, 14, "", #6c7080, false)
+    f_cell(3, 14, "", #6c7080, false)
+    f_cell(4, 14, "", #6c7080, false)
+    bn
+
+if showTbl and barstate.islast
+    f_results()
