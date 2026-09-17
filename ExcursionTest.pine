@@ -1,0 +1,258 @@
+//@version=6
+// ============================================================================
+// EXCURSION TEST  v1.0
+// ----------------------------------------------------------------------------
+// THE QUESTION UNDERNEATH ALL SIX NULLS.
+//
+// Six hypotheses have been measured on this repo and every one asked the same
+// kind of question: is THIS entry a good entry. All six read zero. That result
+// is consistent with two very different worlds, and nothing built here can
+// tell them apart:
+//
+//   WORLD A  There is no money in this market at this timescale.
+//
+//   WORLD B  There is money, but not in the entry. Entries are worthless and
+//            the edge lives in the EXIT - specifically in the shape of the
+//            return distribution. If losses can be cut at a fixed size while
+//            winners occasionally run very far, expectancy is positive no
+//            matter how you got in.
+//
+// World B is the oldest claim in trading: cut losses, let winners run. It has
+// never been tested here, and if it is true it explains all six nulls at once
+// rather than adding a seventh.
+//
+// THE NULL IS EXACT, WHICH MAKES THIS THE CLEANEST TEST ON THE REPO.
+//
+// For a driftless random walk with a stop at -1R, the probability of touching
+// +nR before the stop is exactly 1/(1+n). Gambler's ruin, no estimation. So:
+//
+//   reach  1R  ->  50.0%      reach  5R  ->  16.7%
+//   reach  2R  ->  33.3%      reach  8R  ->  11.1%
+//   reach  3R  ->  25.0%      reach 12R  ->   7.7%
+//
+// and expectancy at every target is exactly zero, which is why break-even at
+// a 2R target is 33.3% and has been all along.
+//
+// Every other test on this repo needed a measured baseline, and two of them
+// were wrecked by getting it wrong - the magnet test by trend, the session
+// test by per-asset noise. This one needs no baseline at all. The null is
+// arithmetic.
+//
+// DRIFT IS CONTROLLED BY CONSTRUCTION, NOT BY A CORRECTION.
+//
+// Every entry is taken BOTH WAYS. A long and a short from the same bar at the
+// same distance. Whatever drift the sample had helps one side exactly as much
+// as it hurts the other, so the pooled figure is drift-free without any
+// adjustment, and the long and short columns are printed separately so you can
+// see the drift rather than trust that it was removed.
+//
+// ENTRIES ARE DELIBERATELY STUPID.
+//
+// One every N bars, on a timer, with no view whatsoever. That is the point. If
+// a mechanical entry with a fixed stop shows fat right tails, the tails are a
+// property of the MARKET and not of anyone's signal - which would mean six
+// files of entry logic were solving the wrong problem.
+//
+// WHAT WOULD COUNT.
+//
+// EDGE is the observed reach-rate minus 1/(1+n). Positive at the far targets
+// means the right tail is fatter than chance - real money, available to anyone
+// with the patience to hold. EXPECT is that translated into R per trade, which
+// is the number that decides it.
+//
+// HONEST PRIOR: equities and crypto are widely reported to have fat tails in
+// RETURNS, but that is not the same claim as fat tails in stop-anchored
+// excursions, where the stop truncates every path early. I genuinely do not
+// know which way this comes out, which is the first time I have been able to
+// say that in this session.
+// ============================================================================
+indicator("Excursion Test", shorttitle="EXCURSION", overlay=false,
+     max_boxes_count=50, max_lines_count=50, max_labels_count=50, max_bars_back=500)
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_T = "1 - THE TEST"
+float stopK   = input.float(1.0, "Stop Distance (ATR) = 1R", minval=0.2, maxval=5.0, step=0.1, group=G_T,
+     tooltip="The stop defines R. Everything else on the panel is measured in multiples of this distance, so its absolute size does not matter - only that it is fixed.")
+int   spacing = input.int(10, "Entry Every N Bars", minval=1, maxval=100, group=G_T,
+     tooltip="Entries are on a timer with no view at all. That is deliberate: if fat tails show up on stupid entries they belong to the market rather than to a signal.\\n\\nWider spacing means fewer, less overlapping trades. Tighter means more samples but outcomes that share more of the same price path, so the effective sample is smaller than N suggests.")
+int   horizon = input.int(500, "Give Up After (bars)", minval=50, maxval=2000, group=G_T,
+     tooltip="A trade that has neither stopped out nor been abandoned is CENSORED - it might still have run further, so its excursion is a lower bound. The censoring rate is printed; if it is high the far targets are understated.")
+
+string G_D = "2 - DISPLAY"
+bool showTbl = input.bool(true, "Results Table", group=G_D)
+
+// ============================================================================
+// 2. PRIMITIVES
+// ----------------------------------------------------------------------------
+// Top level, every bar, unconditional. Pine's ta.* functions carry rolling
+// state and silently return stale values behind an `and` or a ternary.
+// ============================================================================
+bool  barClosed = barstate.isconfirmed
+float atr       = ta.atr(14)
+
+// ============================================================================
+// 3. OPEN TRADES
+// ----------------------------------------------------------------------------
+// dir +1 long, -1 short. Both are opened from the same bar at the same
+// distance, which is what makes the pooled result drift-free by construction.
+// ============================================================================
+var array<float> tEntry = array.new<float>()
+var array<float> tRisk  = array.new<float>()
+var array<int>   tDir   = array.new<int>()
+var array<int>   tBar   = array.new<int>()
+var array<float> tMax   = array.new<float>()
+
+// Six target levels. Buckets are [dir][level]: longs 0-5, shorts 6-11.
+var array<float> hit  = array.new<float>(12, 0.0)
+var array<float> tot  = array.new<float>(2, 0.0)
+var array<float> misc = array.new<float>(3, 0.0)   // 0 censored  1 sumMaxL  2 sumMaxS
+
+f_tgt(int i) =>
+    i == 0 ? 1.0 : i == 1 ? 2.0 : i == 2 ? 3.0 : i == 3 ? 5.0 : i == 4 ? 8.0 : 12.0
+
+if barClosed and not na(atr) and atr > 0 and bar_index % spacing == 0
+    float rk = stopK * atr
+    tEntry.push(close)
+    tRisk.push(rk)
+    tDir.push(1)
+    tBar.push(bar_index)
+    tMax.push(0.0)
+    tEntry.push(close)
+    tRisk.push(rk)
+    tDir.push(-1)
+    tBar.push(bar_index)
+    tMax.push(0.0)
+
+f_track() =>
+    if tEntry.size() > 0
+        for i = tEntry.size() - 1 to 0
+            float en = tEntry.get(i)
+            float rk = tRisk.get(i)
+            int   d  = tDir.get(i)
+            int   age = bar_index - tBar.get(i)
+            bool  done = false
+            bool  cens = false
+            // NOTHING IS JUDGED ON THE ENTRY BAR. The trade is registered at
+            // that bar's close, but its high and low were made before the close
+            // existed - counting them would credit excursions that happened
+            // before the entry price was available.
+            if age >= 1
+                float fav = d == 1 ? (high - en) / rk : (en - low) / rk
+                if fav > tMax.get(i)
+                    tMax.set(i, fav)
+                // The stop is checked AFTER the favourable excursion is
+                // recorded, because within a single bar there is no way to know
+                // which came first and crediting the excursion is the reading
+                // that keeps this test honest about what was REACHABLE.
+                if d == 1 ? low <= en - rk : high >= en + rk
+                    done := true
+                else if age >= horizon
+                    done := true
+                    cens := true
+            if done
+                float mx = tMax.get(i)
+                int base = d == 1 ? 0 : 6
+                for L = 0 to 5
+                    if mx >= f_tgt(L)
+                        hit.set(base + L, hit.get(base + L) + 1)
+                tot.set(d == 1 ? 0 : 1, tot.get(d == 1 ? 0 : 1) + 1)
+                misc.set(d == 1 ? 1 : 2, misc.get(d == 1 ? 1 : 2) + mx)
+                if cens
+                    misc.set(0, misc.get(0) + 1)
+                tEntry.remove(i)
+                tRisk.remove(i)
+                tDir.remove(i)
+                tBar.remove(i)
+                tMax.remove(i)
+    tEntry.size()
+
+if barClosed
+    f_track()
+
+// ============================================================================
+// 4. RESULTS
+// ----------------------------------------------------------------------------
+// RW is the exact random-walk probability, 1/(1+n). EDGE is observed minus RW.
+// EXPECT is the R per trade a fixed target at that level would have produced:
+//   p * n - (1 - p) * 1
+// which is zero everywhere under the random walk, by construction.
+// ============================================================================
+var table t = table.new(position.bottom_left, 7, 11, bgcolor=color.new(#131722, 10),
+     border_color=color.new(#000000, 55), border_width=1)
+
+f_cell(int c, int r, string v, color col, bool hdr) =>
+    table.cell(t, c, r, v, text_color=col, text_size=size.tiny,
+         text_halign=c == 0 ? text.align_left : text.align_right,
+         bgcolor=hdr ? color.new(#2a2e39, 20) : color(na))
+
+f_results() =>
+    float nL = tot.get(0)
+    float nS = tot.get(1)
+    float nA = nL + nS
+    f_cell(0, 0, "REACH", #d1d4dc, true)
+    f_cell(1, 0, "LONG", #d1d4dc, true)
+    f_cell(2, 0, "SHORT", #d1d4dc, true)
+    f_cell(3, 0, "BOTH", #d1d4dc, true)
+    f_cell(4, 0, "RW", #d1d4dc, true)
+    f_cell(5, 0, "EDGE", #d1d4dc, true)
+    f_cell(6, 0, "EXPECT", #d1d4dc, true)
+    for L = 0 to 5
+        float n = f_tgt(L)
+        float pL = nL > 0 ? hit.get(L) / nL : na
+        float pS = nS > 0 ? hit.get(6 + L) / nS : na
+        float pA = nA > 0 ? (hit.get(L) + hit.get(6 + L)) / nA : na
+        float rw = 1.0 / (1.0 + n)
+        float ed = na(pA) ? na : (pA - rw) * 100
+        float ex = na(pA) ? na : pA * n - (1 - pA)
+        color ec = nA < 60 ? #b2b5be : na(ed) ? #b2b5be : ed > 2 ? #26a69a : ed < -2 ? #ef5350 : #b2b5be
+        f_cell(0, L + 1, str.tostring(n, "#") + "R", #b2b5be, false)
+        f_cell(1, L + 1, na(pL) ? "-" : str.tostring(pL * 100, "#.#") + "%", #6c7080, false)
+        f_cell(2, L + 1, na(pS) ? "-" : str.tostring(pS * 100, "#.#") + "%", #6c7080, false)
+        f_cell(3, L + 1, na(pA) ? "-" : str.tostring(pA * 100, "#.#") + "%", #b2b5be, false)
+        f_cell(4, L + 1, str.tostring(rw * 100, "#.#") + "%", #6c7080, false)
+        f_cell(5, L + 1, na(ed) ? "-" : str.tostring(ed, "+#.#"), ec, false)
+        f_cell(6, L + 1, na(ex) ? "-" : str.tostring(ex, "+#.##") + "R", ec, false)
+
+    float avgL = nL > 0 ? misc.get(1) / nL : na
+    float avgS = nS > 0 ? misc.get(2) / nS : na
+    f_cell(0, 7, "Avg max excursion", #d1d4dc, true)
+    f_cell(1, 7, na(avgL) ? "-" : str.tostring(avgL, "#.##") + "R", #d1d4dc, true)
+    f_cell(2, 7, na(avgS) ? "-" : str.tostring(avgS, "#.##") + "R", #d1d4dc, true)
+    f_cell(3, 7, nA > 0 ? str.tostring((misc.get(1) + misc.get(2)) / nA, "#.##") + "R" : "-", #d1d4dc, true)
+    f_cell(4, 7, "", #d1d4dc, true)
+    f_cell(5, 7, "", #d1d4dc, true)
+    f_cell(6, 7, "", #d1d4dc, true)
+    f_cell(0, 8, "Trades  L / S", #6c7080, false)
+    f_cell(1, 8, str.tostring(int(nL)), nL < 60 ? #ff9800 : #6c7080, false)
+    f_cell(2, 8, str.tostring(int(nS)), nS < 60 ? #ff9800 : #6c7080, false)
+    f_cell(3, 8, str.tostring(int(nA)), #6c7080, false)
+    f_cell(4, 8, "open " + str.tostring(tEntry.size()), #6c7080, false)
+    f_cell(5, 8, "", #6c7080, false)
+    f_cell(6, 8, "", #6c7080, false)
+    // CENSORING. A trade abandoned at the horizon might have run further, so
+    // the far targets are a LOWER BOUND when this is high.
+    float cr = nA > 0 ? misc.get(0) / nA * 100 : na
+    f_cell(0, 9, "Censored " + (na(cr) ? "-" : str.tostring(cr, "#.#") + "%") +
+         (not na(cr) and cr > 10 ? "   FAR TARGETS UNDERSTATED" : ""),
+         na(cr) ? #6c7080 : cr > 10 ? #ff9800 : #6c7080, false)
+    f_cell(1, 9, "", #6c7080, false)
+    f_cell(2, 9, "", #6c7080, false)
+    f_cell(3, 9, "", #6c7080, false)
+    f_cell(4, 9, "", #6c7080, false)
+    f_cell(5, 9, "", #6c7080, false)
+    f_cell(6, 9, "", #6c7080, false)
+    f_cell(0, 10, "RW null is exact, not estimated: 1/(1+n)", #6c7080, false)
+    f_cell(1, 10, "", #6c7080, false)
+    f_cell(2, 10, "", #6c7080, false)
+    f_cell(3, 10, "", #6c7080, false)
+    f_cell(4, 10, "", #6c7080, false)
+    f_cell(5, 10, "", #6c7080, false)
+    f_cell(6, 10, "", #6c7080, false)
+    nA
+
+if showTbl and barstate.islast
+    f_results()
+
+plot(na, "")
