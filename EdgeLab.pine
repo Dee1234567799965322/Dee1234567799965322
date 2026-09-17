@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.2
+// EDGE LAB  v1.3
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -557,7 +557,7 @@ f_exp(float p, float tg) =>
 // ============================================================================
 // 9. PANEL
 // ============================================================================
-var table pnl = table.new(position.bottom_left, 11, 20, bgcolor=color.new(#131722, 8),
+var table pnl = table.new(position.bottom_left, 11, 22, bgcolor=color.new(#131722, 8),
      border_color=color.new(#000000, 55), border_width=1)
 
 f_cell(int c, int r, string v, color col, bool hdr) =>
@@ -704,32 +704,47 @@ f_panel() =>
     float cr  = nL > 0 ? (cns.get(lS * 2) + cns.get(lS * 2 + 1)) / nL * 100 : na
     float crM = nR > 0 ? (cns.get(lM * 2) + cns.get(lM * 2 + 1)) / nR * 100 : na
 
-    f_strat(selBk, bestL >= 0 ? bestL : 0)
-    float bLf = bestL >= 0 ? oSt.get(0) : na
-    float bZ  = bestL >= 0 ? oSt.get(1) : na
-    float bSe = bestL >= 0 ? oSt.get(3) : na
+    // CORRECTION 8 - THE VERDICT USED TO PICK ITS OWN RUNG, AND THAT WAS A LOOK.
+    //
+    // v1.2 judged whichever rung had the best net R. On gold that was 8R, where
+    // the effect is nearly gone, so the panel reported the power of 8R while the
+    // interesting number sat at 2R - it announced a 9.8pp resolution limit for a
+    // bucket whose actual test needed 14.5pp. Two separate faults from one line:
+    // a rung chosen by peeking at the outcome, and a power figure describing a
+    // different cell than the one being judged.
+    //
+    // The verdict now reads the rung in the settings and nothing else. Choosing
+    // the target before seeing the result is the whole discipline; best-by-net-R
+    // survives only as a footnote, clearly labelled as the snoop it is.
+    float bTg = f_tgt(selT)
+    float pSel  = nL > 0 ? f_hT(lS, selT) / nL : na
+    float pSelM = nR > 0 ? f_hT(lM, selT) / nR : na
+    float eSel  = f_exp(pSel,  bTg)
+    float eSelM = f_exp(pSelM, bTg)
+    f_strat(selBk, selT)
+    float bLf = oSt.get(0)
+    float bZ  = oSt.get(1)
+    float bSe = oSt.get(3)
     float bMd = f_mdl(bSe)
     float bNn = f_needN(nL, bSe)
-    float bTg = bestL >= 0 ? f_tgt(bestL) : na
-
-    f_strat(selBk, bestM >= 0 ? bestM : 0)
-    // The mirror's lift is the signal's with the sign flipped, by construction.
-    float mLf = bestM >= 0 ? -oSt.get(0) : na
-    float mZ  = bestM >= 0 ? -oSt.get(1) : na
-    float mTg = bestM >= 0 ? f_tgt(bestM) : na
+    // The mirror's lift is the signal's with the sign flipped, by construction,
+    // and it is judged at the same rung so the two verdicts are comparable.
+    float mLf = na(bLf) ? na : -bLf
+    float mZ  = na(bZ)  ? na : -bZ
+    float mTg = bTg
 
     bool g1 = nL >= N_MIN
     bool g2 = not na(cr) and cr <= 20.0
     bool g3 = not na(bLf) and bLf >= NOISE_PP
     bool g4 = not na(bZ) and bZ >= Z_BAR
-    bool g5 = bestL >= 0 and bestE > 0
+    bool g5 = not na(eSel) and eSel > 0
     bool fwd = g1 and g2 and g3 and g4 and g5 and pOk
 
     bool m1 = nR >= N_MIN
     bool m2 = not na(crM) and crM <= 20.0
     bool m3 = not na(mLf) and mLf >= NOISE_PP
     bool m4 = not na(mZ) and mZ >= Z_BAR
-    bool m5 = bestM >= 0 and bestEM > 0
+    bool m5 = not na(eSelM) and eSelM > 0
     bool inv = m1 and m2 and m3 and m4 and m5 and pOk
 
     string fails = ""
@@ -780,19 +795,31 @@ f_panel() =>
     f_cell(0, 16, "Censored " + (na(cr) ? "-" : str.tostring(cr, "#.#") + "%") +
          (not na(cr) and cr > 10 ? "  FAR RUNGS UNDERSTATED" : "") +
          "    open " + str.tostring(tEn.size()) +
-         "    best rung by net R: " + (bestL >= 0 ? str.tostring(f_tgt(bestL), "#") + "R" : "-"),
+         "    best-by-net-R (a snoop, not the verdict): " +
+         (bestL >= 0 ? str.tostring(f_tgt(bestL), "#") + "R" : "-"),
          not na(cr) and cr > 20 ? #ef5350 : not na(cr) and cr > 10 ? #ff9800 : #6c7080, false)
+    // A single line carrying the raw numbers a meta-analysis needs. Reading
+    // LIFT* off four panels and recovering the standard errors from the printed
+    // z costs precision to rounding; these are the counts themselves, so several
+    // instruments can be pooled exactly instead of approximately. Pooling is the
+    // only route to N that does not involve loosening a definition.
+    f_cell(0, 19, "POOL @" + str.tostring(bTg, "#") + "R   n L/S " +
+         str.tostring(int(f_n(lS, 0))) + "/" + str.tostring(int(f_n(lS, 1))) +
+         "   sigHit " + str.tostring(int(f_h(lS, 0, selT))) + "/" + str.tostring(int(f_h(lS, 1, selT))) +
+         "   mirHit " + str.tostring(int(f_h(lM, 0, selT))) + "/" + str.tostring(int(f_h(lM, 1, selT))) +
+         "   |  " + syminfo.ticker + " " + timeframe.period, #8aa4c8, false)
     f_cell(0, 17, "Bars " + str.tostring(bar_index + 1) +
          "    MDL " + (na(bMd) ? "-" : str.tostring(bMd, "#.#") + "pp") +
          " = smallest lift resolvable here at 80% power. Orange means the bucket cannot answer the question, whatever it prints.", #6c7080, false)
     f_cell(0, 18, "LIFT is raw and still carries  skew x drift.  LIFT* is computed inside each direction and is drift-free whatever the L/S mix. Read LIFT*.", #6c7080, false)
-    f_cell(0, 19, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
+    f_cell(0, 20, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
     for c = 1 to 10
         f_cell(c, 15, "", #6c7080, false)
         f_cell(c, 16, "", #6c7080, false)
         f_cell(c, 17, "", #6c7080, false)
         f_cell(c, 18, "", #6c7080, false)
         f_cell(c, 19, "", #6c7080, false)
+        f_cell(c, 20, "", #6c7080, false)
     nL
 
 if showTbl and barstate.islast
