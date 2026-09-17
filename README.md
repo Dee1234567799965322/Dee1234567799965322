@@ -26,7 +26,7 @@ Read one column: **`LIFT*`**. Everything else on the panel exists to stop
 
 ---
 
-## The fourteen corrections
+## The fifteen corrections
 
 Each one killed a result that looked real. Four killed results that had already
 been written up.
@@ -47,8 +47,9 @@ been written up.
 | 12 | Test significance **before** sign, in the persistence verdict | A false `FLIPS` on gold 15m: +11.7 vs −1.7 at z 1.45 |
 | 13 | The same in the independence verdict, and require the full sample to have made a claim | A false `DISAGREES` on gold 5m: "the full-sample z was overlap" where that z was +0.84 |
 | 14 | The same again in the **colours** | 27 cells painted as findings across the whole project. **None cleared the gate printed two lines below them** |
+| 15 | The colour must apply the **sample** gates too, not just the z | The first green cell ever produced — one run after correction 14 shipped, and a false positive |
 
-Four of the fourteen are about the *denominator* — what a number is compared
+Four of the fifteen are about the *denominator* — what a number is compared
 against, and how many chances it had. Two are about what counts as one
 observation. One is about whether the thing being measured belongs to the market
 or to the chart. Three are the panel caught making the exact mistake it exists to prevent — in
