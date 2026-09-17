@@ -4953,7 +4953,14 @@ f_drawStats() =>
     float pHat = na(winRate) ? na : winRate / 100.0
     float mdlPP = na(pHat) or sigTot <= 0 ? na : 2.8 * math.sqrt(pHat * (1 - pHat) / sigTot) * 100
     bool  powOk = not na(mdlPP) and not na(wEdge) and math.abs(wEdge) >= mdlPP
-    color expCol = nClosed < 20 or na(expectR) ? C_NE :
+    // DENOMINATOR MISMATCH, caught on the audit pass. nClosed counts every
+    // close - wins, losses, expiries AND flats - while mdlPP is computed on
+    // sigTot, the RESOLVED trades only. On a typical gold chart that is 371
+    // against 232. Gating a colour on one sample while testing power on another
+    // is the same error this whole project has been cataloguing, committed in
+    // the fix for it. Both now read the resolved count, which is the sample the
+    // win-rate test actually describes.
+    color expCol = nClosed < 20 or sigTot < 20 or na(expectR) ? C_NE :
          not powOk ? C_WN : expectR > 0 ? C_UP : C_DN
     f_pair2(4, "Expectancy  R/trade", na(expectR) ? "-" : str.tostring(expectR, "#.##") + "R", expCol)
     f_pair2(5, "Total R", na(expectR) ? "-" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
@@ -5005,7 +5012,10 @@ f_drawStats() =>
     // WHAT THIS SAMPLE COULD HAVE SEEN. Printed whether or not anything was
     // found, because "no edge" and "could not have detected one" are different
     // statements and this panel used to make only the first.
-    f_pair2(15, "Smallest edge visible", na(mdlPP) ? "-" : str.tostring(mdlPP, "#.#") + "pp",
+    // Labelled with its sample, so it cannot be read as describing a different
+    // row's denominator.
+    f_pair2(15, "Win-edge visible (n=" + str.tostring(sigTot) + ")",
+         na(mdlPP) ? "-" : str.tostring(mdlPP, "#.#") + "pp",
          na(mdlPP) ? C_NE : mdlPP > 6.4 ? C_WN : C_UP)
     f_pair2(16, "Verdict", sigTot < 20 ? "too few trades" :
          na(mdlPP) or na(wEdge) ? "-" :
