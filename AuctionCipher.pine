@@ -140,10 +140,13 @@ bool  showLvn_in    = input.bool(true,  "Low Volume Nodes", group=G_AUC,
      tooltip="Thin shelves inside the profile. The rigorous version of an 'imbalance' or 'fair value gap' - derived from where trade did NOT happen.")
 float lvnThresh  = input.float(20.0, "LVN Threshold (% of POC)", minval=2.0, maxval=60.0, group=G_AUC)
 int   maxLvn     = input.int(6, "Max LVNs", minval=1, maxval=25, group=G_AUC)
-float excThresh  = input.float(15.0, "Excess Threshold (% of POC)", minval=2.0, maxval=50.0, group=G_AUC)
-float excBand    = input.float(5.0, "Extreme Band (% of range)", minval=1.0, maxval=25.0, group=G_AUC,
-     tooltip="How much of the range counts as 'the extreme'.\n\nThis previously tested ONE bin. At 24 rows that bin was 4% of the range; at the current default of 100 rows it is 1% - thin enough that it almost always looked empty, so nearly every high and low was reported as EXCESS. Measuring a fixed 5% band instead makes the reading independent of row count.")
-float poorMult   = input.float(2.5,  "Poor Multiplier", minval=1.2, maxval=6.0, group=G_AUC)
+int   excBars    = input.int(1, "Excess: at most N bars at the extreme", minval=1, maxval=5, group=G_AUC,
+     tooltip="ONE bar topping within a profile row of the period high is a spike that was rejected - a tail, a finished auction. EXCESS.\n\nThis replaced a threshold on volume in the extreme band as a percentage of the POC bin. In any distribution that band is thin by construction, so the old rule returned EXCESS about 99% of the time and POOR two to four times across hundreds of periods. It measured the shape of a distribution and called it the shape of an auction.")
+// excBand is gone with the volume classifier it served. It widened the band
+// the old rule measured, which treated the symptom - the band was thin at any
+// width, because distribution tails are thin. The bar count does not need it.
+int   poorBars   = input.int(3, "Poor: at least N bars at the extreme", minval=2, maxval=12, group=G_AUC,
+     tooltip="THREE or more bars all stalling within a profile row of the extreme means the auction stopped because the clock ran out rather than because it was rejected. POOR.\n\nSANITY CHECK before reading any poor-revisit number: the stats panel prints n beside each row. If it sits in single digits across a chart spanning hundreds of periods the classifier is mis-set, and the lift means nothing whatever it says.")
 
 string G_AC = "2b - AUCTION COLORS"
 color cHistTot   = input.color(color.new(#b2b5be, 62), "Total Volume", group=G_AC)
@@ -1091,19 +1094,35 @@ if isNewPeriod and aucOn and barClosed
         // classify the COMPLETED period's extremes here. Doing it from the
         // developing profile meant it only ever ran on the last bar, so the
         // statistics for poor highs and lows never accumulated at all.
-        float fMax = fBins.max()
-        if fMax > 0
-            // average the outer BAND, not one bin - see the Extreme Band tooltip
-            int fEdge = math.max(1, int(profRows * excBand / 100))
-            float fTopSum = 0.0
-            float fBotSum = 0.0
-            for e = 0 to fEdge - 1
-                fTopSum += fBins.get(profRows - 1 - e)
-                fBotSum += fBins.get(e)
-            float fTopPct = fTopSum / fEdge / fMax * 100
-            float fBotPct = fBotSum / fEdge / fMax * 100
-            priorHighQual := fTopPct < excThresh ? "EXCESS" : fTopPct > excThresh * poorMult ? "POOR" : "Flat"
-            priorLowQual  := fBotPct < excThresh ? "EXCESS" : fBotPct > excThresh * poorMult ? "POOR" : "Flat"
+        // THE BROKEN CLASSIFIER, FINALLY REPLACED HERE TOO.
+        // This compared volume in the extreme BAND against the POC bin. In any
+        // distribution the extreme band is thin by construction, so it was
+        // measuring the shape of a distribution and calling it the shape of an
+        // auction. A separate controlled test caught it: 98.9% of extremes came
+        // back EXCESS, 17 POOR in 1,520. That file was fixed months of work ago
+        // and this one never was, so every poor-revisit number this indicator
+        // has ever printed was selected by the broken rule.
+        //
+        // The tell was visible on the panel the whole time. On 30-minute charts
+        // the counters held n=1 to n=3; on 4-hour they jump to n=85 and n=122.
+        // A real structural property does not depend on how many bins the
+        // profile happens to have.
+        //
+        // Textbook definition instead, as a bar count: how many bars in the
+        // period topped within one profile row of the period high. ONE is a
+        // single spike that was rejected - a tail, EXCESS. THREE or more all
+        // stalling at the same price is an auction that ran out of clock - POOR.
+        if fHi > fLo and curH.size() > 0
+            float fStep = (fHi - fLo) / profRows
+            int fTopN = 0
+            int fBotN = 0
+            for i = 0 to curH.size() - 1
+                if curH.get(i) >= fHi - fStep
+                    fTopN += 1
+                if curL.get(i) <= fLo + fStep
+                    fBotN += 1
+            priorHighQual := fTopN <= excBars ? "EXCESS" : fTopN >= poorBars ? "POOR" : "Flat"
+            priorLowQual  := fBotN <= excBars ? "EXCESS" : fBotN >= poorBars ? "POOR" : "Flat"
             priorHiLvl := fHi
             priorLoLvl := fLo
         rangeHist.push(fHi - fLo)
@@ -1293,11 +1312,11 @@ string highQual = "n/a"
 string lowQual  = "n/a"
 // Hoisted so the dashboard can show the MEASURED value beside the verdict.
 // Without it the threshold is uncalibratable: POOR needs the outer band to hold
-// excThresh x poorMult = 37.5% of the POC bin, and in a bell-shaped profile
-// that band typically holds 5 to 20%. So EXCESS fires nearly always and POOR
-// nearly never - the live statistics show POOR occurring 2 and 4 times across
-// hundreds of periods. A verdict that lands on one side 99% of the time is not
-// classifying anything. Showing the number lets the threshold be set from the
+// the OLD rule needed the outer band to hold 37.5% of the POC bin, and in a
+// bell-shaped profile that band typically holds 5 to 20%. So EXCESS fired
+// nearly always and POOR nearly never - this file recorded POOR occurring 2 and
+// 4 times across hundreds of periods and responded by exposing the threshold so
+// it could be tuned. The threshold was never the problem. Showing the number
 // instrument's own distribution rather than guessed.
 // Moved into a function to keep the main body under Pine's size cap. Four
 // globals, so they come back as a tuple and are seeded from the values they
@@ -1307,20 +1326,25 @@ f_extremes() =>
     float oBot = na
     string oHi = highQual
     string oLo = lowQual
-    if devOk
-        float mxB = devBins.max()
-        if mxB > 0
-            int dEdge = math.max(1, int(profRows * excBand / 100))
-            float dTopSum = 0.0
-            float dBotSum = 0.0
-            for e = 0 to dEdge - 1
-                dTopSum += devBins.get(profRows - 1 - e)
-                dBotSum += devBins.get(e)
-            oTop := dTopSum / dEdge / mxB * 100
-            oBot := dBotSum / dEdge / mxB * 100
-            float poorCut = excThresh * poorMult
-            oHi := oTop < excThresh ? "EXCESS" : oTop > poorCut ? "POOR" : "Flat"
-            oLo := oBot < excThresh ? "EXCESS" : oBot > poorCut ? "POOR" : "Flat"
+    // Same replacement for the developing period the dashboard reads. oTop and
+    // oBot are now BAR COUNTS, not percentages - the display label changes with
+    // them, because a count rendered with a % sign is a different lie.
+    if devOk and curH.size() > 0
+        float dHi = curH.max()
+        float dLo = curL.min()
+        if dHi > dLo
+            float dStep = (dHi - dLo) / profRows
+            int dTopN = 0
+            int dBotN = 0
+            for i = 0 to curH.size() - 1
+                if curH.get(i) >= dHi - dStep
+                    dTopN += 1
+                if curL.get(i) <= dLo + dStep
+                    dBotN += 1
+            oTop := dTopN
+            oBot := dBotN
+            oHi := dTopN <= excBars ? "EXCESS" : dTopN >= poorBars ? "POOR" : "Flat"
+            oLo := dBotN <= excBars ? "EXCESS" : dBotN >= poorBars ? "POOR" : "Flat"
     [oTop, oBot, oHi, oLo]
 
 [topPct, botPct, highQual2, lowQual2] = f_extremes()
@@ -5465,8 +5489,8 @@ f_drawDash() =>
     f_pair(7, 2, "Diverge",  divTxt, divCol)
     f_pair(8, 0, "VAL",      devOk ? str.tostring(devVal, format.mintick) : "-", cVa)
     f_pair(8, 2, "IB ext",   ibExt, C_NE)
-    f_pair(9, 0, "High",     highQual + (na(topPct) ? "" : "  " + str.tostring(topPct, "#") + "%"), hiCol)
-    f_pair(9, 2, "Low",      lowQual  + (na(botPct) ? "" : "  " + str.tostring(botPct, "#") + "%"), loCol)
+    f_pair(9, 0, "High",     highQual + (na(topPct) ? "" : "  " + str.tostring(topPct, "#") + "b"), hiCol)
+    f_pair(9, 2, "Low",      lowQual  + (na(botPct) ? "" : "  " + str.tostring(botPct, "#") + "b"), loCol)
     f_pair(10, 0, "nPOC up", na(npocUp) ? "-" : str.tostring(npocUp, format.mintick), cNpoc)
     f_pair(10, 2, "nPOC dn", na(npocDn) ? "-" : str.tostring(npocDn, format.mintick), cNpoc)
     f_pair(11, 0, "DNA",     dnaState, dnaCol)
