@@ -144,5 +144,40 @@ def main():
     print("  Anything under it is which exchange you happened to load.")
 
 
+def ladder(rows):
+    """Is an instrument's effect flat across bar sizes, or is one cell a spike?"""
+    order = {"5m": 0, "15m": 1, "30m": 2, "1h": 3, "4h": 4}
+    by = {}
+    for r in rows:
+        g = lambda k: int(r[k]) if r[k] else 0
+        lf, se, _, _ = lift_star(*[g(k) for k in
+                                   ("n_l", "n_s", "sig_l", "sig_s", "mir_l", "mir_s")])
+        by.setdefault(r["instrument"], []).append((r["tf"], lf, se,
+                                                   g("n_l") + g("n_s")))
+    print()
+    print("=" * 78)
+    print("THE SAME INSTRUMENT ACROSS BAR SIZES")
+    print("=" * 78)
+    for inst, cells in by.items():
+        if len(cells) < 3:
+            continue
+        cells.sort(key=lambda c: order.get(c[0], 9))
+        print(f"\n{inst}")
+        for tf, lf, se, n in cells:
+            print(f"   {tf:>4}  N {n:>4}   LIFT* {lf:>+6.1f}pp   z {lf/se:>+5.2f}")
+        w = [1 / se**2 for _, _, se, _ in cells]
+        m = sum(x * lf for x, (_, lf, _, _) in zip(w, cells)) / sum(w)
+        Q = sum(x * (lf - m) ** 2 for x, (_, lf, _, _) in zip(w, cells))
+        df = len(cells) - 1
+        print(f"   pooled across bar sizes {m:+.2f}pp;  Q {Q:.1f} on {df} df", end="")
+        # 95th percentile of chi-square, small df
+        crit = {1: 3.84, 2: 5.99, 3: 7.81, 4: 9.49}.get(df, 11.07)
+        print("  -> the ladder is NOT flat" if Q > crit else "  -> flat within noise")
+        worst = max(cells, key=lambda c: abs(c[1] - m) / c[2])
+        print(f"   furthest cell: {worst[0]} at {worst[1]:+.1f}pp, "
+              f"{abs(worst[1]-m)/worst[2]:.2f} sigma from its own instrument's mean")
+
+
 if __name__ == "__main__":
     main()
+    ladder(load())
