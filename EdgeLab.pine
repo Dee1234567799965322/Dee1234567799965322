@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// EDGE LAB  v1.4
+// EDGE LAB  v1.5
 // ----------------------------------------------------------------------------
 // ONE HARNESS. EVERY SETUP THE DAY PRODUCED, EVERY CONTROL THE DAY PROVED
 // NECESSARY.
@@ -324,6 +324,7 @@ var array<int>   tBar = array.new<int>()
 var array<int>   tSlt = array.new<int>()
 var array<int>   tSd  = array.new<int>()     // signal direction: 0 long, 1 short
 var array<int>   tHf  = array.new<int>()     // which half of the chart it opened in
+var array<int>   tInd = array.new<int>()     // belongs to the non-overlapping chain
 var array<float> tMax = array.new<float>()
 
 // ix = ((slot * 2 + sd) * 2 + half);  hits index = ix * NT + target
@@ -331,6 +332,36 @@ var array<float> hits = array.new<float>(NB * 2 * 2 * 2 * NT, 0.0)
 var array<float> cnt  = array.new<float>(NB * 2 * 2 * 2, 0.0)
 var array<float> smx  = array.new<float>(NB * 2 * 2, 0.0)
 var array<float> cns  = array.new<float>(NB * 2 * 2, 0.0)
+
+// ----------------------------------------------------------------------------
+// CORRECTION 10 - THE TRADES ARE NOT INDEPENDENT, AND EVERY z TODAY ASSUMED THEY
+// WERE.
+//
+// Around 300 sweeps land across 8,400 bars, so they arrive about 28 bars apart
+// while a trade may live 200. Several are open at once, riding the same stretch
+// of price. The binomial standard error counts them as separate observations;
+// they are not, so the se is too small and every z printed today is too big.
+//
+// Fourteen instruments give an empirical handle on how much. Under independence
+// the two direction-arms of ONE instrument should disagree by exactly sampling
+// error, Q/df = 1. Measured: 1.68. That puts the se understatement near 1.3x,
+// which drags the fixed-effect pooled z from -3.12 to -2.40 and takes it back
+// under the bar it appeared to clear.
+//
+// This is the honest fix rather than a fudge factor. A second tally admits only
+// a chain of trades that never overlap: a pair is taken only when no admitted
+// pair is still open, so the next one starts after the last one is fully
+// resolved. Those observations are independent by construction and their z
+// needs no correction. N collapses - that is the point, and it is what the
+// nominal N was quietly borrowing against all along.
+//
+// Read both. An effect that survives the IND row is real; one that lives only
+// in the nominal row is overlap.
+// ----------------------------------------------------------------------------
+var array<int>   indLive = array.new<int>(NB, 0)
+var array<int>   indLegs = array.new<int>(NB, 0)
+var array<float> iHits   = array.new<float>(NB * 2 * 2 * NT, 0.0)
+var array<float> iCnt    = array.new<float>(NB * 2 * 2, 0.0)
 
 f_tgt(int i) =>
     i == 0 ? 1.0 : i == 1 ? 2.0 : i == 2 ? 3.0 : i == 3 ? 5.0 : 8.0
@@ -356,6 +387,13 @@ f_pair(int bucket, int d) =>
         // is known on historical bars, so the split point is fixed in advance
         // rather than chosen after seeing where the effect sits.
         int   hf = bar_index < last_bar_index / 2 ? 0 : 1
+        // Admitted to the independent chain only if nothing from this bucket is
+        // still running. Greedy, and deliberately so: it never counts two trades
+        // that shared a bar.
+        int   iq = indLive.get(bucket) == 0 ? 1 : 0
+        if iq == 1
+            indLive.set(bucket, 1)
+            indLegs.set(bucket, 2)
         tEn.push(close)
         tRk.push(rk)
         tDir.push(d)
@@ -363,6 +401,7 @@ f_pair(int bucket, int d) =>
         tSlt.push(bucket * 2)
         tSd.push(sd)
         tHf.push(hf)
+        tInd.push(iq)
         tMax.push(0.0)
         tEn.push(close)
         tRk.push(rk)
@@ -371,6 +410,7 @@ f_pair(int bucket, int d) =>
         tSlt.push(bucket * 2 + 1)
         tSd.push(sd)
         tHf.push(hf)
+        tInd.push(iq)
         tMax.push(0.0)
         ok := true
     ok
@@ -414,6 +454,7 @@ f_track() =>
             int   sl  = tSlt.get(i)
             int   sd  = tSd.get(i)
             int   hf  = tHf.get(i)
+            int   iq  = tInd.get(i)
             int   age = bar_index - tBar.get(i)
             bool  done = false
             bool  cens = false
@@ -445,6 +486,15 @@ f_track() =>
                     if mx >= f_tgt(L)
                         hits.set(iy * NT + L, hits.get(iy * NT + L) + 1)
                 cnt.set(iy, cnt.get(iy) + 1)
+                if iq == 1
+                    for L = 0 to NT - 1
+                        if mx >= f_tgt(L)
+                            iHits.set(ix * NT + L, iHits.get(ix * NT + L) + 1)
+                    iCnt.set(ix, iCnt.get(ix) + 1)
+                    int bk = int(math.floor(sl / 2.0))
+                    indLegs.set(bk, indLegs.get(bk) - 1)
+                    if indLegs.get(bk) <= 0
+                        indLive.set(bk, 0)
                 smx.set(ix, smx.get(ix) + mx)
                 if cens
                     cns.set(ix, cns.get(ix) + 1)
@@ -455,6 +505,7 @@ f_track() =>
                 tSlt.remove(i)
                 tSd.remove(i)
                 tHf.remove(i)
+                tInd.remove(i)
                 tMax.remove(i)
     tEn.size()
 
@@ -533,6 +584,30 @@ f_stratH(int b, int L, int hf) =>
 
 f_strat(int b, int L) => f_stratH(b, L, 2)
 
+// Same estimator, run over the non-overlapping chain only. No correction is
+// applied to this z because none is needed - these trades never shared a bar.
+f_stratInd(int b, int L) =>
+    int   slotS = b * 2
+    int   slotM = b * 2 + 1
+    float sumL  = 0.0
+    float sumV  = 0.0
+    int   k     = 0
+    for sd = 0 to 1
+        float n1 = iCnt.get(slotS * 2 + sd)
+        float n2 = iCnt.get(slotM * 2 + sd)
+        if n1 > 0 and n2 > 0
+            float p1 = iHits.get((slotS * 2 + sd) * NT + L) / n1
+            float p2 = iHits.get((slotM * 2 + sd) * NT + L) / n2
+            sumL := sumL + (p1 - p2)
+            sumV := sumV + p1 * (1 - p1) / n1 + p2 * (1 - p2) / n2
+            k := k + 1
+    float lf = k > 0 ? sumL / k : na
+    float vr = k > 0 ? sumV / (k * k) : na
+    oSt.set(0, na(lf) ? na : lf * 100)
+    oSt.set(1, na(lf) or na(vr) or vr <= 0 ? na : lf / math.sqrt(vr))
+    oSt.set(3, na(vr) or vr <= 0 ? na : math.sqrt(vr) * 100)
+    k
+
 // ----------------------------------------------------------------------------
 // CORRECTION 7 - "NO EDGE" AND "COULD NOT HAVE SEEN ONE" ARE NOT THE SAME.
 //
@@ -572,7 +647,7 @@ f_exp(float p, float tg) =>
 // ============================================================================
 // 9. PANEL
 // ============================================================================
-var table pnl = table.new(position.bottom_left, 11, 22, bgcolor=color.new(#131722, 8),
+var table pnl = table.new(position.bottom_left, 11, 23, bgcolor=color.new(#131722, 8),
      border_color=color.new(#000000, 55), border_width=1)
 
 f_cell(int c, int r, string v, color col, bool hdr) =>
@@ -822,6 +897,9 @@ f_panel() =>
          str.tostring(int(f_n(lS, 0))) + "/" + str.tostring(int(f_n(lS, 1))) +
          "   sigHit " + str.tostring(int(f_h(lS, 0, selT))) + "/" + str.tostring(int(f_h(lS, 1, selT))) +
          "   mirHit " + str.tostring(int(f_h(lM, 0, selT))) + "/" + str.tostring(int(f_h(lM, 1, selT))) +
+         "   ind " + str.tostring(int(iCnt.get(lS * 2))) + "/" + str.tostring(int(iCnt.get(lS * 2 + 1))) +
+         " " + str.tostring(int(iHits.get((lS * 2) * NT + selT))) + "/" + str.tostring(int(iHits.get((lS * 2 + 1) * NT + selT))) +
+         " " + str.tostring(int(iHits.get((lM * 2) * NT + selT))) + "/" + str.tostring(int(iHits.get((lM * 2 + 1) * NT + selT))) +
          "   |  " + syminfo.ticker + " " + timeframe.period, #8aa4c8, false)
     f_cell(0, 17, "Bars " + str.tostring(bar_index + 1) +
          "    MDL " + (na(bMd) ? "-" : str.tostring(bMd, "#.#") + "pp") +
@@ -872,6 +950,25 @@ f_panel() =>
          " (n " + str.tostring(int(h2N)) + ")    diff z " +
          (na(dZ) ? "-" : str.tostring(dZ, "+#.##")) + "   ->  " + stab, stabc, false)
 
+    // The same question asked of trades that never shared a bar.
+    f_stratInd(selBk, selT)
+    float iLf = oSt.get(0)
+    float iZ  = oSt.get(1)
+    float iSe = oSt.get(3)
+    float iN  = iCnt.get(lS * 2) + iCnt.get(lS * 2 + 1)
+    float iMd = f_mdl(iSe)
+    bool  iAgree = not na(iLf) and not na(bLf) and iLf * bLf > 0
+    color ic = na(iLf) ? #6c7080 : na(iZ) ? #6c7080 :
+         math.abs(iLf) >= NOISE_PP and math.abs(iZ) >= Z_BAR ? (iLf > 0 ? #26a69a : #ef5350) : #ff9800
+    f_cell(0, 22, "IND (no overlap)   n " + str.tostring(int(iN)) + " of " + str.tostring(int(nL)) +
+         "   LIFT* " + (na(iLf) ? "-" : str.tostring(iLf, "+#.#") + "pp") +
+         "   z* " + (na(iZ) ? "-" : str.tostring(iZ, "+#.##")) +
+         "   MDL " + (na(iMd) ? "-" : str.tostring(iMd, "#.#") + "pp") +
+         "   ->  " + (na(iLf) ? "no data" :
+              not iAgree ? "DISAGREES with the full sample - the full-sample z was overlap" :
+              na(iZ) or math.abs(iZ) < Z_BAR ? "same sign, not significant on independent trades" :
+              "SURVIVES on independent trades"), ic, false)
+
     f_cell(0, 21, "TIMER row's LIFT is the sample's drift. RW = 1/(1+n) exact. Noise floor 6.4pp feed-to-feed. z bar 3.0 for ~30 cells. NET R is realized, drift included.", #6c7080, false)
     for c = 1 to 10
         f_cell(c, 15, "", #6c7080, false)
@@ -881,6 +978,7 @@ f_panel() =>
         f_cell(c, 19, "", #6c7080, false)
         f_cell(c, 20, "", #6c7080, false)
         f_cell(c, 21, "", #6c7080, false)
+        f_cell(c, 22, "", #6c7080, false)
     nL
 
 if showTbl and barstate.islast
