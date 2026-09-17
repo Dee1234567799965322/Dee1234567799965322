@@ -4989,22 +4989,36 @@ f_drawStats() =>
     // revisited 80%" was 80% against 76%. Four points, against a 6.4pp floor
     // measured between two exchanges on the same asset. Nothing.
     // The rate alone was never the claim. The lift over the baseline is.
+    // FOURTH INSTANCE OF ONE BUG. Rows 1 and 4 were fixed for colouring a
+    // difference without asking whether it beats the noise; these three still
+    // did it. Balance break paints RED at -10.8pp on n=74, where the smallest
+    // resolvable gap is 15.9pp, and at -7.4pp on n=101 against 13.8pp. Neither
+    // is a finding. Every lift row now carries its own MDL and stays grey
+    // unless it clears BOTH the 6.4pp feed floor and what its sample can see.
+    // Note the *1.0: hit and tot are ints, so hit/tot truncates to 0 or 1
+    // before the multiply - the same trap f_pct already carries a comment about.
     float MIRROR_BASE = 76.0
     float phL = poorHiTotal > 0 ? poorHiHit * 100.0 / poorHiTotal - MIRROR_BASE : na
+    float phM = poorHiTotal > 0 ? 2.8 * math.sqrt((poorHiHit * 1.0 / poorHiTotal) * (1 - poorHiHit * 1.0 / poorHiTotal) / poorHiTotal) * 100 : na
     float plL = poorLoTotal > 0 ? poorLoHit * 100.0 / poorLoTotal - MIRROR_BASE : na
+    float plM = poorLoTotal > 0 ? 2.8 * math.sqrt((poorLoHit * 1.0 / poorLoTotal) * (1 - poorLoHit * 1.0 / poorLoTotal) / poorLoTotal) * 100 : na
     f_pair2(9, "Poor high vs 76% base", na(phL) ? "-" :
          (phL > 0 ? "+" : "") + str.tostring(phL, "#.#") + "pp  n " + str.tostring(poorHiTotal),
-         poorHiTotal < 20 or na(phL) or math.abs(phL) < 6.4 ? C_NE : phL > 0 ? C_UP : C_DN)
+         poorHiTotal < 20 or na(phL) or math.abs(phL) < 6.4 or
+         na(phM) or math.abs(phL) < phM ? C_NE : phL > 0 ? C_UP : C_DN)
     f_pair2(10, "Poor low vs 76% base", na(plL) ? "-" :
          (plL > 0 ? "+" : "") + str.tostring(plL, "#.#") + "pp  n " + str.tostring(poorLoTotal),
-         poorLoTotal < 20 or na(plL) or math.abs(plL) < 6.4 ? C_NE : plL > 0 ? C_UP : C_DN)
+         poorLoTotal < 20 or na(plL) or math.abs(plL) < 6.4 or
+         na(plM) or math.abs(plL) < plM ? C_NE : plL > 0 ? C_UP : C_DN)
     // Balance break held was green at ANY value once n cleared 20 - a colour
     // carrying no information whatever. Its null is a coin flip, so read it
     // against 50, and only once the gap clears the same floor.
     float bbL = balTotal > 0 ? balHold * 100.0 / balTotal - 50.0 : na
+    float bbM = balTotal > 0 ? 2.8 * math.sqrt((balHold * 1.0 / balTotal) * (1 - balHold * 1.0 / balTotal) / balTotal) * 100 : na
     f_pair2(11, "Balance break vs 50%", na(bbL) ? "-" :
          (bbL > 0 ? "+" : "") + str.tostring(bbL, "#.#") + "pp  n " + str.tostring(balTotal),
-         balTotal < 20 or na(bbL) or math.abs(bbL) < 6.4 ? C_NE : bbL > 0 ? C_UP : C_DN)
+         balTotal < 20 or na(bbL) or math.abs(bbL) < 6.4 or
+         na(bbM) or math.abs(bbL) < bbM ? C_NE : bbL > 0 ? C_UP : C_DN)
     // THE CAP, STATED RATHER THAN INFERRED.
     // "Avg R targeted" cannot tell you whether the cap is on, and I spent
     // several rounds wrongly insisting it could. With next-bar-open fills the R
