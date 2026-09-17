@@ -1,4 +1,4 @@
-# Auction Cipher — an indicator, and nine attempts to find an edge in it
+# Auction Cipher — an indicator, and ten attempts to find an edge in it
 
 Twelve Pine v6 files. One is a chart tool. Ten are experiments that failed.
 The eleventh is the harness that explains why, and it is the only one worth
@@ -26,7 +26,7 @@ Read one column: **`LIFT*`**. Everything else on the panel exists to stop
 
 ---
 
-## The ten corrections
+## The eleven corrections
 
 Each one killed a result that looked real. Four killed results that had already
 been written up.
@@ -43,11 +43,34 @@ been written up.
 | 8 | **Fix the target rung before looking** | A verdict that picked its own best cell and reported a different cell's power |
 | 9 | **Non-overlapping trades only** | The pooled `z = −3.12` — the one number that cleared the bar |
 | 10 | **Split-half persistence** | Gold's −9.7pp and GBPJPY's −6.3pp. Both were windows, not instruments |
+| 11 | **Resolution invariance** — does it survive halving the bar size? | Bitcoin, the last survivor: −8.2pp at 30m, **+8.5pp at 15m**, z 3.20 apart |
 
-Four of the ten are about the *denominator* — what a number is compared
+Four of the eleven are about the *denominator* — what a number is compared
 against, and how many chances it had. Two are about what counts as one
-observation. **None is about trading logic.** Every result this repo lost, it
-lost to measurement.
+observation. One is about whether the thing being measured belongs to the market
+or to the chart. **None is about trading logic.** Every result this repo lost,
+it lost to measurement.
+
+### The test that closed the circle
+
+Bitcoin was the last instrument standing: −8.2pp at 30m, stable across both
+halves of its chart, same sign on non-overlapping trades, failing only on cost.
+Run at **15 minutes** it reads **+8.5pp** — nearly equal magnitude, opposite
+sign, `z = 3.20` apart. That gap is the only thing in this project that ever
+cleared the 3.0 bar, and it is a contradiction rather than a result.
+
+Not a period artefact either: the 15m window sits inside the 30m chart's second
+half, where 30m says −7.8pp and 15m says +8.4pp over the same days.
+
+**Both cells pass split-half persistence individually.** Correction 10 asks
+whether an effect is stable in *time* and says yes to both; it cannot see that
+they disagree with each other. A sweep is supposed to be resting stops being
+taken — if it were, halving the bar size would not invert it. What inverts
+under resampling is a property of the chart, not the auction.
+
+This is the same diagnostic that killed the original Auction Cipher result
+(gold +41.1R at 30m, −14.1R at 15m). Ten hypotheses later the last survivor
+died the same way.
 
 ---
 
