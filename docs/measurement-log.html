@@ -1,0 +1,1511 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Auction Cipher Measurement Log</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,500;1,400&display=swap">
+<style>
+:root{
+  --ground:#EDEEF0; --surface:#FBFBFC; --surface-2:#F4F5F7; --sunk:#E4E6EA;
+  --ink:#191C21; --ink-2:#5C636E; --ink-3:#868D99;
+  --rule:#D6D9DE; --rule-2:#C2C7CF;
+  --accent:#9A5F1E; --accent-soft:#F0E4D4;
+  --pos:#1F7A4D; --null:#8A8F98; --neg:#A93226;
+  --pos-soft:#E1F0E7; --neg-soft:#F6E2DF; --null-soft:#EBECEE;
+  --sans:"IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  --serif:"IBM Plex Serif",Georgia,"Times New Roman",serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --ground:#121417; --surface:#1A1D22; --surface-2:#22262C; --sunk:#0D0F12;
+    --ink:#E7E9EC; --ink-2:#9BA3AE; --ink-3:#727A85;
+    --rule:#2C3138; --rule-2:#3A404A;
+    --accent:#D79A54; --accent-soft:#332719;
+    --pos:#46B27A; --null:#767D88; --neg:#FF7A4D;
+    --pos-soft:#152A20; --neg-soft:#2E1B14; --null-soft:#23262B;
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#121417; --surface:#1A1D22; --surface-2:#22262C; --sunk:#0D0F12;
+  --ink:#E7E9EC; --ink-2:#9BA3AE; --ink-3:#727A85;
+  --rule:#2C3138; --rule-2:#3A404A;
+  --accent:#D79A54; --accent-soft:#332719;
+  --pos:#46B27A; --null:#767D88; --neg:#FF7A4D;
+  --pos-soft:#152A20; --neg-soft:#2E1B14; --null-soft:#23262B;
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--ground); color:var(--ink);
+  font-family:var(--serif); font-size:16px; line-height:1.62;
+  margin:0; padding-block:0 64px; padding-left:16px; padding-right:16px;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:860px; margin:0 auto}
+
+/* ---- masthead ---- */
+.mast{padding-block:44px 30px; border-bottom:2px solid var(--ink)}
+.eyebrow{
+  font-family:var(--sans); font-size:11px; font-weight:600; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--accent); margin:0 0 14px;
+}
+h1{
+  font-family:var(--sans); font-weight:700; font-size:clamp(30px,6vw,46px);
+  line-height:1.06; letter-spacing:-.022em; margin:0; text-wrap:balance;
+}
+.standfirst{
+  font-size:17px; color:var(--ink-2); margin:16px 0 0; max-width:62ch;
+}
+.mast-meta{
+  display:flex; flex-wrap:wrap; gap:8px 22px; margin-top:22px;
+  font-family:var(--mono); font-size:11.5px; color:var(--ink-3);
+  text-transform:uppercase; letter-spacing:.07em;
+}
+
+/* ---- sections ---- */
+section{padding-block:40px 0}
+h2{
+  font-family:var(--sans); font-weight:600; font-size:13px; letter-spacing:.13em;
+  text-transform:uppercase; color:var(--ink-2); margin:0 0 6px;
+  padding-bottom:9px; border-bottom:1px solid var(--rule);
+}
+h3{
+  font-family:var(--sans); font-weight:600; font-size:20px; letter-spacing:-.01em;
+  margin:26px 0 8px; text-wrap:balance;
+}
+p{margin:14px 0; max-width:66ch}
+strong{font-weight:600; color:var(--ink)}
+em{font-style:italic}
+code,.num{font-family:var(--mono); font-variant-numeric:tabular-nums}
+code{font-size:.9em; background:var(--surface-2); padding:1px 5px; border-radius:3px; color:var(--ink)}
+
+/* ---- verdict tiles ---- */
+.tiles{display:grid; grid-template-columns:repeat(3,1fr); gap:2px; margin-top:22px; background:var(--rule); border:1px solid var(--rule)}
+.tile{background:var(--surface); padding:20px 18px 18px}
+.tile-k{
+  font-family:var(--sans); font-size:10.5px; font-weight:600; letter-spacing:.11em;
+  text-transform:uppercase; color:var(--ink-3); margin:0 0 10px;
+}
+.tile-v{font-family:var(--mono); font-size:32px; font-weight:500; line-height:1; letter-spacing:-.02em; display:block}
+.tile-sub{font-family:var(--sans); font-size:12.5px; color:var(--ink-2); margin:9px 0 0; line-height:1.45}
+.v-pos{color:var(--pos)} .v-neg{color:var(--neg)} .v-null{color:var(--null)}
+
+/* ---- chart ---- */
+.figure{margin:26px 0 0; background:var(--surface); border:1px solid var(--rule)}
+.scroller{overflow-x:auto}
+.scroller svg{display:block; min-width:720px; width:100%; height:auto}
+figcaption{
+  font-family:var(--sans); font-size:12.5px; color:var(--ink-2); line-height:1.5;
+  padding:14px 18px; border-top:1px solid var(--rule); margin:0;
+}
+.key{display:flex; flex-wrap:wrap; gap:6px 20px; padding:13px 18px; border-bottom:1px solid var(--rule); font-family:var(--sans); font-size:12px; color:var(--ink-2)}
+.key span{display:inline-flex; align-items:center; gap:7px}
+.kd{width:11px; height:11px; border-radius:50%; flex:none}
+.kd-pos{background:var(--pos)}
+.kd-null{background:var(--surface); border:2px solid var(--null)}
+.kd-neg{background:var(--neg); border-radius:2px; transform:rotate(45deg); width:9px; height:9px}
+
+/* ---- tables ---- */
+.tbl{overflow-x:auto; margin:22px 0 0; border:1px solid var(--rule); background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:540px; font-family:var(--sans); font-size:13.5px}
+caption{
+  text-align:left; font-family:var(--sans); font-size:12px; font-weight:600;
+  letter-spacing:.08em; text-transform:uppercase; color:var(--ink-2);
+  padding:14px 16px 12px; border-bottom:1px solid var(--rule); background:var(--surface-2);
+}
+th,td{padding:10px 14px; text-align:right; border-bottom:1px solid var(--rule); white-space:nowrap}
+th:first-child,td:first-child{text-align:left; white-space:normal}
+thead th{
+  font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink-3); border-bottom:1px solid var(--rule-2);
+}
+tbody td{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:13px; color:var(--ink)}
+tbody td:first-child{font-family:var(--sans); font-size:13.5px}
+tbody tr:last-child td{border-bottom:none}
+tr.pooled td{background:var(--surface-2); font-weight:600}
+tr.pooled td:first-child{font-weight:600}
+.cell-pos{color:var(--pos)} .cell-neg{color:var(--neg)} .cell-null{color:var(--null)}
+.thin{color:var(--ink-3)}
+
+/* ---- callouts ---- */
+.note{
+  border-left:3px solid var(--accent); background:var(--surface);
+  padding:16px 18px; margin:24px 0 0;
+}
+.note p{margin:0; max-width:64ch}
+.note p + p{margin-top:11px}
+.note-k{
+  font-family:var(--sans); font-size:10.5px; font-weight:600; letter-spacing:.11em;
+  text-transform:uppercase; color:var(--accent); display:block; margin-bottom:8px;
+}
+.warn{border-left-color:var(--neg)}
+.warn .note-k{color:var(--neg)}
+
+/* ---- settings ---- */
+.settings{margin:22px 0 0; border:1px solid var(--rule); background:var(--surface)}
+.srow{display:flex; justify-content:space-between; gap:18px; padding:11px 16px; border-bottom:1px solid var(--rule); font-family:var(--sans); font-size:13.5px}
+.srow:last-child{border-bottom:none}
+.srow b{font-weight:400; color:var(--ink-2)}
+.srow span{font-family:var(--mono); font-size:12.5px; color:var(--ink); text-align:right}
+
+/* ---- ordered questions ---- */
+ol.q{list-style:none; counter-reset:q; padding:0; margin:22px 0 0}
+ol.q li{
+  counter-increment:q; position:relative; padding:0 0 0 46px; margin-bottom:22px;
+  max-width:64ch;
+}
+ol.q li::before{
+  content:counter(q); position:absolute; left:0; top:2px;
+  font-family:var(--mono); font-size:12px; font-weight:500; color:var(--accent);
+  border:1px solid var(--rule-2); border-radius:50%;
+  width:28px; height:28px; display:grid; place-items:center;
+}
+ol.q h3{margin:0 0 4px; font-size:17px}
+ol.q p{margin:0; font-size:15px; color:var(--ink-2)}
+
+ul.plain{margin:14px 0; padding-left:20px; max-width:64ch}
+ul.plain li{margin-bottom:8px}
+
+footer{
+  margin-top:52px; padding-top:22px; border-top:1px solid var(--rule);
+  font-family:var(--sans); font-size:12.5px; color:var(--ink-3); max-width:66ch;
+}
+
+@media (max-width:640px){
+  .tiles{grid-template-columns:1fr}
+  .tile-v{font-size:28px}
+  body{font-size:15.5px}
+}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+<header class="mast">
+  <p class="eyebrow">Measurement Record</p>
+  <h1>Auction Cipher Measurement Log</h1>
+  <p class="standfirst">Ten hypotheses, roughly twenty thousand measured trades, and the seventeen corrections that each had to be invented before a number on this page could be believed. Every correction killed something that looked real &mdash; six of them killed a result this log had already published, and the last was found by the fix for the one before it.</p>
+  <div class="mast-meta">
+    <span>Build 4854831</span>
+    <span>Rev. 24 &middot; 18 Sep 2026</span>
+    <span>Pine v6 &middot; 14 instruments</span>
+  </div>
+</header>
+
+<section>
+  <h2>Where it stands</h2>
+  <div class="tiles">
+    <div class="tile">
+      <p class="tile-k">Largest surviving effect</p>
+      <span class="tile-v v-null">&minus;3.0<span style="font-size:18px">pp</span></span>
+      <p class="tile-sub">Sweeps against their own mirror, 14 instruments, 4,846 trades. Random-effects <span class="num">z&nbsp;&minus;1.95</span>, 95% CI <span class="num">[&minus;5.9,&nbsp;+0.0]</span> &mdash; touching zero, and under the <span class="num">6.4pp</span> noise floor.</p>
+    </div>
+    <div class="tile">
+      <p class="tile-k">Corrections required</p>
+      <span class="tile-v">17</span>
+      <p class="tile-sub">Each one killed a number that looked real. Six killed published results; the last four caught the panel itself making the mistake it exists to prevent, and the sixteenth was exposed by the fix for the fifteenth.</p>
+    </div>
+    <div class="tile">
+      <p class="tile-k">Persistence</p>
+      <span class="tile-v v-neg">2 of 5</span>
+      <p class="tile-sub">Instruments whose effect <strong>changes sign</strong> between the first and second half of their own chart. Expected by chance: <span class="num">0.25</span>. <span class="num">p&nbsp;=&nbsp;0.023</span>.</p>
+    </div>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Revised 18 Sep &mdash; the indicator&rsquo;s own panel now measures the same way</span>
+    <p>There is a small tendency for swept levels to be <em>followed</em> rather than faded, worth roughly <span class="num">3&ndash;4pp</span>. It keeps the same sign under stratification, non-overlap and split-half. It is also smaller than the data feed's disagreement with itself, worth about <span class="num">+0.02R</span> a trade, and would take the better part of a decade of 30-minute history to prove.</p>
+    <p>The stats panel inside the indicator has since been given drift control and a locally measured baseline, and the poor-extreme hypothesis it reports now reads null on two instruments at <em>four</em> bar sizes. At one day the pooled sample is <span class="num">2,079</span> extremes with an MDL of <span class="num">2.5pp</span> &mdash; a third of the noise floor, and <strong>the best-powered measurement anywhere in this record</strong>. It returns <span class="num">&minus;0.7pp</span>. Getting there required correction 16, which had been deflating every poor-revisit number in this log.</p>
+    <p>More importantly it is <strong>not stable</strong>. It varies by instrument (<span class="num">&tau;&nbsp;=&nbsp;4.4pp</span>) and within an instrument across time. So a full-sample number for any single chart is an average over regimes that will not repeat &mdash; there is no fixed quantity underneath it for that number to estimate.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Every configuration on one scale</h2>
+
+  <figure class="figure">
+    <div class="key">
+      <span><i class="kd kd-pos"></i>Clears the noise threshold</span>
+      <span><i class="kd kd-null"></i>Indistinguishable from zero</span>
+      <span><i class="kd kd-neg"></i>Negative edge</span>
+    </div>
+    <div class="scroller">
+      <svg viewBox="0 0 760 516" role="img" aria-label="Dot plot of z-scores for fifteen measured configurations, spread roughly symmetrically around zero from minus 2.75 to plus 2.25.">
+<text x="0" y="16" fill="var(--ink)" font-family="var(--sans)" font-size="13" font-weight="600">Every measurement taken, on one scale</text>
+<text x="0" y="34" fill="var(--ink-3)" font-family="var(--sans)" font-size="11.5">z-score of win rate above break-even &#183; 15 instrument-timeframe cells</text>
+<rect x="623.8" y="44" width="36.2" height="414.0" fill="var(--pos-soft)"></rect>
+<rect x="262.0" y="44" width="72.4" height="414.0" fill="var(--neg-soft)"></rect>
+<line x1="262.0" y1="46" x2="262.0" y2="458.0" stroke="var(--rule)" stroke-width="1"></line>
+<line x1="406.7" y1="46" x2="406.7" y2="458.0" stroke="var(--rule)" stroke-width="1"></line>
+<line x1="551.5" y1="46" x2="551.5" y2="458.0" stroke="var(--rule)" stroke-width="1"></line>
+<line x1="660.0" y1="46" x2="660.0" y2="458.0" stroke="var(--rule)" stroke-width="1"></line>
+<line x1="479.1" y1="46" x2="479.1" y2="458.0" stroke="var(--rule-2)" stroke-width="1.5"></line>
+<line x1="623.8" y1="46" x2="623.8" y2="458.0" stroke="var(--pos)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+<line x1="334.4" y1="46" x2="334.4" y2="458.0" stroke="var(--neg)" stroke-width="1.5" stroke-dasharray="4 3"></line>
+<text x="262.0" y="60" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">−3.0</text>
+<text x="334.4" y="60" fill="var(--neg)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">−2.0</text>
+<text x="406.7" y="60" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">−1.0</text>
+<text x="479.1" y="60" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">0</text>
+<text x="551.5" y="60" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">1.0</text>
+<text x="623.8" y="60" fill="var(--pos)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">2.0</text>
+<text x="660.0" y="60" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">2.5</text>
+<g font-family="var(--sans)" font-size="11">
+<text x="250" y="82" fill="var(--ink)" text-anchor="end">Window · 30m · pooled</text>
+<text x="250" y="108" fill="var(--ink)" text-anchor="end">Window · 30m · XAUUSD</text>
+<text x="250" y="134" fill="var(--ink-2)" text-anchor="end">Window · 30m · pooled (pre-fix, 7 assets)</text>
+<text x="250" y="160" fill="var(--ink-2)" text-anchor="end">Window · 30m · SPX</text>
+<text x="250" y="186" fill="var(--ink-2)" text-anchor="end">Window · 1h · XAUUSD</text>
+<text x="250" y="212" fill="var(--ink-2)" text-anchor="end">Window · 15m · SPX</text>
+<text x="250" y="238" fill="var(--ink-2)" text-anchor="end">Window · 1h · BTCUSDT.P</text>
+<text x="250" y="264" fill="var(--ink-2)" text-anchor="end">Window · 15m · BTCUSDT.P</text>
+<text x="250" y="290" fill="var(--ink-2)" text-anchor="end">Strict · 30m · pooled (10 assets)</text>
+<text x="250" y="316" fill="var(--ink-2)" text-anchor="end">Strict · 15m · pooled (9 assets)</text>
+<text x="250" y="342" fill="var(--ink-2)" text-anchor="end">Window · 15m · pooled</text>
+<text x="250" y="368" fill="var(--ink-2)" text-anchor="end">Window · 30m · BTCUSDT.P</text>
+<text x="250" y="394" fill="var(--ink-2)" text-anchor="end">Window · 15m · XAUUSD</text>
+<text x="250" y="420" fill="var(--ink-2)" text-anchor="end">Window · 1h · pooled</text>
+<text x="250" y="446" fill="var(--ink-2)" text-anchor="end">Window · 1h · SPX</text>
+</g>
+<g stroke="var(--rule-2)" stroke-width="1">
+<line x1="479.1" y1="78" x2="641.9" y2="78"></line>
+<line x1="479.1" y1="104" x2="625.3" y2="104"></line>
+<line x1="479.1" y1="130" x2="622.4" y2="130"></line>
+<line x1="479.1" y1="156" x2="562.3" y2="156"></line>
+<line x1="479.1" y1="182" x2="542.8" y2="182"></line>
+<line x1="479.1" y1="208" x2="531.9" y2="208"></line>
+<line x1="479.1" y1="234" x2="518.9" y2="234"></line>
+<line x1="479.1" y1="260" x2="500.8" y2="260"></line>
+<line x1="479.1" y1="286" x2="487.1" y2="286"></line>
+<line x1="479.1" y1="312" x2="486.3" y2="312"></line>
+<line x1="479.1" y1="338" x2="482.0" y2="338"></line>
+<line x1="479.1" y1="364" x2="424.1" y2="364"></line>
+<line x1="479.1" y1="390" x2="423.4" y2="390"></line>
+<line x1="479.1" y1="416" x2="394.4" y2="416"></line>
+<line x1="479.1" y1="442" x2="280.1" y2="442"></line>
+</g>
+<circle cx="641.9" cy="78" r="6" fill="var(--pos)"></circle>
+<circle cx="625.3" cy="104" r="6" fill="var(--pos)"></circle>
+<circle cx="622.4" cy="130" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="562.3" cy="156" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="542.8" cy="182" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="531.9" cy="208" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="518.9" cy="234" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="500.8" cy="260" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="487.1" cy="286" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="486.3" cy="312" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<circle cx="482.0" cy="338" r="5.5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle>
+<rect x="418.7" y="358.6" width="10.8" height="10.8" fill="var(--neg)" transform="rotate(45 424.1 364)"></rect>
+<rect x="418.0" y="384.6" width="10.8" height="10.8" fill="var(--neg)" transform="rotate(45 423.4 390)"></rect>
+<rect x="389.0" y="410.6" width="10.8" height="10.8" fill="var(--neg)" transform="rotate(45 394.4 416)"></rect>
+<rect x="274.7" y="436.6" width="10.8" height="10.8" fill="var(--neg)" transform="rotate(45 280.1 442)"></rect>
+<g font-family="var(--mono)" font-size="11" font-weight="500" text-anchor="end">
+<text x="752" y="82" fill="var(--pos)">2.25</text>
+<text x="752" y="108" fill="var(--pos)">2.02</text>
+<text x="752" y="134" fill="var(--ink-2)">1.98</text>
+<text x="752" y="160" fill="var(--ink-2)">1.15</text>
+<text x="752" y="186" fill="var(--ink-2)">0.88</text>
+<text x="752" y="212" fill="var(--ink-2)">0.73</text>
+<text x="752" y="238" fill="var(--ink-2)">0.55</text>
+<text x="752" y="264" fill="var(--ink-2)">0.30</text>
+<text x="752" y="290" fill="var(--ink-2)">0.11</text>
+<text x="752" y="316" fill="var(--ink-2)">0.10</text>
+<text x="752" y="342" fill="var(--ink-2)">0.04</text>
+<text x="752" y="368" fill="var(--neg)">−0.76</text>
+<text x="752" y="394" fill="var(--neg)">−0.77</text>
+<text x="752" y="420" fill="var(--neg)">−1.17</text>
+<text x="752" y="446" fill="var(--neg)">−2.75</text>
+</g>
+<text x="623.8" y="480" fill="var(--pos)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">+2 sigma</text>
+<text x="479.1" y="480" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">break-even</text>
+<text x="334.4" y="480" fill="var(--neg)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">−2 sigma</text>
+</svg>
+    </div>
+    <figcaption>Fifteen measurements, one scale, sorted by result. The spread runs from <span class="num">&minus;2.75</span> to <span class="num">+2.25</span> and sits roughly symmetrically around break-even &mdash; which is exactly the shape a strategy with no edge produces when you measure it fifteen times. Two dots clear <span class="num">+2&sigma;</span>. One clears <span class="num">&minus;2&sigma;</span>, and it is the single largest effect on the page.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>Window mode · 30 minutes</h2>
+  <p>The best cell on the page, and the one the earlier version of this record was built on. Break-even win rate is <code>1 / (1 + avg R targeted)</code> — with targets averaging <span class="num">1.9R</span>, a strategy needs roughly <strong>34.5%</strong> just to stand still.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Post-fix, target cap 2R, outcome horizon 200 bars</caption>
+      <thead>
+        <tr><th>Instrument</th><th>Signals</th><th>Resolved</th><th>Win rate</th><th>Break-even</th><th>Edge</th><th>z</th><th>Total R</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>XAUUSD</td><td>371</td><td>232</td><td>40.9%</td><td class="thin">34.6%</td><td class="cell-pos">+6.3pp</td><td class="cell-pos">2.02</td><td class="cell-pos">+41.1R</td></tr>
+        <tr><td>SPX</td><td>269</td><td>207</td><td>38.2%</td><td class="thin">34.4%</td><td class="cell-null">+3.8pp</td><td class="cell-null">1.15</td><td>+30.1R</td></tr>
+        <tr class="pooled"><td>Pooled</td><td>640</td><td>439</td><td>39.6%</td><td class="thin">34.5%</td><td class="cell-pos">+5.1pp</td><td class="cell-pos">2.25</td><td class="cell-pos">+71.2R</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="note-k">The fix cost almost nothing</span>
+    <p>Before the order-of-events correction, gold read <span class="num">+33.1R / +6.3pp</span> and SPX <span class="num">+36.2R / +4.1pp</span>. The BTC calibration predicted the fix would cost about <span class="num">0.010R</span> per trade. Gold came back at an identical <span class="num">+6.3pp</span>; SPX slipped to <span class="num">+3.8pp</span>. The correction did what it was supposed to do and took nothing real with it.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Caveat worth carrying</span>
+    <p>Gold and SPX were both inside the original seven-instrument pooled sample. This re-measures the same instruments on corrected code — it confirms the fix did not break the result, but it is <em>not</em> fresh independent evidence of the edge.</p>
+    <p>Gold also books <strong>139 flats out of 371 signals (37%)</strong>. "Opposite Signal Closes Open Trade" is closing more than a third of gold's trades before they resolve on their own merits. The flat bucket only costs <span class="num">−0.6R</span> in total, so they close near scratch — but the edge is being measured on 63% of its own signals.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Window mode · 15 minutes</h2>
+  <p>The same code, the same settings, one timeframe down.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Post-fix, target cap 2R, outcome horizon 200 bars</caption>
+      <thead>
+        <tr><th>Instrument</th><th>Signals</th><th>Resolved</th><th>Win rate</th><th>Break-even</th><th>Edge</th><th>z</th><th>Total R</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>XAUUSD</td><td>210</td><td>128</td><td>31.3%</td><td class="thin">34.5%</td><td class="cell-neg">−3.2pp</td><td class="cell-neg">−0.77</td><td class="cell-neg">−14.1R</td></tr>
+        <tr><td>SPX</td><td>220</td><td>168</td><td>36.9%</td><td class="thin">34.3%</td><td class="cell-null">+2.7pp</td><td class="cell-null">0.73</td><td>+11.1R</td></tr>
+        <tr class="pooled"><td>Pooled</td><td>430</td><td>296</td><td>34.5%</td><td class="thin">34.4%</td><td class="cell-null">+0.1pp</td><td class="cell-null">0.04</td><td class="cell-null">−3.0R</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Gold flips sign between adjacent timeframes</strong> — <span class="num">+41.1R</span> at 30m, <span class="num">−14.1R</span> at 15m, same instrument, same code, same settings. An edge does not do that. Noise does.</p>
+
+  <p>This is not a lone reading. Strict mode measured 15m independently — nine instruments, different gate logic, different dates — and got <span class="num">+0.35pp, z&nbsp;=&nbsp;0.10</span>, with six of nine instruments flipping sign against their own 30m result. Two unrelated gate modes, two different instrument sets, both land on zero.</p>
+
+  <div class="note">
+    <span class="note-k">Confound, stated</span>
+    <p>The 15m charts load a similar bar count, so they cover roughly <em>half</em> the calendar period the 30m charts do. Some of the gap could be regime rather than timeframe. What argues against that: the strict-mode 15m sweep covered entirely different dates and reached the same answer.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Window mode &middot; 1 hour</h2>
+  <p>The test this page previously called the highest-value unrun experiment. Every prior result pointed <em>up</em> the timeframes, so the prediction was that 1h would match or beat 30m. It did neither.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Post-fix, target cap 2R, outcome horizon 200 bars</caption>
+      <thead>
+        <tr><th>Instrument</th><th>Signals</th><th>Resolved</th><th>Win rate</th><th>Break-even</th><th>Edge</th><th>z</th><th>Total R</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>XAUUSD</td><td>518</td><td>325</td><td>36.9%</td><td class="thin">34.6%</td><td class="cell-null">+2.3pp</td><td class="cell-null">0.88</td><td>+15.1R</td></tr>
+        <tr><td>SPX</td><td>309</td><td>260</td><td>26.2%</td><td class="thin">34.3%</td><td class="cell-neg">&minus;8.1pp</td><td class="cell-neg">&minus;2.75</td><td class="cell-neg">&minus;53.0R</td></tr>
+        <tr class="pooled"><td>Pooled</td><td>827</td><td>585</td><td>32.1%</td><td class="thin">34.4%</td><td class="cell-neg">&minus;2.3pp</td><td class="cell-neg">&minus;1.17</td><td class="cell-neg">&minus;37.9R</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The timeframe curve has no shape</h3>
+  <div class="tbl">
+    <table>
+      <caption>Pooled gold + SPX, window mode, by timeframe</caption>
+      <thead><tr><th>Timeframe</th><th>Resolved</th><th>Edge</th><th>z</th></tr></thead>
+      <tbody>
+        <tr><td>15 minutes</td><td>296</td><td class="cell-null">+0.1pp</td><td class="cell-null">0.04</td></tr>
+        <tr><td>30 minutes</td><td>439</td><td class="cell-pos">+5.1pp</td><td class="cell-pos">2.25</td></tr>
+        <tr><td>1 hour</td><td>585</td><td class="cell-neg">&minus;2.3pp</td><td class="cell-neg">&minus;1.17</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Zero, then a spike, then negative. A structural edge &mdash; one that comes from the auction actually resolving at a particular resolution &mdash; would show a <strong>gradient</strong>: strongest somewhere, decaying smoothly either side. An isolated spike between a zero and a negative is what a single lucky cell looks like.</p>
+
+  <div class="note">
+    <span class="note-k">One caveat that cuts both ways</span>
+    <p>The SPX 1h chart spans March to September; the SPX 30m chart covers roughly August to September. So this is not a clean timeframe comparison &mdash; it is also a different regime, and 29 of its 309 signals went unfilled. That weakens the 1h result as a verdict on 1h. It equally weakens the 30m result as a verdict on anything beyond its own two months.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Bitcoin, all three timeframes</h2>
+  <p>The same instrument measured across the full timeframe range, on the venue where costs are highest.</p>
+  <div class="tbl">
+    <table>
+      <caption>BTCUSDT.P &middot; Binance &middot; window mode</caption>
+      <thead><tr><th>Timeframe</th><th>Resolved</th><th>Win rate</th><th>Edge</th><th>z</th><th>Total R</th><th>After 0.16R cost</th></tr></thead>
+      <tbody>
+        <tr><td>15m</td><td>193</td><td>35.8%</td><td class="cell-null">+1.0pp</td><td class="cell-null">0.30</td><td class="cell-null">&minus;1.3R</td><td class="cell-neg">&minus;32.3R</td></tr>
+        <tr><td>30m</td><td>349</td><td>32.7%</td><td class="cell-neg">&minus;1.9pp</td><td class="cell-neg">&minus;0.76</td><td class="cell-neg">&minus;23.2R</td><td class="cell-neg">&minus;118.1R</td></tr>
+        <tr><td>1h</td><td>175</td><td>36.6%</td><td class="cell-null">+2.0pp</td><td class="cell-null">0.55</td><td class="cell-null">&minus;2.1R</td><td class="cell-neg">&minus;52.3R</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Plus one, minus two, plus two. A random walk around zero <em>before</em> costs. The last column applies the Binance round-trip figure to every filled signal, and every row goes decisively negative. <strong>Bitcoin is settled: there is nothing here at any timeframe.</strong></p>
+</section>
+
+<section>
+  <h2>Strict gate mode — the rejected build</h2>
+  <p>The same-bar, no-OR-proof rebuild. It demanded that divergence, rejection, cross and confirmation all land on the same event. It was argued for over five sample rounds, and it <strong>lost to the thing it replaced.</strong></p>
+
+  <div class="tbl">
+    <table>
+      <caption>Strict mode against window mode, out of sample</caption>
+      <thead>
+        <tr><th>Sample</th><th>Trades</th><th>Edge</th><th>z</th><th>Net R</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Strict · 30m · 10 instruments</td><td>328</td><td class="cell-null">+0.29pp</td><td class="cell-null">0.11</td><td class="cell-neg">−30.6R</td></tr>
+        <tr><td>Strict · 15m · 9 instruments</td><td>189</td><td class="cell-null">+0.35pp</td><td class="cell-null">0.10</td><td class="thin">—</td></tr>
+        <tr class="pooled"><td>Window · 30m · 7 instruments (pre-fix)</td><td>1,414</td><td class="cell-pos">+2.51pp</td><td class="cell-pos">1.98</td><td class="thin">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Strict mode starves the sample</h3>
+  <p>Re-run fresh on gold, side by side with window mode on identical bars:</p>
+
+  <div class="tbl">
+    <table>
+      <caption>XAUUSD · same chart, same data, gate mode only</caption>
+      <thead>
+        <tr><th>Timeframe</th><th>Mode</th><th>Signals</th><th>Resolved</th><th>Win rate</th><th>Edge</th><th>Total R</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>30m</td><td>Window</td><td>371</td><td>232</td><td>40.9%</td><td class="cell-pos">+6.3pp</td><td class="cell-pos">+41.1R</td></tr>
+        <tr><td>30m</td><td>Strict</td><td class="cell-neg">35</td><td>32</td><td>34.4%</td><td class="cell-null">−0.3pp</td><td class="cell-null">+0.3R</td></tr>
+        <tr><td>15m</td><td>Window</td><td>210</td><td>128</td><td>31.3%</td><td class="cell-neg">−3.2pp</td><td class="cell-neg">−14.1R</td></tr>
+        <tr><td>15m</td><td>Strict</td><td class="cell-neg">22</td><td>21</td><td>38.1%</td><td class="cell-null">+3.6pp</td><td class="cell-null">+2.8R</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>At 32 resolved trades you cannot distinguish a 34% win rate from a 45% one. The stats panel greys its own expectancy row below 20 closed trades for exactly this reason. <strong>Strict mode's readings are not wrong — they are empty.</strong></p>
+
+  <div class="note">
+    <span class="note-k">How to tell which mode you are in</span>
+    <p>Read the dashboard's gate line. <code>Buy gates C-TPx2 3/4</code> is <strong>window mode</strong> — four gates. <code>Buy gates GD-XQx2 4/5</code> is <strong>strict mode</strong> — five. The denominator is the tell.</p>
+  </div>
+</section>
+
+<section>
+  <h2>What any edge has to beat</h2>
+
+  <h3>The noise floor is 6.4 percentage points</h3>
+  <p>The same asset, the same code, the same timeframe, two exchanges:</p>
+  <div class="tbl">
+    <table>
+      <caption>Bitcoin perpetual · 30m · data feed only</caption>
+      <thead><tr><th>Feed</th><th>Win rate</th></tr></thead>
+      <tbody>
+        <tr><td>BTCUSDT.P · Binance</td><td>47.5%</td></tr>
+        <tr><td>BTCUSD.P · Bybit</td><td>41.1%</td></tr>
+        <tr class="pooled"><td>Difference attributable to the feed alone</td><td class="cell-neg">6.4pp</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Any result smaller than this is not a finding. It is which exchange you happened to load.</p>
+
+  <h3>And fifteen looks cost you the rest</h3>
+  <div class="tbl">
+    <table>
+      <caption>Probability of seeing a result this extreme by chance</caption>
+      <thead><tr><th>Result</th><th>|z|</th><th>In one test</th><th>Somewhere in 15 cells</th></tr></thead>
+      <tbody>
+        <tr><td>Best &mdash; window 30m pooled</td><td>2.25</td><td>2.4%</td><td class="cell-neg">31%</td></tr>
+        <tr><td>Worst &mdash; window 1h SPX</td><td>2.75</td><td>0.6%</td><td class="cell-null">8.6%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>A one-in-three chance of producing the headline result from nothing. That is the honest weight of <span class="num">+5.1pp</span> at <span class="num">z&nbsp;2.25</span> after fifteen searches &mdash; not proof of an edge, and not proof there is none. It is <strong>an untested hypothesis that has already used up its discovery sample.</strong></p>
+
+  <h3>Costs vary tenfold by venue</h3>
+  <div class="tbl">
+    <table>
+      <caption>Round-trip transaction cost expressed in R</caption>
+      <thead><tr><th>Venue</th><th>Typical stop</th><th>Cost / trade</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr><td>Binance perpetual</td><td>0.5%</td><td class="cell-neg">0.160R</td><td class="cell-neg">kills it</td></tr>
+        <tr><td>Gold spot CFD</td><td>1.14%</td><td>0.035R</td><td class="cell-pos">survives</td></tr>
+        <tr><td>Index CFD</td><td>—</td><td class="cell-pos">0.013R</td><td class="cell-pos">survives</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Gold at 30m earns <span class="num">+0.11R</span> per trade gross and nets roughly <span class="num">+0.075R</span> after costs. The identical logic on a Binance perpetual gives all of it back and more. <strong>This was never a crypto strategy</strong> — that was a venue problem wearing a strategy's clothes.</p>
+
+  <h3>Where the gates actually open</h3>
+  <ul class="plain">
+    <li>All four window gates open together on <strong>21–42%</strong> of bars, across 13 instruments.</li>
+    <li>PROOF arrives from money flow on <strong>69–77%</strong> of bars, from divergence on only <strong>15–25%</strong>.</li>
+    <li><strong>163 divergences in 12,268 bars.</strong> Divergence was never rare — <em>alignment</em> was the constraint.</li>
+    <li><strong>EURUSD and DXY have no volume feed.</strong> Money flow fires on 0% of bars; all four gates align on 3–5%. Both are excluded from every pooled figure.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>The configuration that produced these numbers</h2>
+  <div class="settings">
+    <div class="srow"><b>Gate Mode</b><span>Window (legacy)</span></div>
+    <div class="srow"><b>Signal Sensitivity</b><span>Strict (all 4)</span></div>
+    <div class="srow"><b>Cap Target</b><span>2.0R</span></div>
+    <div class="srow"><b>Outcome Horizon</b><span>200 bars</span></div>
+    <div class="srow"><b>Opposite Signal Closes Open Trade</b><span>ON</span></div>
+    <div class="srow"><b>Require Efficient Price Movement</b><span>OFF</span></div>
+    <div class="srow"><b>Money Flow Source</b><span>Volume Delta (intrabar)</span></div>
+    <div class="srow"><b>Gate Audit table</b><span>OFF</span></div>
+    <div class="srow"><b>Chart timeframe</b><span>30m</span></div>
+    <div class="srow"><b>Instruments</b><span>Gold &amp; index CFDs</span></div>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Settings drift is real</span>
+    <p>Adding inputs shifts TradingView's saved-value mapping, and a chart can silently come back with the wrong settings on identical bars — gold once read <span class="num">10/23</span> where it should have read <span class="num">11/23</span>. After loading a new build, use <strong>Defaults → Reset settings</strong> before measuring anything.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Reading your own stats panel</h2>
+  <p>Two identities hold by construction, and both are worth checking before you trust a screenshot:</p>
+  <ul class="plain">
+    <li><strong>Total R = (R win + R loss) + (R expired + R flat).</strong> Every <code>LG_REALR</code> write is paired with a bucket write, so a panel that does not reconcile is a misread, not a bug. Gold: <span class="num">178.7 − 137 − 0.6 = +41.1R</span>. ✓</li>
+    <li><strong>Total R ÷ all signals = Expectancy.</strong> Gold: <span class="num">41.1 / 371 = 0.11R</span>. ✓</li>
+    <li><strong>Realised average win can legitimately exceed the 2R cap.</strong> Fills happen at the next bar's open and R is recomputed from the price you actually got, so an adverse open stretches the realised multiple. The minimum-R filter then discards favourable gaps while keeping adverse ones. The average is biased upward by construction.</li>
+    <li>Bar-derived stats — <em>balance break held</em>, <em>CME gaps filled</em>, <em>poor extreme revisited</em> — do not depend on intrabar data. If two runs report these identically, they saw the same bars, and any difference in trade count is coming from settings, not the feed.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Trap Engine &mdash; the second hypothesis, tested properly</h2>
+  <p>A different claim: a level defended twice has resting stops beyond it; price trades through, triggers them, fails to hold, and closes back inside; the traders filled on the break are offside and must exit. <strong>Forced flow, which has a deadline</strong> &mdash; unlike "price away from value returns to value", which has none.</p>
+  <p>Fixed 2R target, so break-even is exactly <span class="num">33.3%</span> everywhere. Same ledger as above: confirmed bars, next-bar-open fills, stop tested before target.</p>
+
+  <div class="note">
+    <span class="note-k">This one was a controlled experiment</span>
+    <p>Unlike every Auction Cipher cell on this page, the Trap Engine was tested with a <strong>control arm</strong>: three charts run twice, identical in every respect except one toggle. That is the difference between an observation and an experiment, and it is why the result below can be believed.</p>
+  </div>
+
+  <h3>Does the order-flow reading add anything?</h3>
+  <div class="tbl">
+    <table>
+      <caption>Matched pairs &mdash; same chart, same period, absorption filter the only difference</caption>
+      <thead><tr><th>Chart</th><th>ON &mdash; N</th><th>ON &mdash; win</th><th>OFF &mdash; N</th><th>OFF &mdash; win</th><th>ON &minus; OFF</th></tr></thead>
+      <tbody>
+        <tr><td>XAUUSD 30m</td><td>52</td><td>30.8%</td><td>130</td><td>30.0%</td><td class="cell-null">+0.8pp</td></tr>
+        <tr><td>XAUUSD 15m</td><td>18</td><td>44.4%</td><td>47</td><td>34.0%</td><td class="cell-null">+10.4pp</td></tr>
+        <tr><td>SPX 30m</td><td>53</td><td>34.0%</td><td>102</td><td>35.3%</td><td class="cell-neg">&minus;1.3pp</td></tr>
+        <tr class="pooled"><td>Pooled</td><td>123</td><td>34.15%</td><td>279</td><td>32.62%</td><td class="cell-null">+1.5pp</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Because the ON sample is a strict subset of OFF, the sharper test compares the trades absorption <em>passed</em> against the ones it <em>rejected</em>: <span class="num">34.15%</span> versus <span class="num">31.41%</span> &mdash; <strong>+2.7pp at z&nbsp;0.48.</strong> The per-pair differences run <span class="num">+0.8</span>, <span class="num">+10.4</span>, <span class="num">&minus;1.3</span>: inconsistent in sign, which is noise rather than a weak real effect.</p>
+  <p><strong>The answer is no.</strong> The order-flow reading does not separate winning traps from losing ones by any amount this sample can detect.</p>
+
+  <h3>And does the trap itself work?</h3>
+  <div class="tbl">
+    <table>
+      <caption>Each arm against its own break-even</caption>
+      <thead><tr><th>Arm</th><th>Resolved</th><th>Win rate</th><th>Edge</th><th>z</th></tr></thead>
+      <tbody>
+        <tr><td>Absorption ON</td><td>123</td><td>34.15%</td><td class="cell-null">+0.8pp</td><td class="cell-null">0.19</td></tr>
+        <tr><td>Absorption OFF</td><td>279</td><td>32.62%</td><td class="cell-null">&minus;0.7pp</td><td class="cell-null">&minus;0.25</td></tr>
+        <tr class="pooled"><td><strong>Every trade measured</strong></td><td><strong>512</strong></td><td>32.62%</td><td class="cell-null">&minus;0.7pp</td><td class="cell-null">&minus;0.34</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">This is a real falsification, not an underpowered shrug</span>
+    <p>Detecting a <span class="num">+5pp</span> edge at two sigma needs about <strong>341</strong> resolved trades. There are <strong>512</strong>. The power was there and the edge was not.</p>
+    <p>The 95% interval on the pooled win rate runs <span class="num">28.6%</span> to <span class="num">36.7%</span>, which <strong>rules out any true edge larger than about +3.3pp.</strong> For the first time in this project the answer is not "too few trades to say" &mdash; it is "we looked with enough trades to see, and it is not there."</p>
+  </div>
+
+  <p>The thresholds were not touched at any point. The 30m-negative / 15m-positive split noticed at four cells did not survive: SPX 30m came back positive and SPX 15m came back at <span class="num">13.3%</span> on 15 trades. Declining to chase that pattern was the right call, and this is what it looks like when a pattern in a small sample was nothing.</p>
+</section>
+
+<section>
+  <h2>Positioning Engine &mdash; the third hypothesis</h2>
+  <p>The only one that reads a data source the other two never touched: <strong>open interest</strong>. Not price, not volume &mdash; how many contracts are actually open, and whether they are being closed by force. A long flush is open interest collapsing on a down bar while longs were crowded: contracts destroyed, not created, and somebody's position closed for them.</p>
+
+  <div class="note warn">
+    <span class="note-k">The first run measured nothing, and was not a result</span>
+    <p>It returned <span class="num">0/0/0</span> on two timeframes. Not a null &mdash; a defect. <em>Require Prior Crowding</em> defaulted ON, crowding is read from the basis, the basis needs a spot symbol, and that input shipped blank meaning OFF. The signal was arithmetically impossible on any symbol out of the box, and the panel said nothing about why. Blank now auto-derives the spot market from the perp ticker, and the dashboard says <code>BLOCKED</code> in red when no signal can fire.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Binance perpetuals, spot basis live, fixed 2R target</caption>
+      <thead><tr><th>Cell</th><th>Resolved</th><th>Win rate</th><th>Edge</th><th>z</th><th>Total R</th></tr></thead>
+      <tbody>
+        <tr><td>ETHUSDT.P 15m</td><td>81</td><td>38.3%</td><td class="cell-null">+4.9pp</td><td class="cell-null">0.94</td><td class="cell-null">+12.0R</td></tr>
+        <tr><td>BTCUSDT.P 15m</td><td>75</td><td>32.0%</td><td class="cell-null">&minus;1.3pp</td><td class="cell-null">&minus;0.24</td><td class="cell-null">&minus;3.0R</td></tr>
+        <tr><td>ETHUSDT.P 30m</td><td>139</td><td>32.4%</td><td class="cell-null">&minus;1.0pp</td><td class="cell-null">&minus;0.24</td><td class="cell-null">&minus;3.9R</td></tr>
+        <tr><td>BTCUSDT.P 30m</td><td>113</td><td>28.3%</td><td class="cell-null">&minus;5.0pp</td><td class="cell-null">&minus;1.13</td><td class="cell-neg">&minus;17.0R</td></tr>
+        <tr class="pooled"><td>Pooled</td><td>408</td><td>32.35%</td><td class="cell-null">&minus;1.0pp</td><td class="cell-null">&minus;0.42</td><td class="cell-null">&minus;11.9R</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>408 resolved trades. The detectable edge at that sample is <span class="num">4.6pp</span>; the 95% interval <strong>rules out any true edge above +3.6pp</strong>. Powered, and empty. The scatter is symmetric again &mdash; best cell <span class="num">+4.9pp</span>, worst <span class="num">&minus;5.0pp</span>, both inside one sigma.</p>
+  <p>And this runs on Binance perpetuals, where the round trip costs about <span class="num">0.16R</span> a trade. That is roughly <span class="num">&minus;65R</span> of friction on top, for a net near <strong>&minus;77R</strong>.</p>
+</section>
+
+<section>
+  <h2>The magnet test &mdash; asking where, not which way</h2>
+  <p>After three hypotheses about <em>direction</em> read zero, this one asks about <em>destination</em>: does price return to structurally-identified levels more than to ordinary ones? Every magnet was registered with a <strong>mirror</strong> &mdash; same distance, same birth price, same instant, opposite side &mdash; so each level is its own control.</p>
+
+  <div class="note warn">
+    <span class="note-k">The finding that reframes everything above</span>
+    <p>The mirror baseline is <strong>76%</strong>. Any level near price gets revisited about three quarters of the time over 200 bars.</p>
+    <p>Which means Auction Cipher's <code>Poor high revisited 80%</code> &mdash; printed on its panel all along, and quoted as encouraging earlier in this session &mdash; was <strong>80% against 76%</strong>. Nothing. That stat had never had a baseline, and neither had the reasoning built on it.</p>
+  </div>
+
+  <h3>Round one: the classifier was broken</h3>
+  <p>The first build classified <span class="num">23</span> extremes POOR out of <span class="num">1,830</span> &mdash; 1.3%. It compared volume in the extreme <em>row</em> against the POC row, which asks whether a distribution's tail is thinner than its mode. The answer is always yes. It measured the shape of a distribution and called it the shape of an auction.</p>
+  <p>Replaced with the textbook definition as a count: how many bars topped within one profile row of the period high. One bar spiking and being rejected is a tail (EXCESS); three or more topping at the same price is an auction that stalled (POOR). The POOR share then landed at 35&ndash;72% across instruments, and the panel now marks itself <code>CLASSIFIER BROKEN</code> below 10%.</p>
+
+  <h3>Round two: the hypothesis got its test</h3>
+  <div class="tbl">
+    <table>
+      <caption>Eight instrument-timeframe cells, 1,567 matched pairs</caption>
+      <thead><tr><th>Test</th><th>N</th><th>Result</th><th>z</th><th>Theory predicted</th></tr></thead>
+      <tbody>
+        <tr><td>POOR vs its own mirror</td><td>724</td><td class="cell-null">+0.1pp</td><td class="cell-null">+0.05</td><td class="thin">clearly positive</td></tr>
+        <tr><td>EXCESS vs its own mirror</td><td>843</td><td class="cell-null">+1.8pp</td><td class="cell-null">+0.79</td><td class="thin">negative</td></tr>
+        <tr class="pooled"><td><strong>POOR vs EXCESS, direction-matched</strong></td><td><strong>1,567</strong></td><td class="cell-neg">&minus;5.4pp</td><td class="cell-neg">&minus;2.25</td><td class="thin">poor &gt; excess</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Poor extremes are revisited <strong>63.5%</strong> of the time; excess extremes <strong>68.9%</strong>. Auction theory says an unfinished auction is revisited <em>more</em> than a finished one. The only significant result on this page points the other way, and both sides agree in sign (highs <span class="num">&minus;7.3pp</span>, lows <span class="num">&minus;3.4pp</span>).</p>
+  <p>Prior POC, VAH, VAL and session gaps all landed within 2pp of their mirrors with signs split across instruments. Session gaps were the cleanest kill of all: <span class="num">86.7%</span> filled against <span class="num">86.7%</span> for the mirror &mdash; <strong>lift exactly zero</strong> on 287 pairs. "Gaps get filled" is true and entirely uninformative.</p>
+
+  <div class="note">
+    <span class="note-k">Two limits I did not design around</span>
+    <p><strong>The mirror does not control for direction.</strong> Magnets above price read <span class="num">&minus;1.3pp</span>, magnets below read <span class="num">+3.2pp</span>. Every instrument in the sample was falling, and a level below a falling market is reached more often than one the same distance above whatever it means. So the mirror test is distance-matched but trend-exposed.</p>
+    <p><strong>The poor-vs-excess test is direction-matched but not distance-matched.</strong> It avoids the trend problem and is the stronger of the two, but poor and excess levels may sit at systematically different distances from price.</p>
+    <p>Neither test supports the hypothesis. One reads null, the other reads backwards. There is no test here under which poor extremes behave like magnets.</p>
+  </div>
+
+  <p>And MAE/D ran 0.5 to 3.1 throughout &mdash; the distance price travelled the wrong way before reaching the level, as a multiple of the distance to it. Even a real lift would have needed a stop wider than its target.</p>
+</section>
+
+<section>
+  <h2>The regime test &mdash; taking the one significant result seriously</h2>
+  <p>The magnet run produced the only two-sigma result in the project: poor extremes revisited <em>less</em> than excess ones, backwards from theory. Rather than discard it, this file took it as a mechanism &mdash; a poor high means the period <strong>closed near its high</strong>, so price was still going; an excess high means a spike that was slammed back, so the market then ranges. Extreme quality as a <em>regime classifier</em>, read upside down.</p>
+  <p>Both extremes vote; only unanimity counts. Resolution is a symmetric race, plus and minus 1 ATR, so the arithmetic null is 50% and no stop, target or cost assumption enters the measurement.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>30-minute charts, 217 calls, drift-adjusted</caption>
+      <thead><tr><th>Instrument</th><th>Calls</th><th>Raw</th><th>Drift said</th><th>Edge</th></tr></thead>
+      <tbody>
+        <tr><td>BTCUSDT.P</td><td>61</td><td>52.5%</td><td class="thin">49.0%</td><td class="cell-null">+3.4pp</td></tr>
+        <tr><td>XAGUSD</td><td>49</td><td>47.0%</td><td class="thin">50.8%</td><td class="cell-null">&minus;3.8pp</td></tr>
+        <tr><td>ETHUSDT.P</td><td>63</td><td>38.1%</td><td class="thin">49.8%</td><td class="cell-neg">&minus;11.8pp</td></tr>
+        <tr><td>XAUUSD</td><td>44</td><td>36.4%</td><td class="thin">51.8%</td><td class="cell-neg">&minus;15.4pp</td></tr>
+        <tr class="pooled"><td>Pooled</td><td>217</td><td>43.8%</td><td class="thin">50.2%</td><td class="cell-neg">&minus;6.4pp  (z &minus;1.90)</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The call is <strong>wrong</strong> more often than drift &mdash; 95 correct against 109 expected. Not quite significant, and one instrument of four went the other way.</p>
+
+  <div class="note">
+    <span class="note-k">The drift column earned its place</span>
+    <p>The four baselines came out at <span class="num">51.6%</span>, <span class="num">53.6%</span>, <span class="num">46.7%</span>, <span class="num">46.9%</span>. None is 50%. Without that column gold's 39.4% up-call accuracy reads as "a bit under half, disappointing" instead of <span class="num">&minus;14.2pp</span>, badly wrong. This was the magnet test's confound, caught at design time rather than discovered afterwards.</p>
+    <p>Call rates ran 23.6&ndash;26.8%, so the classifier was healthy rather than starved &mdash; the failure mode from the previous file did not recur.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Why this is NOT flipped again</span>
+    <p>A <span class="num">&minus;6.4pp</span> edge inverts to <span class="num">+6.4pp</span>, and that is the obvious move. It is not available. This hypothesis was <em>already</em> an inversion of auction theory; flipping once more lands back near the original reading, which four prior measurements had put at zero. The chain is dozens of tests, then one <span class="num">&minus;2.25</span>, then a hypothesis built on it, then a <span class="num">&minus;1.90</span> &mdash; each link a fresh degree of freedom. Inverting a losing rule only pays when the losing is systematic, and at z <span class="num">&minus;1.90</span> with one instrument dissenting it is not established.</p>
+  </div>
+
+  <h3>The two near-significant results contradict each other</h3>
+  <p>The magnet test said poor highs are revisited <em>less</em>, which implies price carries <strong>through</strong> them. The regime test says calling continuation on a poor high is <strong>wrong</strong>, which implies price turns <em>back</em>. Both sit near two sigma and they point in incompatible directions.</p>
+  <p>That is not a puzzle needing a cleverer theory. Two near-two-sigma results that cannot both be true is the signature of many tests run against no signal &mdash; which is exactly what this page has been recording all along.</p>
+</section>
+
+<section>
+  <h2>The session test &mdash; the clock, and an accidental replication</h2>
+  <p>Five hypotheses all derived a view from price and volume structure and every one was blind to the time of day. This asks a different kind of question &mdash; a calendar fact rather than a pattern &mdash; and finally measures <code>IB ext</code>, which Auction Cipher has printed on its dashboard all along without anyone checking whether it means anything.</p>
+
+  <div class="note">
+    <span class="note-k">The instrument validated itself</span>
+    <p>The volatility profile peaks at <strong>12:00&ndash;15:00 UTC on all four instruments</strong> &mdash; the London afternoon / New York morning overlap &mdash; and troughs in the Asian small hours. Textbook, and identical across metals and crypto. The clock is wired correctly, so everything below can be read.</p>
+    <p>IB extension rates came back 56&ndash;80%, all clear of the <code>IB TOO SHORT</code> guard. The initial balance was a real balance, not a formality.</p>
+  </div>
+
+  <h3>Directional seasonality: nothing</h3>
+  <p>Across eight three-hour blocks, <strong>five had metals and crypto pointing in opposite directions.</strong> The two largest apparent effects &mdash; 21:00&ndash;24:00 (metals <span class="num">+5.8</span>, crypto <span class="num">&minus;3.2</span>) and 15:00&ndash;18:00 (metals <span class="num">&minus;4.2</span>, crypto <span class="num">+2.9</span>) &mdash; are exactly the ones that disagree most. And gold/silver are one bet, as are BTC/ETH, so four instruments is really two independent observations.</p>
+
+  <h3>IB extension: run twice, by accident, with one input changed</h3>
+  <div class="tbl">
+    <table>
+      <caption>Does breaking the initial balance signal continuation?</caption>
+      <thead><tr><th>Run</th><th>N</th><th>Pooled edge</th><th>z</th><th>Metals</th><th>Crypto</th></tr></thead>
+      <tbody>
+        <tr><td>A &mdash; longer IB (ext 56&ndash;66%)</td><td>1,081</td><td class="cell-null">+0.17pp</td><td class="cell-null">+0.11</td><td class="cell-null">&minus;1.74</td><td class="cell-null">+1.40</td></tr>
+        <tr><td>B &mdash; shorter IB (ext 78&ndash;80%)</td><td>1,397</td><td class="cell-null">&minus;0.15pp</td><td class="cell-null">&minus;0.11</td><td class="cell-null">+2.64</td><td class="cell-null">&minus;2.07</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Both pooled results are <strong>zero</strong>. Auction theory's claim that extending past the initial balance signals a trend day is not supported on 2,478 measured extensions.</p>
+
+  <div class="note warn">
+    <span class="note-k">The most useful accident in this log</span>
+    <p>Look at the last two columns. In run A metals were negative and crypto positive. In run B <strong>both reversed</strong>. Same instruments, same bars, same code &mdash; one input changed, and every apparent per-asset effect flipped sign.</p>
+    <p>That is a replication test nobody designed, and it is the cleanest evidence on this page that the per-instrument splits appearing throughout &mdash; in the magnet rows, in the regime rows, in the block table &mdash; are noise rather than asset character. A real effect does not invert when you change the length of a lookback window.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The excursion test &mdash; and the answer</h2>
+  <p>Six hypotheses all asked whether <em>this</em> entry is a good entry, and all read zero. That result is consistent with two different worlds. Either there is no money here at this timescale, or there is money and it is not in the entry &mdash; it is in the shape of the distribution, where losses cut at a fixed size and winners that occasionally run very far pay for everything. The second is the oldest claim in trading, and if true it explains all six nulls at once.</p>
+  <p>Entries every ten bars on a timer, no view at all, <strong>long and short from the same bar</strong>, stop at 1 ATR. Then: how far did each run before the stop took it?</p>
+
+  <div class="note">
+    <span class="note-k">Why this one needs no baseline</span>
+    <p>For a driftless random walk with a stop at &minus;1R, the probability of touching +nR first is exactly <strong>1/(1+n)</strong> &mdash; gambler's ruin, arithmetic, not estimated. Two earlier tests were wrecked by getting a measured baseline wrong. This one has nothing to get wrong. And drift is cancelled by construction rather than by correction, because every entry is taken both ways at the same distance.</p>
+  </div>
+
+  <figure class="figure">
+    <div class="scroller"><svg viewBox="0 0 720 320" role="img" aria-label="Observed probability of reaching each R multiple before a 1R stop, plotted against the exact random-walk prediction. The two lie on top of each other at every target from 1R to 12R.">
+<text x="0" y="16" fill="var(--ink)" font-family="var(--sans)" font-size="13" font-weight="600">Reach rate against the exact random-walk null</text>
+<text x="0" y="33" fill="var(--ink-3)" font-family="var(--sans)" font-size="11.5">8,302 timer-based trades, long and short, four instruments</text>
+<line x1="70.0" y1="250.0" x2="660.0" y2="250.0" stroke="var(--rule)" stroke-width="1"></line>
+<text x="62.0" y="254.0" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">0%</text>
+<line x1="70.0" y1="211.8" x2="660.0" y2="211.8" stroke="var(--rule)" stroke-width="1"></line>
+<text x="62.0" y="215.8" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">10%</text>
+<line x1="70.0" y1="173.6" x2="660.0" y2="173.6" stroke="var(--rule)" stroke-width="1"></line>
+<text x="62.0" y="177.6" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">20%</text>
+<line x1="70.0" y1="135.5" x2="660.0" y2="135.5" stroke="var(--rule)" stroke-width="1"></line>
+<text x="62.0" y="139.5" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">30%</text>
+<line x1="70.0" y1="97.3" x2="660.0" y2="97.3" stroke="var(--rule)" stroke-width="1"></line>
+<text x="62.0" y="101.3" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">40%</text>
+<line x1="70.0" y1="59.1" x2="660.0" y2="59.1" stroke="var(--rule)" stroke-width="1"></line>
+<text x="62.0" y="63.1" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">50%</text>
+<polyline points="70.0,59.1 123.6,122.7 177.3,154.5 284.5,186.4 445.5,207.6 660.0,220.6" fill="none" stroke="var(--accent)" stroke-width="3" stroke-dasharray="7 4"></polyline>
+<polyline points="70.0,57.7 123.6,124.3 177.3,154.9 284.5,186.2 445.5,207.8 660.0,220.3" fill="none" stroke="var(--ink-2)" stroke-width="1.5"></polyline>
+<circle cx="70.0" cy="57.7" r="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"></circle>
+<circle cx="123.6" cy="124.3" r="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"></circle>
+<circle cx="177.3" cy="154.9" r="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"></circle>
+<circle cx="284.5" cy="186.2" r="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"></circle>
+<circle cx="445.5" cy="207.8" r="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"></circle>
+<circle cx="660.0" cy="220.3" r="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"></circle>
+<text x="70.0" y="270" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">1R</text>
+<text x="70.0" y="44.7" fill="var(--ink)" font-family="var(--mono)" font-size="10" text-anchor="middle">50.4</text>
+<text x="123.6" y="270" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">2R</text>
+<text x="123.6" y="111.3" fill="var(--ink)" font-family="var(--mono)" font-size="10" text-anchor="middle">32.9</text>
+<text x="177.3" y="270" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">3R</text>
+<text x="177.3" y="141.9" fill="var(--ink)" font-family="var(--mono)" font-size="10" text-anchor="middle">24.9</text>
+<text x="284.5" y="270" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">5R</text>
+<text x="284.5" y="173.2" fill="var(--ink)" font-family="var(--mono)" font-size="10" text-anchor="middle">16.7</text>
+<text x="445.5" y="270" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">8R</text>
+<text x="445.5" y="194.8" fill="var(--ink)" font-family="var(--mono)" font-size="10" text-anchor="middle">11.1</text>
+<text x="660.0" y="270" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">12R</text>
+<text x="660.0" y="207.3" fill="var(--ink)" font-family="var(--mono)" font-size="10" text-anchor="middle">7.8</text>
+<line x1="70.0" y1="250.0" x2="660.0" y2="250.0" stroke="var(--rule-2)" stroke-width="1.5"></line>
+<g font-family="var(--sans)" font-size="11.5">
+<line x1="70.0" y1="292" x2="92.0" y2="292" stroke="var(--accent)" stroke-width="3" stroke-dasharray="7 4"></line>
+<text x="100.0" y="296" fill="var(--ink-2)">random walk, 1/(1+n) &#8212; exact, not estimated</text>
+<circle cx="410.0" cy="292" r="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"></circle>
+<text x="422.0" y="296" fill="var(--ink-2)">observed</text>
+</g>
+</svg></div>
+    <figcaption>Six targets, 8,302 trades. The observed points sit on the analytic curve at every single level &mdash; the largest departure anywhere is <span class="num">0.40pp</span>.</figcaption>
+  </figure>
+
+  <div class="tbl">
+    <table>
+      <caption>Pooled: XAUUSD, XAGUSD, BTCUSDT.P, ETHUSDT.P &middot; 30m</caption>
+      <thead><tr><th>Target</th><th>Observed</th><th>Random walk</th><th>Edge</th><th>z</th><th>Expectancy</th></tr></thead>
+      <tbody>
+        <tr><td>1R</td><td>50.37%</td><td class="thin">50.00%</td><td class="cell-null">+0.37pp</td><td class="cell-null">+0.67</td><td class="cell-null">+0.007R</td></tr>
+        <tr><td>2R</td><td>32.93%</td><td class="thin">33.33%</td><td class="cell-null">&minus;0.40pp</td><td class="cell-null">&minus;0.78</td><td class="cell-null">&minus;0.012R</td></tr>
+        <tr><td>3R</td><td>24.91%</td><td class="thin">25.00%</td><td class="cell-null">&minus;0.09pp</td><td class="cell-null">&minus;0.19</td><td class="cell-null">&minus;0.004R</td></tr>
+        <tr><td>5R</td><td>16.72%</td><td class="thin">16.67%</td><td class="cell-null">+0.05pp</td><td class="cell-null">+0.13</td><td class="cell-null">+0.003R</td></tr>
+        <tr><td>8R</td><td>11.06%</td><td class="thin">11.11%</td><td class="cell-null">&minus;0.05pp</td><td class="cell-null">&minus;0.15</td><td class="cell-null">&minus;0.005R</td></tr>
+        <tr><td>12R</td><td>7.78%</td><td class="thin">7.69%</td><td class="cell-null">+0.09pp</td><td class="cell-null">+0.30</td><td class="cell-null">+0.012R</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The instrument proved itself against a known value</h3>
+  <p>The 1R row came back <span class="num">50.4%</span>, <span class="num">50.5%</span>, <span class="num">50.3%</span>, <span class="num">50.2%</span> on four independent instruments, against a prediction of exactly <span class="num">50.00%</span>. Every other test on this page needed an argument that its baseline was right. This one hit a number known in advance, four times.</p>
+
+  <h3>And the drift is visible, then gone</h3>
+  <div class="tbl">
+    <table>
+      <caption>Long and short reach rates at 1R, before pooling</caption>
+      <thead><tr><th>Instrument</th><th>Long</th><th>Short</th><th>Spread</th><th>Pooled</th></tr></thead>
+      <tbody>
+        <tr><td>XAUUSD</td><td>46.5%</td><td>53.9%</td><td class="cell-neg">&minus;7.4pp</td><td>50.2%</td></tr>
+        <tr><td>XAGUSD</td><td>47.0%</td><td>53.5%</td><td class="cell-neg">&minus;6.5pp</td><td>50.3%</td></tr>
+        <tr><td>BTCUSDT.P</td><td>49.7%</td><td>51.3%</td><td class="cell-null">&minus;1.6pp</td><td>50.5%</td></tr>
+        <tr><td>ETHUSDT.P</td><td>50.7%</td><td>50.1%</td><td class="cell-null">+0.6pp</td><td>50.4%</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Gold fell hard over the sample and it shows: a <span class="num">7.4pp</span> gap between longs and shorts. Pooled, it lands on <span class="num">50.2%</span>. That is the design working &mdash; the confound that ruined the magnet test is here, plainly visible, and cancelled exactly.</p>
+
+  <div class="note warn">
+    <span class="note-k">What this settles</span>
+    <p>There is no fat right tail. <strong>"Cut losses, let winners run" has an expectancy of zero here</strong> &mdash; not small, not marginal, zero to three decimal places at every target from 1R to 12R.</p>
+    <p>So it is the first world, not the second. The six hypotheses found nothing because <em>there is nothing at this timescale to find</em>, not because their entries were poor. On stop-anchored excursions, 30-minute gold, silver, Bitcoin and Ethereum are indistinguishable from a coin flip with a ruler.</p>
+    <p>This is not another null on the pile. It is the result that explains the pile.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Setup excursion &mdash; the objection, tested</h2>
+  <p>The excursion test entered on a timer, and the obvious objection was raised: <em>a timer is not a setup. Nobody waits for a bar count. They wait for a swing failure, a sweep, an inducement.</em> That objection was correct, and the conclusion drawn from the timer run &mdash; that it explained the six nulls &mdash; was too strong. The unconditional distribution being random-walk means subsets must <strong>average</strong> to it, not that every subset is random.</p>
+  <p>So the same machinery was pointed at conditioned entries, with the timer running in the same bars to supply a baseline <strong>blended to each bucket's own long/short mix</strong>.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Edge vs direction-matched random entries &middot; four instruments &middot; 30m</caption>
+      <thead><tr><th>Bucket</th><th>N</th><th>2R</th><th>3R</th><th>5R</th><th>8R</th><th>12R</th></tr></thead>
+      <tbody>
+        <tr><td>SFP &mdash; sweep and close back inside</td><td>4,356</td><td class="cell-null">&minus;1.9</td><td class="cell-neg">&minus;2.5</td><td class="cell-null">&minus;1.2</td><td class="cell-null">&minus;1.3</td><td class="cell-null">&minus;0.9</td></tr>
+        <tr><td>+REJ &mdash; and a real rejection candle</td><td>2,082</td><td class="cell-null">&minus;0.1</td><td class="cell-null">&minus;0.6</td><td class="cell-null">&minus;0.8</td><td class="cell-null">&minus;1.5</td><td class="cell-null">&minus;1.2</td></tr>
+        <tr><td>+HTF &mdash; and at a prior-day extreme</td><td>247</td><td class="cell-neg">&minus;3.4</td><td class="cell-null">&minus;1.9</td><td class="cell-neg">&minus;3.8</td><td class="cell-null">&minus;1.4</td><td class="cell-null">&minus;1.8</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Waiting for the setup made it worse.</strong> Eighteen of twenty SFP cells are negative: swing-failure entries reached every target <em>less</em> often than random entries in the same market. And there is no dose-response &mdash; <span class="num">&minus;1.9</span>, then <span class="num">&minus;0.1</span>, then <span class="num">&minus;3.4</span>. Stacking conditions did not help.</p>
+
+  <div class="note">
+    <span class="note-k">A mechanism that fits the shape</span>
+    <p>The SFP row is worst at the near targets and least bad at the far one. That is what entries killed by <em>noise</em> look like, rather than entries wrong about direction. A swing failure puts you at a local extreme with a stop just beyond it &mdash; precisely where the market has just demonstrated it can trade. The obvious stop is where the next wick goes.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">The green cell, and why it was not kept</span>
+    <p><code>+HTF</code> on gold reads <span class="num">+10.4</span> at 5R, the only green row produced all session. It is also N=61, against <span class="num">&minus;5.5</span>, <span class="num">&minus;10.7</span> and <span class="num">&minus;9.1</span> on the same condition elsewhere &mdash; a 21-point spread where the detectable edge is <span class="num">&plusmn;4.7pp</span>.</p>
+    <p>Twenty cells, one instrument pops. That is the identical shape as the <span class="num">+5.1pp</span> at <span class="num">z&nbsp;2.25</span> defended at length earlier in this same log, and the IB replication had already shown per-instrument splits reversing on a single changed input. Banking it would have been repeating the day's first mistake at the end of the day.</p>
+  </div>
+
+  <p><strong>Not tested:</strong> inducement &mdash; the two-stage grab where price takes minor liquidity first and only then sweeps the real level. Swing failure and liquidity sweep were folded together here because at 30 minutes they are the same event. The two-stage version remains open, and defining it mechanically means choices that become free parameters.</p>
+</section>
+
+<section>
+  <h2>Edge Lab &mdash; one harness, and the mirror</h2>
+  <p>Nine hypotheses had each brought their own baseline, and two had been wrecked by getting it wrong. So the tenth brought none. <strong>Every signal opens its own opposite</strong> &mdash; when a swept high fires a short, a long opens on the same bar, at the same distance, with the same stop.</p>
+  <p>The mirror shares the entry bar, so it shares the drift, the volatility regime, the session, the news and the position in the trend. Anything that is a property of the <em>moment</em> rather than the <em>signal</em> helps both sides equally and cancels in the difference. <code>LIFT* = signal &minus; mirror</code> is the only column on the panel that is hard to fake.</p>
+
+  <figure class="figure">
+    <div class="key">
+      <span><i class="kd kd-neg"></i>Clears the noise floor downward &mdash; sweeps followed</span>
+      <span><i class="kd kd-null"></i>Inside the noise floor</span>
+      <span><i class="kd kd-pos"></i>Clears it upward &mdash; sweeps faded</span>
+    </div>
+    <div class="scroller"><svg viewBox="0 0 760 538" role="img" aria-label="Sweep lift by instrument with 95 percent intervals. Nine of fourteen instruments fall inside the 6.4 point noise floor; the pooled random-effects estimate is minus 3.0 points with an interval that reaches zero.">
+<text x="0" y="18" fill="var(--ink)" font-family="var(--sans)" font-size="13" font-weight="600">Sweep lift against its own mirror, by instrument</text>
+<text x="0" y="36" fill="var(--ink-3)" font-family="var(--sans)" font-size="11.5">LIFT* at a 2R target &#183; 30-minute charts &#183; 4,846 sweeps &#183; bars are 95% intervals</text>
+<rect x="370.2" y="62" width="169.6" height="438" fill="var(--null-soft)"></rect>
+<line x1="190.0" y1="62" x2="190.0" y2="500" stroke="var(--rule)" stroke-width="1"></line><text x="190.0" y="76" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">-20</text><line x1="322.5" y1="62" x2="322.5" y2="500" stroke="var(--rule)" stroke-width="1"></line><text x="322.5" y="76" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">-10</text><line x1="587.5" y1="62" x2="587.5" y2="500" stroke="var(--rule)" stroke-width="1"></line><text x="587.5" y="76" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">+10</text><line x1="720.0" y1="62" x2="720.0" y2="500" stroke="var(--rule)" stroke-width="1"></line><text x="720.0" y="76" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">+20</text>
+<line x1="455.0" y1="62" x2="455.0" y2="500" stroke="var(--rule-2)" stroke-width="1.5"></line>
+<text x="455.0" y="76" fill="var(--ink-2)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">0</text>
+<text x="176" y="90" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">XAUUSD</text><line x1="226.2" y1="86" x2="421.5" y2="86" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="323.8" cy="86" r="5" fill="var(--neg)"></circle><text x="738" y="90" fill="var(--neg)" font-family="var(--mono)" font-size="11" text-anchor="end">-9.9</text><text x="176" y="117" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">XPTUSD</text><line x1="228.0" y1="113" x2="424.9" y2="113" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="326.5" cy="113" r="5" fill="var(--neg)"></circle><text x="738" y="117" fill="var(--neg)" font-family="var(--mono)" font-size="11" text-anchor="end">-9.7</text><text x="176" y="144" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">BTCUSDT.P</text><line x1="262.7" y1="140" x2="427.3" y2="140" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="345.0" cy="140" r="5" fill="var(--neg)"></circle><text x="738" y="144" fill="var(--neg)" font-family="var(--mono)" font-size="11" text-anchor="end">-8.3</text><text x="176" y="171" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">GBPJPY</text><line x1="270.7" y1="167" x2="467.0" y2="167" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="368.9" cy="167" r="5" fill="var(--neg)"></circle><text x="738" y="171" fill="var(--neg)" font-family="var(--mono)" font-size="11" text-anchor="end">-6.5</text><text x="176" y="198" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">NAS100USD</text><line x1="277.5" y1="194" x2="462.9" y2="194" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="370.2" cy="194" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="198" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">-6.4</text><text x="176" y="225" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">SOLUSDT.P</text><line x1="306.6" y1="221" x2="465.6" y2="221" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="386.1" cy="221" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="225" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">-5.2</text><text x="176" y="252" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">BRENT</text><line x1="287.4" y1="248" x2="487.4" y2="248" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="387.4" cy="248" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="252" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">-5.1</text><text x="176" y="279" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">XAGUSD</text><line x1="286.7" y1="275" x2="493.4" y2="275" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="390.1" cy="275" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="279" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">-4.9</text><text x="176" y="306" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">WTICOUSD</text><line x1="301.5" y1="302" x2="499.9" y2="302" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="400.7" cy="302" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="306" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">-4.1</text><text x="176" y="333" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">EURUSD</text><line x1="343.5" y1="329" x2="534.7" y2="329" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="439.1" cy="329" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="333" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">-1.2</text><text x="176" y="360" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">ETHUSDT.P</text><line x1="415.3" y1="356" x2="579.5" y2="356" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="497.4" cy="356" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="360" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">+3.2</text><text x="176" y="387" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">LINKUSDT.P</text><line x1="433.0" y1="383" x2="588.3" y2="383" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="510.6" cy="383" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="387" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">+4.2</text><text x="176" y="414" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">USDJPY</text><line x1="412.6" y1="410" x2="616.7" y2="410" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="514.6" cy="410" r="5" fill="var(--surface)" stroke="var(--null)" stroke-width="2"></circle><text x="738" y="414" fill="var(--null)" font-family="var(--mono)" font-size="11" text-anchor="end">+4.5</text><text x="176" y="441" fill="var(--ink-2)" font-family="var(--sans)" font-size="11.5" text-anchor="end">SPX</text><line x1="453.8" y1="437" x2="702.6" y2="437" stroke="var(--rule-2)" stroke-width="1.5"></line><circle cx="578.2" cy="437" r="5" fill="var(--pos)"></circle><text x="738" y="441" fill="var(--pos)" font-family="var(--mono)" font-size="11" text-anchor="end">+9.3</text><line x1="190" y1="473" x2="720" y2="473" stroke="var(--rule-2)" stroke-width="1"></line><text x="176" y="490" fill="var(--ink)" font-family="var(--sans)" font-size="11.5" font-weight="600" text-anchor="end">POOLED (random effects)</text><line x1="362.1" y1="486" x2="468.6" y2="486" stroke="var(--ink-2)" stroke-width="2.5"></line><rect x="410.4" y="481" width="10" height="10" fill="var(--ink)"></rect><text x="738" y="490" fill="var(--ink)" font-family="var(--mono)" font-size="11" font-weight="600" text-anchor="end">&#8722;3.0</text>
+<text x="455.0" y="524" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">shaded band = the 6.4pp data-feed noise floor</text>
+</svg></div>
+    <figcaption>Nine of fourteen instruments sit entirely inside the noise floor. Four clear it downward, one upward &mdash; and <strong>SPX at <span class="num">+9.3</span> is almost exactly gold&rsquo;s <span class="num">&minus;9.9</span> with the sign reversed.</strong> The spread between instruments (<span class="num">&tau;&nbsp;=&nbsp;4.4pp</span>) is larger than the pooled estimate itself.</figcaption>
+  </figure>
+
+  <div class="tbl">
+    <table>
+      <caption>Fourteen instruments &middot; four asset classes &middot; sweep vs mirror at 2R</caption>
+      <thead><tr><th>Instrument</th><th>Sweeps</th><th>LIFT*</th><th>z*</th><th>Smallest lift it could resolve</th></tr></thead>
+      <tbody>
+        <tr><td>XAUUSD</td><td>303</td><td class="cell-neg">&minus;9.6pp</td><td class="cell-neg">&minus;2.53</td><td class="thin">14.5pp</td></tr>
+        <tr><td>XPTUSD</td><td>304</td><td class="cell-neg">&minus;9.4pp</td><td class="cell-neg">&minus;2.47</td><td class="thin">14.5pp</td></tr>
+        <tr><td>BTCUSDT.P</td><td>445</td><td class="cell-neg">&minus;8.2pp</td><td class="cell-neg">&minus;2.60</td><td class="thin">12.1pp</td></tr>
+        <tr><td>GBPJPY</td><td>326</td><td class="cell-null">&minus;6.5pp</td><td class="cell-null">&minus;1.73</td><td class="thin">14.5pp</td></tr>
+        <tr><td>NAS100USD</td><td>342</td><td class="cell-null">&minus;6.4pp</td><td class="cell-null">&minus;1.80</td><td class="thin">13.7pp</td></tr>
+        <tr><td>SOLUSDT.P</td><td>480</td><td class="cell-null">&minus;5.2pp</td><td class="cell-null">&minus;1.71</td><td class="thin">11.8pp</td></tr>
+        <tr><td>BRENT</td><td>291</td><td class="cell-null">&minus;5.1pp</td><td class="cell-null">&minus;1.33</td><td class="thin">14.8pp</td></tr>
+        <tr><td>XAGUSD</td><td>285</td><td class="cell-null">&minus;4.9pp</td><td class="cell-null">&minus;1.23</td><td class="thin">15.2pp</td></tr>
+        <tr><td>WTICOUSD</td><td>294</td><td class="cell-null">&minus;4.1pp</td><td class="cell-null">&minus;1.08</td><td class="thin">14.7pp</td></tr>
+        <tr><td>EURUSD</td><td>335</td><td class="cell-null">&minus;1.2pp</td><td class="cell-null">&minus;0.32</td><td class="thin">14.1pp</td></tr>
+        <tr><td>ETHUSDT.P</td><td>438</td><td class="cell-null">+3.2pp</td><td class="cell-null">+1.00</td><td class="thin">12.2pp</td></tr>
+        <tr><td>LINKUSDT.P</td><td>497</td><td class="cell-null">+4.2pp</td><td class="cell-null">+1.41</td><td class="thin">11.5pp</td></tr>
+        <tr><td>USDJPY</td><td>314</td><td class="cell-null">+4.5pp</td><td class="cell-null">+1.15</td><td class="thin">15.0pp</td></tr>
+        <tr><td>SPX</td><td>195</td><td class="cell-pos">+9.3pp</td><td class="cell-null">+1.95</td><td class="thin">18.4pp</td></tr>
+        <tr class="pooled"><td>Pooled &mdash; fixed effect</td><td>4,850</td><td class="cell-neg">&minus;2.95pp</td><td class="cell-neg">&minus;3.07</td><td class="thin">&mdash;</td></tr>
+        <tr class="pooled"><td>Pooled &mdash; random effects</td><td>4,850</td><td class="cell-null">&minus;2.94pp</td><td class="cell-null">&minus;1.95</td><td class="thin">CI [&minus;5.9, +0.0]</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">The fixed-effect z crossed the bar. It should not be believed.</span>
+    <p><span class="num">&minus;3.07</span> clears the <span class="num">3.0</span> threshold this panel enforces, and it is wrong twice over. <span class="num">I&sup2;</span> is <strong>59%</strong>, so the fixed-effect model does not apply &mdash; the instruments are not measuring one common quantity. And the standard errors are too small, for the reason in the independence section below.</p>
+    <p>Under the correct random-effects model the same data reads <span class="num">&minus;2.94pp, z&nbsp;&minus;1.95</span>, with an interval that touches zero exactly. The between-instrument spread is <span class="num">&tau;&nbsp;=&nbsp;4.3pp</span> &mdash; larger than the average it surrounds &mdash; and the 95% prediction interval for an instrument not yet measured runs from <span class="num">&minus;12.8pp</span> to <span class="num">+6.9pp</span>. <strong>Knowing the average buys nothing; you would have to know this instrument's sign.</strong></p>
+  </div>
+
+  <h3>Two corrections that changed nothing, and one that mattered</h3>
+  <p>The raw lift cancels drift only when a bucket is direction-<em>balanced</em>. A bucket that is mostly short signals has a mirror set that is mostly long, so a trending sample separates them with no signal present: <code>raw LIFT = signal + skew &times; drift</code>. <code>LIFT*</code> removes it by computing the lift separately inside the long-signal and short-signal strata and averaging &mdash; under pure drift the two are equal and opposite, so it is exactly zero at any mix.</p>
+  <p>Simulation confirmed it: drift <span class="num">&theta;&nbsp;=&nbsp;0.5</span> into a 90/10 skewed bucket with nothing planted gives a raw lift of <span class="num">&minus;25.6pp</span> and a <code>LIFT*</code> of <span class="num">0.0</span>. Then the <code>L/S</code> column showed every 30-minute sweep bucket was already balanced &mdash; gold <span class="num">152/150</span>, ETH <span class="num">221/217</span> &mdash; so across all fourteen it changed nothing, and this page recorded it as a guarantee rather than a repair.</p>
+  <p><strong>The 4-hour run corrected that.</strong> See the timescale section below: at 4h the drift is <span class="num">+10.9pp</span> and the bucket is skewed <span class="num">83/106</span>, and the correction removes exactly the artefact the algebra predicts.</p>
+</section>
+
+<section>
+  <h2>Power &mdash; what every null on this page could actually have seen</h2>
+  <p>Every null in this log came off a few hundred trades, and not one of them ever stated what it was capable of detecting. They should have. The smallest lift a sample can resolve, at this panel's own <span class="num">z</span> bar and 80% power, is <code>MDL = (3.0 + 0.84) &times; se</code>.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Minimum detectable lift, by sample, at 2R</caption>
+      <thead><tr><th>Test</th><th>N</th><th>Smallest lift visible</th><th>Verdict it was entitled to</th></tr></thead>
+      <tbody>
+        <tr><td>Excursion test (timer)</td><td>8,302</td><td class="cell-pos">2.8pp</td><td class="thin">a real null</td></tr>
+        <tr><td>Setup excursion (SFP)</td><td>4,356</td><td class="cell-pos">3.9pp</td><td class="thin">a real null</td></tr>
+        <tr><td>Trap Engine</td><td>512</td><td class="cell-null">11.3pp</td><td class="cell-null">large effects only</td></tr>
+        <tr><td>BTC sweep</td><td>444</td><td class="cell-null">12.1pp</td><td class="cell-null">large effects only</td></tr>
+        <tr><td>Positioning Engine</td><td>408</td><td class="cell-null">12.7pp</td><td class="cell-null">large effects only</td></tr>
+        <tr><td>Regime test</td><td>217</td><td class="cell-neg">17.4pp</td><td class="cell-neg">essentially nothing</td></tr>
+        <tr><td>Gold INDUCED bucket</td><td>115</td><td class="cell-neg">23.9pp</td><td class="cell-neg">essentially nothing</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">At gold&rsquo;s N, a real 6.4pp edge is found 9% of the time</span>
+    <p>Simulated directly: <span class="num">N&nbsp;=&nbsp;302</span>, a genuine <span class="num">6.4pp</span> effect planted, detection probability at the <span class="num">z&nbsp;=&nbsp;3</span> bar &mdash; <strong>9.3%</strong>. Not ninety. Nine. At <span class="num">N&nbsp;=&nbsp;976</span> it is 47%; you need about <strong>1,600</strong> trades for a fair chance and <strong>4,100</strong> to resolve a 4pp effect.</p>
+    <p>So the small-sample nulls in this log &mdash; trap, positioning, regime, inducement &mdash; ruled out effects of <strong>12 to 25pp and nothing smaller</strong>. That is a far weaker claim than &ldquo;no edge&rdquo;, and none of those panels said so. The two large-sample tests are the exceptions: the excursion runs genuinely had the resolution to say what they said, which is why they remain the solid results here.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Independence and persistence &mdash; the last two things that were wrong</h2>
+
+  <h3>The trades were never independent</h3>
+  <p>Sweeps arrive about 28 bars apart while a trade can live 200, so several are always open on the same stretch of price. The binomial standard error counts them as separate observations. They are not.</p>
+  <p>The two direction-arms inside a single instrument measure the damage: under independence they should disagree by exactly sampling error, <code>Q/df = 1</code>. Measured across fourteen instruments: <strong>1.68</strong>. That is a <span class="num">1.3&times;</span> standard-error understatement applied to every <span class="num">z</span> on this page &mdash; and it is precisely what drags the fixed-effect pooled <span class="num">z</span> from <span class="num">&minus;3.12</span> to <span class="num">&minus;2.40</span>, back under the bar it appeared to clear.</p>
+  <p>The fix is construction, not a factor: a second tally admits only a chain of trades that never overlap, so the next one starts after the last is fully resolved. Those are independent by definition and their <span class="num">z</span> needs no correction. N collapses &mdash; which is the point, and is what the nominal N had been borrowing against.</p>
+
+  <h3>And the effect does not survive the chart being cut in half</h3>
+  <p>Each trade is stamped with the half of the chart it opened in, at <code>last_bar_index / 2</code>, so the cut is fixed before any result is seen. The five largest effects were tested:</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Full sample against non-overlapping trades and against each half</caption>
+      <thead><tr><th>Instrument</th><th>Full</th><th>No overlap</th><th>1st half</th><th>2nd half</th><th>diff z</th><th></th></tr></thead>
+      <tbody>
+        <tr><td>XAUUSD</td><td class="cell-neg">&minus;9.6</td><td class="cell-neg">&minus;15.3</td><td class="cell-null">+1.3</td><td class="cell-neg">&minus;19.5</td><td class="cell-neg">2.77</td><td class="cell-neg">FLIPS</td></tr>
+        <tr><td>GBPJPY</td><td class="cell-null">&minus;6.3</td><td class="cell-null">&minus;5.2</td><td class="cell-null">+3.5</td><td class="cell-neg">&minus;19.8</td><td class="cell-neg">3.16</td><td class="cell-neg">FLIPS</td></tr>
+        <tr><td>XPTUSD</td><td class="cell-neg">&minus;9.4</td><td class="cell-null">&minus;4.2</td><td class="cell-neg">&minus;13.8</td><td class="cell-null">&minus;3.7</td><td class="cell-null">1.34</td><td class="thin">stable</td></tr>
+        <tr><td>BTCUSDT.P</td><td class="cell-neg">&minus;8.2</td><td class="cell-null">&minus;6.9</td><td class="cell-neg">&minus;9.1</td><td class="cell-null">&minus;7.8</td><td class="cell-null">0.20</td><td class="thin">stable</td></tr>
+        <tr><td>NAS100USD</td><td class="cell-null">&minus;6.3</td><td class="cell-null">&minus;0.9</td><td class="cell-null">&minus;4.0</td><td class="cell-null">&minus;7.8</td><td class="cell-null">0.54</td><td class="thin">stable</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Two of five flip, and that is not chance.</strong> At the 5% level you would expect <span class="num">0.25</span> of five; two gives <span class="num">p&nbsp;=&nbsp;0.023</span>. So the effect varies <em>within</em> an instrument across time, on top of varying <em>between</em> instruments. And not in a common direction &mdash; gold and GBPJPY both run weak&rarr;strong, platinum runs strong&rarr;weak &mdash; so it is not a calendar regime anyone could learn and lean on.</p>
+
+  <p>Gold&rsquo;s <span class="num">&minus;9.7</span> lives entirely in the second half of its chart; the first half is <span class="num">+1.3</span>, which is nothing. That number was called the most dangerous on the board when it appeared, and it was. Note also that gold&rsquo;s non-overlap column looked <em>encouraging</em> at <span class="num">&minus;15.3</span> &mdash; drawn from the same second half. <strong>The independence check cannot catch a regime; only the split can.</strong></p>
+
+  <div class="note warn">
+    <span class="note-k">A number this log is disqualifying rather than publishing</span>
+    <p>Pooling only the non-overlapping trades across those five gives <span class="num">&minus;6.32pp</span>, <span class="num">se&nbsp;2.93</span>, 95% CI <span class="num">[&minus;12.1,&nbsp;&minus;0.6]</span> &mdash; excluding zero, on 524 trades that never shared a bar. It is the cleanest-looking figure produced all session and it is worthless: <strong>those five instruments are the five most negative of the fourteen.</strong> Selected on the outcome then measured for it. It is recorded here because the version of this page that published it would have looked more impressive, not more true.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The timescale test &mdash; and the correction that finally mattered</h2>
+  <p>Everything above is 30-minute. Raising the timeframe was the one remaining question that would be a fresh test rather than another look at the same data, so gold was run at 4 hours: <span class="num">5,744</span> bars, about two and a half years.</p>
+
+  <h3>A higher timeframe strictly loses sample</h3>
+  <div class="tbl">
+    <table>
+      <caption>XAUUSD &middot; sweeps per bar, and what that buys</caption>
+      <thead><tr><th>Chart</th><th>Bars</th><th>Sweeps</th><th>Rate</th><th>Smallest lift resolvable</th></tr></thead>
+      <tbody>
+        <tr><td>30 minutes</td><td>8,413</td><td>303</td><td class="thin">1 per 27.8 bars</td><td class="cell-null">14.7pp</td></tr>
+        <tr><td>4 hours</td><td>5,744</td><td>189</td><td class="thin">1 per 30.4 bars</td><td class="cell-neg">18.6pp</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The sweep rate is close to <strong>scale-invariant</strong> &mdash; about one per thirty bars either way &mdash; so sample size is driven purely by how many bars the platform will load, and it loads fewer at 4h. The test gets <em>weaker</em> going up, not stronger. Resolving the noise floor at 4h would take roughly <strong>22 years</strong> of gold.</p>
+  <p>The effect itself reads <span class="num">&minus;4.2pp, z&nbsp;&minus;0.86</span> &mdash; the same size as the pooled 30-minute figure, and just as unprovable. Its two direction-arms disagree violently (<span class="num">+4.8</span> long, <span class="num">&minus;13.2</span> short), which at <span class="num">N&nbsp;=&nbsp;189</span> is what noise looks like. The non-overlap row prints a dramatic <span class="num">&minus;21.0pp</span> on <strong>62 trades against an MDL of 32pp</strong>: exactly the kind of number that would have been the headline of this page before correction 7 existed.</p>
+
+  <div class="note">
+    <span class="note-k">Correction 6 was mis-filed, and this is the retraction</span>
+    <p>At 4h the drift is <span class="num">+10.9pp</span> &mdash; the largest measured anywhere in this project, and gold&rsquo;s multi-year bull market showing through &mdash; while the sweep bucket is skewed <span class="num">83/106</span> toward shorts. That is precisely the condition <code>LIFT*</code> was built for, and it had never actually occurred until now.</p>
+    <p>The algebra says the raw lift should carry <code>skew &times; drift = &minus;0.122 &times; 10.9 = &minus;1.33pp</code> of pure artefact. Observed: raw <span class="num">&minus;5.3</span> against <code>LIFT*</code> <span class="num">&minus;4.2</span>, a difference of <span class="num">&minus;1.11pp</span>. <strong>The correction removes what the arithmetic predicts it should, to within a fifth of a point.</strong></p>
+    <p>So it is a repair, not merely a guarantee, and the entry in the table below is corrected accordingly. Twenty-six percent of this 4-hour result would have been drift wearing a signal&rsquo;s clothes.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Resolution &mdash; the certificate that turned out to be weak</h2>
+  <p>Bitcoin was the one instrument left standing: <span class="num">&minus;8.2pp</span> at 30 minutes, stable across both halves of its chart (<span class="num">&minus;9.1</span> then <span class="num">&minus;7.8</span>), same sign on non-overlapping trades. It failed only on cost. Then the same code was pointed at the same instrument at <strong>15 minutes</strong>.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>BTCUSDT.P &middot; one instrument, two adjacent bar sizes</caption>
+      <thead><tr><th>Chart</th><th>N</th><th>LIFT*</th><th>z*</th><th>1st half</th><th>2nd half</th><th>Persistence</th></tr></thead>
+      <tbody>
+        <tr><td>30 minutes</td><td>444</td><td class="cell-neg">&minus;8.2pp</td><td class="cell-neg">&minus;2.60</td><td class="cell-neg">&minus;9.1</td><td class="cell-neg">&minus;7.8</td><td class="cell-pos">passes</td></tr>
+        <tr><td>15 minutes</td><td>262</td><td class="cell-pos">+8.5pp</td><td class="cell-pos">+2.04</td><td class="cell-pos">+15.6</td><td class="cell-pos">+2.6</td><td class="cell-pos">passes</td></tr>
+        <tr class="pooled"><td><strong>Difference</strong></td><td>&mdash;</td><td class="cell-neg"><strong>16.7pp</strong></td><td class="cell-neg"><strong>+3.20</strong></td><td class="thin">&mdash;</td><td class="thin">&mdash;</td><td class="cell-neg">contradiction</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">The largest z in this project is a contradiction, not a result</span>
+    <p>Nearly equal magnitude, opposite sign, same instrument, same code. The gap between them is <span class="num">z&nbsp;=&nbsp;3.20</span> &mdash; <strong>it clears the 3.0 bar that no actual finding on this page ever reached.</strong></p>
+    <p>And it is not a period artefact. The 15-minute chart spans 79 days, which sits <em>inside</em> the 30-minute chart's second half. Over roughly the same calendar window the 30-minute data says <span class="num">&minus;7.8pp</span> and the 15-minute data says <span class="num">+8.4pp</span>. Same market, same days, different sampling rate, opposite answer.</p>
+    <p><strong>Both cells pass split-half persistence individually.</strong> That is the part that matters: correction 10 tests whether an effect is stable in <em>time</em>, and it says yes to both of these. It cannot see that they disagree with each other.</p>
+  </div>
+
+  <p>So the persistence certificate is weaker than this page treated it two revisions ago. A sweep is supposed to be a feature of the market &mdash; resting stops taken, participants trapped. If it were, halving the bar size would not invert it.</p>
+
+  <h3>Then gold was run at four bar sizes, and gave a cleaner answer</h3>
+  <div class="tbl">
+    <table>
+      <caption>The same code at every bar size, both instruments</caption>
+      <thead><tr><th>Chart</th><th>N</th><th>XAUUSD</th><th>N</th><th>BTCUSDT.P</th></tr></thead>
+      <tbody>
+        <tr><td>5 minutes</td><td>208</td><td class="cell-null">+3.9pp</td><td class="thin">&mdash;</td><td class="thin">&mdash;</td></tr>
+        <tr><td>15 minutes</td><td>213</td><td class="cell-null">+4.6pp</td><td>262</td><td class="cell-null">+8.4pp</td></tr>
+        <tr><td>30 minutes</td><td>303</td><td class="cell-null">&minus;9.6pp</td><td>445</td><td class="cell-null">&minus;8.2pp</td></tr>
+        <tr><td>1 hour</td><td>347</td><td class="cell-null">&minus;3.8pp</td><td>234</td><td class="cell-null">&minus;5.1pp</td></tr>
+        <tr><td>4 hours</td><td>189</td><td class="cell-null">&minus;4.2pp</td><td>212</td><td class="cell-null">&minus;7.1pp</td></tr>
+        <tr class="pooled"><td>homogeneity across bar sizes</td><td class="thin">&mdash;</td><td class="cell-pos">Q 8.0 / 4 df &mdash; flat</td><td class="thin">&mdash;</td><td class="cell-neg">Q 11.4 / 3 df &mdash; not flat</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Retraction: the &ldquo;lone spike&rdquo; reading did not survive the 1-hour cell</span>
+    <p>An earlier revision of this page recorded gold&rsquo;s <span class="num">&minus;9.6pp</span> at 30 minutes as <em>&ldquo;a single spike between near-zero neighbours&rdquo;</em>, and invoked this log&rsquo;s own isolated-spike diagnostic against it. That was written with a gap in the ladder where 1 hour should have been.</p>
+    <p>With 1 hour measured at <span class="num">&minus;3.8pp</span>, gold&rsquo;s five bar sizes test <strong>flat</strong>: <span class="num">Q&nbsp;=&nbsp;8.0</span> on 4 df against a critical value of 9.49. The 30-minute cell sits <span class="num">1.84&sigma;</span> from gold&rsquo;s own mean, which is not a spike. The ladder is consistent with one common value near <span class="num">&minus;2.6pp</span> &mdash; which is also, to within rounding, the fourteen-instrument pooled figure.</p>
+    <p>Bitcoin is the instrument whose ladder is <em>not</em> flat (<span class="num">Q&nbsp;11.4</span> on 3 df against 7.81), and its odd cell is <strong>15 minutes at <span class="num">+8.4pp</span></strong>, <span class="num">2.92&sigma;</span> from its own mean &mdash; not 30 minutes, as the earlier framing had it.</p>
+  </div>
+
+  <div class="note">
+    <span class="note-k">Why these columns are not pooled</span>
+    <p>Bar sizes on one instrument are the same price history resampled, not independent samples of it. They can legitimately be tested for <em>agreement</em>, which is what Q does here. They must not be pooled for significance, which would count the same days three times over.</p>
+  </div>
+
+  <p>One caveat that cuts against reading too much into the ladder itself: the four charts are <strong>four different experiments, not four views of one</strong>. The stop is 1 ATR <em>of that timeframe</em> and the horizon is 200 bars <em>of that timeframe</em>, so bar size, stop size and holding window all move together &mdash; 50 hours at 15m against 800 at 4h. Nothing is held fixed. The inversion between 15m and 30m replicates on both gold and Bitcoin (combined <span class="num">z&nbsp;3.95</span>), but what it establishes is that <strong>the sign of the answer is set by the parameterisation</strong>, not that the market changes character at 30 minutes. Either way it is fatal: an effect that inverts when you change a chart setting is a parameter choice, not an edge.</p>
+
+  <div class="note">
+    <span class="note-k">The project has closed a circle</span>
+    <p>This is the same diagnostic that killed the original Auction Cipher result, recorded near the top of this page: gold at <span class="num">+41.1R</span> on 30 minutes and <span class="num">&minus;14.1R</span> on 15, with the note <em>&ldquo;an edge does not do that. Noise does.&rdquo;</em></p>
+    <p>Ten hypotheses later, the last survivor has been killed by the identical test. The instrument was rebuilt from scratch, the controls were rebuilt around it, and the answer came back the same way for the same reason.</p>
+  </div>
+</section>
+
+<section>
+  <h2>The indicator&rsquo;s own panel, held to the same standard</h2>
+  <p>Every test above ran in a purpose-built harness. The indicator&rsquo;s own statistics panel &mdash; the one actually read while trading &mdash; was never held to any of it. Three things were wrong with it at once, and each had been wrong since before the standards on this page existed. Fixing them produced the best-powered measurement in this record.</p>
+
+  <div class="note warn">
+    <span class="note-k">The headline row had no drift control</span>
+    <p>Hit rate was compared with gambler&rsquo;s ruin, <code>1/(1+R)</code>. That null assumes a driftless walk, and a long into a rally clears its target more often than <span class="num">1/(1+R)</span> whether or not anything selected it. The exact fix is the mirror &mdash; correction 1, the project&rsquo;s first &mdash; and it compiled to <span class="num">103,636</span> tokens against Pine&rsquo;s limit of <span class="num">100,256</span>. It does not fit.</p>
+    <p>What fits is the same stratification without the second set of trades: split the signals by their own direction, and the unweighted average of the two hit rates is what a driftless market would have produced while the half-difference is the drift. Exact cancellation at any long/short mix becomes first-order cancellation. That is a real downgrade, and it is stated on the panel rather than hidden.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Drift-free edge &mdash; twenty-four cells, two instruments, twelve bar sizes</caption>
+      <thead><tr><th>Chart</th><th>Resolved</th><th>Hit / break-even</th><th>Long / short</th><th>Drift</th><th>Drift-free edge</th></tr></thead>
+      <tbody>
+        <tr><td>XAUUSD 1m</td><td>133</td><td><span class="num">30.8</span>/<span class="num">33.9</span></td><td><span class="num">31.4</span>/<span class="num">30.2</span></td><td class="cell-null"><span class="num">+0.6</span></td><td class="cell-null"><span class="num">&minus;3.1</span> &plusmn; <span class="num">11.2</span></td></tr>
+        <tr><td>BTCUSDT.P 1m</td><td>174</td><td><span class="num">30.5</span>/<span class="num">33.7</span></td><td><span class="num">31.6</span>/<span class="num">28.3</span></td><td class="cell-null"><span class="num">+1.6</span></td><td class="cell-null"><span class="num">+3.8</span> &plusmn; <span class="num">10.2</span></td></tr>
+        <tr><td>XAUUSD 3m</td><td>166</td><td><span class="num">32.5</span>/<span class="num">34.1</span></td><td><span class="num">29.8</span>/<span class="num">35.4</span></td><td class="cell-null"><span class="num">&minus;2.8</span></td><td class="cell-null"><span class="num">&minus;1.5</span> &plusmn; <span class="num">10.2</span></td></tr>
+        <tr><td>BTCUSDT.P 3m</td><td>138</td><td><span class="num">34.8</span>/<span class="num">34.4</span></td><td><span class="num">31.9</span>/<span class="num">37.9</span></td><td class="cell-null"><span class="num">&minus;3.0</span></td><td class="cell-null"><span class="num">+0.5</span> &plusmn; <span class="num">11.4</span></td></tr>
+        <tr><td>XAUUSD 5m</td><td>149</td><td><span class="num">33.1</span>/<span class="num">34.2</span></td><td><span class="num">24.2</span>/<span class="num">39.1</span></td><td class="cell-null"><span class="num">&minus;7.4</span></td><td class="cell-null"><span class="num">&minus;2.5</span> &plusmn; <span class="num">10.6</span></td></tr>
+        <tr><td>BTCUSDT.P 5m</td><td>140</td><td><span class="num">32.9</span>/<span class="num">34.3</span></td><td><span class="num">34.4</span>/<span class="num">31.6</span></td><td class="cell-null"><span class="num">+1.4</span></td><td class="cell-null"><span class="num">+1.4</span> &plusmn; <span class="num">11.2</span></td></tr>
+        <tr><td>XAUUSD 15m</td><td>135</td><td><span class="num">31.9</span>/<span class="num">34.5</span></td><td><span class="num">37.2</span>/<span class="num">24.6</span></td><td class="cell-null"><span class="num">+6.3</span></td><td class="cell-null"><span class="num">&minus;3.6</span> &plusmn; <span class="num">11.1</span></td></tr>
+        <tr><td>BTCUSDT.P 15m</td><td>196</td><td><span class="num">34.2</span>/<span class="num">34.6</span></td><td><span class="num">32.4</span>/<span class="num">36.3</span></td><td class="cell-null"><span class="num">&minus;1.9</span></td><td class="cell-null"><span class="num">&minus;0.3</span> &plusmn; <span class="num">9.5</span></td></tr>
+        <tr><td>XAUUSD 30m</td><td>234</td><td><span class="num">40.2</span>/<span class="num">34.6</span></td><td><span class="num">35.9</span>/<span class="num">45.3</span></td><td class="cell-null"><span class="num">&minus;4.7</span></td><td class="cell-null"><span class="num">+6.0</span> &plusmn; <span class="num">9.0</span></td></tr>
+        <tr><td>BTCUSDT.P 30m</td><td>352</td><td><span class="num">32.7</span>/<span class="num">34.6</span></td><td><span class="num">32.6</span>/<span class="num">32.7</span></td><td class="cell-null"><span class="num">&minus;0.1</span></td><td class="cell-null"><span class="num">&minus;2.0</span> &plusmn; <span class="num">7.0</span></td></tr>
+        <tr><td style="color:var(--accent)">XAUUSD 45m</td><td>178</td><td><span class="num">37.1</span>/<span class="num">34.9</span></td><td><span class="num">34.8</span>/<span class="num">39.3</span></td><td class="cell-null"><span class="num">&minus;2.2</span></td><td class="cell-null"><span class="num">+2.2</span> &plusmn; <span class="num">10.1</span></td></tr>
+        <tr><td style="color:var(--accent)">BTCUSDT.P 45m</td><td>243</td><td><span class="num">38.3</span>/<span class="num">34.7</span></td><td><span class="num">34.7</span>/<span class="num">42.3</span></td><td class="cell-null"><span class="num">&minus;4.1</span></td><td class="cell-null"><span class="num">+3.5</span> &plusmn; <span class="num">8.7</span></td></tr>
+        <tr><td>XAUUSD 1h</td><td>327</td><td><span class="num">36.7</span>/<span class="num">34.6</span></td><td><span class="num">33.3</span>/<span class="num">39.4</span></td><td class="cell-null"><span class="num">&minus;3.1</span></td><td class="cell-null"><span class="num">+1.8</span> &plusmn; <span class="num">7.5</span></td></tr>
+        <tr><td>BTCUSDT.P 1h</td><td>176</td><td><span class="num">36.4</span>/<span class="num">34.5</span></td><td><span class="num">34.7</span>/<span class="num">38.7</span></td><td class="cell-null"><span class="num">&minus;2.0</span></td><td class="cell-null"><span class="num">+2.1</span> &plusmn; <span class="num">10.3</span></td></tr>
+        <tr><td style="color:var(--accent)">XAUUSD 2h</td><td>173</td><td><span class="num">42.2</span>/<span class="num">34.6</span></td><td><span class="num">45.2</span>/<span class="num">40.0</span></td><td class="cell-null"><span class="num">+2.6</span></td><td class="cell-null"><span class="num">+8.0</span> &plusmn; <span class="num">10.7</span></td></tr>
+        <tr><td style="color:var(--accent)">BTCUSDT.P 2h</td><td>242</td><td><span class="num">34.3</span>/<span class="num">34.7</span></td><td><span class="num">31.2</span>/<span class="num">37.6</span></td><td class="cell-null"><span class="num">&minus;3.2</span></td><td class="cell-null"><span class="num">&minus;0.3</span> &plusmn; <span class="num">8.5</span></td></tr>
+        <tr><td style="color:var(--accent)">XAUUSD 3h</td><td>191</td><td><span class="num">28.8</span>/<span class="num">33.3</span></td><td><span class="num">28.6</span>/<span class="num">29.0</span></td><td class="cell-null"><span class="num">&minus;0.2</span></td><td class="cell-null"><span class="num">&minus;4.5</span> &plusmn; <span class="num">9.2</span></td></tr>
+        <tr><td style="color:var(--accent)">BTCUSDT.P 3h</td><td>169</td><td><span class="num">34.3</span>/<span class="num">35.1</span></td><td><span class="num">34.9</span>/<span class="num">33.7</span></td><td class="cell-null"><span class="num">+0.6</span></td><td class="cell-null"><span class="num">+0.7</span> &plusmn; <span class="num">10.2</span></td></tr>
+        <tr><td>XAUUSD 4h</td><td>210</td><td><span class="num">33.3</span>/<span class="num">34.9</span></td><td><span class="num">30.6</span>/<span class="num">35.2</span></td><td class="cell-null"><span class="num">&minus;2.3</span></td><td class="cell-null"><span class="num">&minus;2.0</span> &plusmn; <span class="num">9.2</span></td></tr>
+        <tr><td>BTCUSDT.P 4h</td><td>196</td><td><span class="num">29.6</span>/<span class="num">34.9</span></td><td><span class="num">30.1</span>/<span class="num">29.2</span></td><td class="cell-null"><span class="num">+0.5</span></td><td class="cell-null"><span class="num">&minus;5.2</span> &plusmn; <span class="num">9.3</span></td></tr>
+        <tr><td>XAUUSD 1D</td><td>213</td><td><span class="num">27.2</span>/<span class="num">33.8</span></td><td><span class="num">35.1</span>/<span class="num">20.7</span></td><td class="cell-null"><span class="num">+7.2</span></td><td class="cell-null"><span class="num">&minus;6.0</span> &plusmn; <span class="num">8.6</span></td></tr>
+        <tr><td class="thin">BTCUSDT.P 1D</td><td>74</td><td><span class="num">31.1</span>/<span class="num">35.1</span></td><td><span class="num">23.1</span>/<span class="num">35.4</span></td><td class="cell-null"><span class="num">&minus;6.2</span></td><td class="cell-null">gated &mdash; too few resolved</td></tr>
+        <tr><td class="thin">XAUUSD 1W</td><td>38</td><td><span class="num">18.4</span>/<span class="num">34.3</span></td><td><span class="num">33.3</span>/<span class="num">8.7</span></td><td class="cell-null"><span class="num">+12.3</span></td><td class="cell-null">gated &mdash; too few resolved</td></tr>
+        <tr><td class="thin">BTCUSDT.P 1W</td><td>5</td><td><span class="num">40.0</span>/<span class="num">36.1</span></td><td><span class="num">100</span>/<span class="num">0</span></td><td class="cell-null"><span class="num">+50</span></td><td class="cell-null">gated &mdash; too few resolved</td></tr>
+        <tr class="pooled"><td><strong>Twenty-one ungated cells</strong></td><td><strong>4,135</strong></td><td colspan="3">inverse-variance mean</td><td class="cell-null"><strong><span class="num">&minus;0.15pp</span></strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p><strong>Every ungated cell reads UNDERPOWERED on its own panel, and the twenty-one together average to <span class="num">&minus;0.15pp</span>.</strong> Pooled by bar size &mdash; two instruments each, which correction 11 permits &mdash; they run <span class="num">+0.9</span>, <span class="num">&minus;0.4</span>, <span class="num">&minus;0.7</span>, <span class="num">&minus;1.7</span>, <span class="num">+1.0</span>, <span class="num">+3.0</span>, <span class="num">+1.9</span>, <span class="num">+2.6</span>, <span class="num">&minus;2.2</span>, <span class="num">&minus;3.6</span>, <span class="num">&minus;6.0</span>, with no <span class="num">|z|</span> reaching <span class="num">1.96</span>. There is no bar size at which this signal engine beats gambler&rsquo;s ruin once the trend is taken out of it.</p>
+  <p>That last mean is <em>descriptive only</em>. Eleven cells drawn from two instruments at six resolutions are the same price history counted six times, so it carries no standard error worth printing &mdash; the same reason correction 11 forbids pooling a bar-size ladder for significance. It is quoted as a centre of mass, not a test.</p>
+  <p>The Bitcoin daily cell is the panel&rsquo;s own gate firing correctly: <span class="num">74</span> resolved trades against the threshold of <span class="num">100</span>, so it prints <em>too few resolved trades</em> rather than the <span class="num">&minus;5.9pp</span> it would otherwise have shown. Under every earlier version of this panel that number would have been coloured.</p>
+
+  <p>The drift control also did not behave as expected, and that is worth recording precisely. Gold ran <span class="num">+1.15%</span> on the session and the obvious guess was that the trend was inflating the win rate. At 30 minutes the drift came out <strong>negative</strong> &mdash; shorts resolved more often than longs &mdash; so removing it moved the edge from <span class="num">+5.6</span> to <span class="num">+6.0pp</span>. It went <em>up</em>. The suspicion was wrong and the instrument said so.</p>
+
+  <div class="note warn">
+    <span class="note-k">Drift changes sign between two bar sizes of the same chart on the same day</span>
+    <p>Gold: <span class="num">+6.3pp</span> at 15 minutes, <span class="num">&minus;4.7pp</span> at 30, <span class="num">&minus;3.1pp</span> at 1 hour, <span class="num">&minus;2.3pp</span> at 4. Same instrument, same session, same price history resampled. Bitcoin, measured within minutes of it, sat between <span class="num">&minus;2.0</span> and <span class="num">+0.5</span> at all four. Neither reading is a fact about either market, which is exactly why drift has to be measured per chart rather than assumed.</p>
+  </div>
+
+  <h3>The baseline was never a constant &mdash; it is a function of the horizon</h3>
+  <p>Correction 1 established that any level near price is revisited about <span class="num">76%</span> of the time, and that number has been imported into every poor-extreme claim since. Each poor extreme now registers its own mirror &mdash; same distance, opposite side, same instant, same horizon &mdash; so the baseline is measured on the chart being read rather than carried in. Across eight charts it is not one number and not noise. It is a clean monotone curve.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>What a mirror level is actually worth, by bar size</caption>
+      <thead><tr><th>Bar size</th><th>XAUUSD</th><th>BTCUSDT.P</th><th>Apart</th><th>Pooled</th><th>200 bars =</th></tr></thead>
+      <tbody>
+        <tr><td>5 minutes</td><td><span class="thin num">48.3%</span></td><td><span class="thin num">37.5%</span></td><td class="thin"><span class="num">10.8pp</span></td><td><span class="num">43.4%</span></td><td class="thin">0.7 days</td></tr>
+        <tr><td>15 minutes</td><td><span class="num">60.2%</span></td><td><span class="num">63.9%</span></td><td class="thin"><span class="num">3.7pp</span></td><td><span class="num">62.1%</span></td><td class="thin">2.1 days</td></tr>
+        <tr><td>30 minutes</td><td><span class="num">71.3%</span></td><td><span class="num">70.9%</span></td><td class="thin"><span class="num">0.4pp</span></td><td><span class="num">71.1%</span></td><td class="thin">4.2 days</td></tr>
+        <tr><td>45 minutes &nbsp;<span class="num" style="color:var(--accent)">held out</span></td><td><span class="num">72.4%</span></td><td><span class="num">73.7%</span></td><td class="thin"><span class="num">1.3pp</span></td><td><span class="num">73.0%</span></td><td class="thin">6.3 days</td></tr>
+        <tr><td>1 hour</td><td><span class="num">76.4%</span></td><td><span class="num">75.3%</span></td><td class="thin"><span class="num">1.1pp</span></td><td class="cell-neg"><span class="num">76.0%</span></td><td class="thin">8.3 days</td></tr>
+        <tr><td>2 hours &nbsp;<span class="num" style="color:var(--accent)">held out</span></td><td><span class="num">82.3%</span></td><td><span class="num">79.9%</span></td><td class="thin"><span class="num">2.4pp</span></td><td><span class="num">81.2%</span></td><td class="thin">17 days</td></tr>
+        <tr><td>3 hours &nbsp;<span class="num" style="color:var(--accent)">held out</span></td><td><span class="num">83.4%</span></td><td><span class="num">83.3%</span></td><td class="thin"><span class="num">0.1pp</span></td><td><span class="num">83.4%</span></td><td class="thin">25 days</td></tr>
+        <tr><td>4 hours</td><td><span class="num">84.8%</span></td><td><span class="num">84.7%</span></td><td class="thin"><span class="num">0.1pp</span></td><td><span class="num">84.8%</span></td><td class="thin">33 days</td></tr>
+        <tr><td>1 day</td><td><span class="num">91.6%</span></td><td><span class="num">90.8%</span></td><td class="thin"><span class="num">0.8pp</span></td><td><span class="num">91.4%</span></td><td class="thin">200 days</td></tr>
+        <tr class="pooled"><td>1 week &nbsp;<span class="num" style="color:var(--neg)">breaks the fit</span></td><td><span class="num">89.9%</span></td><td><span class="num">88.1%</span></td><td class="thin"><span class="num">1.8pp</span></td><td class="cell-neg"><span class="num">89.4%</span></td><td class="thin">1,400 days</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure class="figure">
+    <div class="key">
+      <span><i class="kd" style="background:var(--ink);border-radius:50%"></i>XAUUSD</span>
+      <span><i class="kd" style="background:var(--surface);border:2px solid var(--ink);border-radius:2px"></i>BTCUSDT.P</span>
+      <span><i class="kd" style="background:var(--accent);border-radius:50%"></i>held out &mdash; measured after the line was drawn</span>
+    </div>
+    <div class="scroller"><svg viewBox="0 0 720 348" role="img" aria-label="Log-log plot of mirror-level survival against horizon in days. A line fitted to five bar sizes passes through two further bar sizes measured afterwards, with errors of under one point.">
+<text x="0" y="16" fill="var(--ink)" font-family="var(--sans)" font-size="13" font-weight="600">The law was fitted on five rungs, then predicted two it had never seen</text>
+<text x="0" y="34" fill="var(--ink-3)" font-family="var(--sans)" font-size="11.5">share of mirror levels NOT revisited within 200 bars, against what 200 bars is in days &#183; both axes logarithmic</text>
+<line x1="62.0" y1="231.8" x2="652.0" y2="231.8" stroke="var(--rule)" stroke-width="1"></line>
+<text x="54.0" y="235.8" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">10%</text>
+<line x1="62.0" y1="179.9" x2="652.0" y2="179.9" stroke="var(--rule)" stroke-width="1"></line>
+<text x="54.0" y="183.9" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">20%</text>
+<line x1="62.0" y1="111.3" x2="652.0" y2="111.3" stroke="var(--rule)" stroke-width="1"></line>
+<text x="54.0" y="115.3" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="end">50%</text>
+<line x1="133.1" y1="78.0" x2="133.1" y2="264.0" stroke="var(--rule)" stroke-width="1"></line>
+<text x="133.1" y="282.0" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">1 day</text>
+<line x1="338.1" y1="78.0" x2="338.1" y2="264.0" stroke="var(--rule)" stroke-width="1"></line>
+<text x="338.1" y="282.0" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">10</text>
+<line x1="543.1" y1="78.0" x2="543.1" y2="264.0" stroke="var(--rule)" stroke-width="1"></line>
+<text x="543.1" y="282.0" fill="var(--ink-3)" font-family="var(--mono)" font-size="10.5" text-anchor="middle">100</text>
+<polyline points="180.3,128.6 211.0,136.9 242.0,145.3 276.4,154.6 318.2,165.9 368.0,179.3 419.6,193.3 472.0,207.4 523.2,221.3 573.0,234.7 611.2,245.1" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-dasharray="7 4"></polyline>
+<text x="374.2" y="105.5" fill="var(--accent)" font-family="var(--mono)" font-size="11">survival &#8733; T<tspan baseline-shift="super" font-size="9">-0.32</tspan>  &#183;  fitted on five rungs</text>
+<text x="100.6" y="68.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">5m</text>
+<circle cx="94.6" cy="108.8" r="5.5" fill="var(--ink-3)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 5m &#183; 48.3% revisited &#183; n 29</title></circle>
+<rect x="102.1" y="89.8" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--ink-3)" stroke-width="2"><title>BTCUSDT.P 5m &#183; 37.5% revisited &#183; n 24</title></rect>
+<text x="198.4" y="68.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">15m</text>
+<circle cx="192.4" cy="128.4" r="5.5" fill="var(--ink)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 15m &#183; 60.2% revisited &#183; n 98</title></circle>
+<rect x="199.9" y="130.9" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"><title>BTCUSDT.P 15m &#183; 63.9% revisited &#183; n 108</title></rect>
+<text x="260.1" y="68.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">30m</text>
+<circle cx="254.1" cy="152.8" r="5.5" fill="var(--ink)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 30m &#183; 71.3% revisited &#183; n 202</title></circle>
+<rect x="261.6" y="147.1" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"><title>BTCUSDT.P 30m &#183; 70.9% revisited &#183; n 203</title></rect>
+<text x="296.2" y="68.0" fill="var(--accent)" font-family="var(--sans)" font-size="10.5" text-anchor="middle" font-weight="600">45m</text>
+<circle cx="290.2" cy="155.8" r="5.5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 45m &#183; 72.4% revisited &#183; n 185</title></circle>
+<rect x="297.7" y="154.6" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"><title>BTCUSDT.P 45m &#183; 73.7% revisited &#183; n 179</title></rect>
+<text x="321.8" y="68.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">1h</text>
+<circle cx="315.8" cy="167.5" r="5.5" fill="var(--ink)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 1h &#183; 76.4% revisited &#183; n 382</title></circle>
+<rect x="323.3" y="159.3" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"><title>BTCUSDT.P 1h &#183; 75.3% revisited &#183; n 255</title></rect>
+<text x="419.6" y="68.0" fill="var(--accent)" font-family="var(--sans)" font-size="10.5" text-anchor="middle" font-weight="600">3h</text>
+<circle cx="413.6" cy="193.8" r="5.5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 3h &#183; 83.4% revisited &#183; n 523</title></circle>
+<rect x="421.1" y="188.6" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--accent)" stroke-width="2"><title>BTCUSDT.P 3h &#183; 83.3% revisited &#183; n 402</title></rect>
+<text x="445.2" y="68.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">4h</text>
+<circle cx="439.2" cy="200.4" r="5.5" fill="var(--ink)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 4h &#183; 84.8% revisited &#183; n 508</title></circle>
+<rect x="446.7" y="195.2" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"><title>BTCUSDT.P 4h &#183; 84.7% revisited &#183; n 411</title></rect>
+<text x="604.8" y="68.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">1D</text>
+<circle cx="598.8" cy="244.8" r="5.5" fill="var(--ink)" stroke="var(--surface)" stroke-width="2"><title>XAUUSD 1D &#183; 91.6% revisited &#183; n 1457</title></circle>
+<rect x="606.3" y="233.2" width="9.5" height="9.5" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"><title>BTCUSDT.P 1D &#183; 90.8% revisited &#183; n 622</title></rect>
+<text x="296.2" y="181.4" fill="var(--accent)" font-family="var(--mono)" font-size="10" text-anchor="middle">-0.85pp</text>
+<text x="419.6" y="217.8" fill="var(--accent)" font-family="var(--mono)" font-size="10" text-anchor="middle">+0.08pp</text>
+<line x1="62.0" y1="264.0" x2="652.0" y2="264.0" stroke="var(--rule-2)" stroke-width="1.5"></line>
+<text x="357.0" y="304.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10.5" text-anchor="middle">what 200 bars is worth, in days</text>
+<text x="357.0" y="322.0" fill="var(--ink-3)" font-family="var(--sans)" font-size="10" text-anchor="middle">5m is muted and excluded: n&#8202;=&#8202;53 across both instruments</text>
+</svg></div>
+    <figcaption>The dashed line was fitted to five rungs and published. <strong>45&#8202;m and 3&#8202;h were measured afterwards and are plotted against it untouched</strong> &mdash; landing <span class="num">0.85pp</span> and <span class="num">0.08pp</span> from prediction, or <span class="num">0.37&sigma;</span> and <span class="num">0.06&sigma;</span>. Refitting on all seven moves the exponent from <span class="num">&minus;0.321</span> to <span class="num">&minus;0.324</span>.</figcaption>
+  </figure>
+
+
+  <div class="note warn">
+    <span class="note-k">The imported constant was right at exactly one bar size, and it was luck</span>
+    <p><span class="num">76</span> was measured once, on other instruments, and carried into every poor-extreme claim this project made. The measured value at 1 hour is <span class="num">76.0%</span>. It is wrong by <span class="num">14pp</span> at 15 minutes and by <span class="num">9pp</span> at 4 hours, in opposite directions.</p>
+    <p>Two unrelated instruments agree to within <span class="num">3.7pp</span> at every usable rung while the rungs differ by <span class="num">29pp</span> end to end, so this is a property of the clock and not of gold or Bitcoin. The mechanism: <strong>the horizon is 200 <em>bars</em></strong>, and the level being watched is a <em>period</em> extreme. At 15 minutes those 200 bars are about two days, so a prior day&rsquo;s high gets two days to be revisited. At one day they are two hundred.</p>
+    <p><strong>It then passed a prediction test three times and failed the fourth.</strong> The line was fitted on five rungs and published. Four more bar sizes were measured against it afterwards, untouched:</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Predicted before measurement, then measured</caption>
+      <thead><tr><th>Rung</th><th>200 bars</th><th>Predicted</th><th>Measured</th><th>Error</th><th>In its own &sigma;</th></tr></thead>
+      <tbody>
+        <tr><td>45 minutes</td><td class="thin">6.3 days</td><td><span class="num">73.9%</span></td><td><span class="num">73.0%</span></td><td class="cell-null"><span class="num">&minus;0.85pp</span></td><td class="cell-null"><span class="num">0.37</span></td></tr>
+        <tr><td>3 hours</td><td class="thin">25 days</td><td><span class="num">83.3%</span></td><td><span class="num">83.4%</span></td><td class="cell-null"><span class="num">+0.08pp</span></td><td class="cell-null"><span class="num">0.06</span></td></tr>
+        <tr><td>2 hours</td><td class="thin">17 days</td><td><span class="num">81.0%</span></td><td><span class="num">81.2%</span></td><td class="cell-null"><span class="num">+0.23pp</span></td><td class="cell-null"><span class="num">0.18</span></td></tr>
+        <tr class="pooled"><td><strong>1 week</strong></td><td class="thin">1,400 days</td><td><span class="num">95.4%</span></td><td><span class="num">89.4%</span></td><td class="cell-neg"><strong><span class="num">&minus;6.03pp</span></strong></td><td class="cell-neg"><strong><span class="num">6.00</span></strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="note-k">Ten sub-daily rungs, no residual above one sigma</span>
+    <p>Extending the ladder down to 1 and 3 minutes did not break it. Every rung from <span class="num">1m</span> to <span class="num">4h</span> &mdash; a <span class="num">238&times;</span> span of horizon &mdash; sits within <span class="num">0.9&sigma;</span> of the fitted line, and the four rungs from 1 to 4 hours are within <span class="num">0.2pp</span>. The bottom two are consistent rather than confirming: at <span class="num">n&nbsp;=&nbsp;8</span> and <span class="num">n&nbsp;=&nbsp;32</span> their sigma is wide enough to swallow almost anything.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Retraction &mdash; the law published two revisions ago has a boundary, and the weekly chart found it</span>
+    <p>Rev. 21 called this a law and Rev. 22 said it was the only thing in this record ever to predict before measuring. Both stand for the sub-daily range: 45&#8202;m, 3&#8202;h and 2&#8202;h landed within <span class="num">0.85pp</span>, <span class="num">0.08pp</span> and <span class="num">0.23pp</span> of a line drawn without them. What neither revision said is where it stops. <strong>One week misses by <span class="num">6.03pp</span>, which is <span class="num">6.00&sigma;</span> &mdash; not a wobble, a different regime.</strong></p>
+    <p>The cause is in the definition, not the market. The auction period is a <em>UTC day</em>, so below a daily bar one period spans many bars and 200 bars is a predictable number of days. At and above the daily bar <strong>the period collapses to the bar itself</strong>, so 200 bars is 200 periods whether those bars are days or weeks, and the horizon measured in days stops being the variable that matters.</p>
+    <p>The test of that explanation is simple: on a <em>periods</em> axis, daily and weekly land on the same point. They do &mdash; <span class="num">200</span> periods both, reading <span class="num">91.4%</span> and <span class="num">89.4%</span>, <span class="num">2.0pp</span> apart on two unrelated instruments with entirely different histories. The days axis said they should differ by <span class="num">4pp</span>; the periods axis says they should coincide, and they do.</p>
+    <p>So the honest statement is narrower than the one published: <strong>survival follows <span class="num">T<sup>&minus;0.32</sup></span> in the horizon measured in <em>periods</em>, and days is the right proxy only while a period is a day.</strong> The law is real, it predicted three times, and its domain is the sub-daily regime. Stating a domain is not a weakening &mdash; a law without one is just a curve that has not yet met its counter-example.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>The same ladder, with the horizon counted in periods instead of days</caption>
+      <thead><tr><th>Rung</th><th>Horizon in periods</th><th>Baseline</th><th>n</th><th>vs the law</th><th>in its own &sigma;</th></tr></thead>
+      <tbody>
+        <tr><td class="thin">1 minute</td><td><span class="num">0.14</span></td><td><span class="num">25.0%</span></td><td>8</td><td class="cell-null"><span class="num">+13.7</span></td><td class="thin"><span class="num">0.90</span></td></tr>
+        <tr><td class="thin">3 minutes</td><td><span class="num">0.42</span></td><td><span class="num">31.3%</span></td><td>32</td><td class="cell-null"><span class="num">&minus;6.4</span></td><td class="thin"><span class="num">0.78</span></td></tr>
+        <tr><td class="thin">5 minutes</td><td><span class="num">0.69</span></td><td><span class="num">43.4%</span></td><td>53</td><td class="cell-null"><span class="num">&minus;3.7</span></td><td class="thin"><span class="num">0.54</span></td></tr>
+        <tr><td>15 minutes</td><td><span class="num">2.08</span></td><td><span class="num">62.1%</span></td><td>206</td><td class="cell-null"><span class="num">&minus;0.7</span></td><td class="thin"><span class="num">0.21</span></td></tr>
+        <tr><td>30 minutes</td><td><span class="num">4.17</span></td><td><span class="num">71.1%</span></td><td>405</td><td class="cell-null"><span class="num">+0.8</span></td><td class="thin"><span class="num">0.37</span></td></tr>
+        <tr><td>45 minutes</td><td><span class="num">6.25</span></td><td><span class="num">73.0%</span></td><td>364</td><td class="cell-null"><span class="num">&minus;0.9</span></td><td class="thin"><span class="num">0.37</span></td></tr>
+        <tr><td>1 hour</td><td><span class="num">8.33</span></td><td><span class="num">76.0%</span></td><td>637</td><td class="cell-null"><span class="num">&minus;0.2</span></td><td class="thin"><span class="num">0.14</span></td></tr>
+        <tr><td>2 hours</td><td><span class="num">16.7</span></td><td><span class="num">81.2%</span></td><td>940</td><td class="cell-null"><span class="num">+0.2</span></td><td class="thin"><span class="num">0.18</span></td></tr>
+        <tr><td>3 hours</td><td><span class="num">25</span></td><td><span class="num">83.4%</span></td><td>925</td><td class="cell-null"><span class="num">+0.1</span></td><td class="thin"><span class="num">0.06</span></td></tr>
+        <tr><td>4 hours</td><td><span class="num">33.3</span></td><td><span class="num">84.8%</span></td><td>919</td><td class="cell-null"><span class="num">&minus;0.0</span></td><td class="thin"><span class="num">0.00</span></td></tr>
+        <tr class="pooled"><td>1 day</td><td><span class="num">200</span></td><td><span class="num">91.4%</span></td><td>2,079</td><td class="cell-null"><span class="num">&mdash;</span></td><td class="thin"><span class="num">&mdash;</span></td></tr>
+        <tr class="pooled"><td>1 week</td><td><span class="num">200</span></td><td><span class="num">89.4%</span></td><td>941</td><td class="cell-null"><span class="num">&mdash;</span></td><td class="thin"><span class="num">&mdash;</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <p>And it is not merely monotone. Plotting the share that survives against the horizon in days, both on log scales, gives a straight line: <strong>survival <span class="num">&#8733;&nbsp;T<sup>&minus;0.32</sup></span>, <span class="num">R&sup2;&nbsp;=&nbsp;0.999</span> over a <span class="num">288&times;</span> range</strong>. A driftless walk against a <em>fixed</em> barrier predicts an exponent of <span class="num">&minus;0.5</span>; the barrier here is not fixed, because which extremes qualify as POOR itself changes with bar size. The right family, not the textbook value &mdash; and far too clean to be anything but mechanical.</p>
+    <p>Any baseline expressed as a bar count is therefore a different number at every timeframe. Importing one across them does not compare two answers &mdash; it compares two questions.</p>
+  </div>
+
+  <h3>And the watcher had been counting misses it invented</h3>
+  <div class="note warn">
+    <span class="note-k">Correction 16, found by the fix for correction 15</span>
+    <p>The panel&rsquo;s poor-extreme watcher held <strong>one level per side</strong>. A new poor high arriving while the previous was still pending assigned straight over it: the total was incremented, the pending watch vanished, and a watch that has vanished can never register a hit. It was scored as a miss by construction.</p>
+    <p>Not a rare collision. The horizon is <span class="num">200</span> bars and a 30-minute period is <span class="num">48</span>, so a watch spans about four periods and several were in flight at all times. Most were overwritten before they could resolve, and the revisit rate was deflated by roughly the overlap rate.</p>
+    <p>Measured on one chart: <span class="num">52.9%</span> under the old watcher, <span class="num">65.4%</span> under the array that replaced it. <strong>Every poor-revisit number this project has printed was biased downward.</strong> Including the <span class="num">&minus;23.5pp</span> that, hours earlier, had been flagged in this record as the panel&rsquo;s first resolvable finding. It cleared its MDL because the bias was large, not because the effect was.</p>
+    <p>It was only visible because building the mirror forced the single slot to become an array. Nothing about the panel reading wrong exposed it &mdash; the reading looked plausible throughout.</p>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <caption>Poor extreme against its own mirror, paired at the same instant</caption>
+      <thead><tr><th>Chart</th><th>Poor</th><th>Mirror</th><th>Lift</th><th>n</th><th>Smallest lift visible</th></tr></thead>
+      <tbody>
+        <tr><td class="thin">XAUUSD 1m</td><td><span class="num">0.0%</span></td><td><span class="num">20.0%</span></td><td class="cell-null"><span class="num">&minus;20.0</span></td><td>5</td><td class="thin"><span class="num">50.1</span></td></tr>
+        <tr><td class="thin">BTCUSDT.P 1m</td><td><span class="num">0.0%</span></td><td><span class="num">33.3%</span></td><td class="cell-null"><span class="num">&minus;33.3</span></td><td>3</td><td class="thin"><span class="num">76.2</span></td></tr>
+        <tr><td class="thin">XAUUSD 3m</td><td><span class="num">33.4%</span></td><td><span class="num">28.6%</span></td><td class="cell-null"><span class="num">+4.8</span></td><td>21</td><td class="thin"><span class="num">39.9</span></td></tr>
+        <tr><td class="thin">BTCUSDT.P 3m</td><td><span class="num">36.4%</span></td><td><span class="num">36.4%</span></td><td class="cell-null"><span class="num">0.0</span></td><td>11</td><td class="thin"><span class="num">57.4</span></td></tr>
+        <tr><td class="thin">XAUUSD 5m</td><td><span class="num">41.4%</span></td><td><span class="num">48.3%</span></td><td class="cell-null"><span class="num">&minus;6.9</span></td><td>29</td><td class="thin"><span class="num">36.5</span></td></tr>
+        <tr><td class="thin">BTCUSDT.P 5m</td><td><span class="num">50.0%</span></td><td><span class="num">37.5%</span></td><td class="cell-null"><span class="num">+12.5</span></td><td>24</td><td class="thin"><span class="num">39.8</span></td></tr>
+        <tr><td>XAUUSD 15m</td><td><span class="num">60.2%</span></td><td><span class="num">60.2%</span></td><td class="cell-null"><span class="num">0.0</span></td><td>98</td><td class="thin"><span class="num">19.6</span></td></tr>
+        <tr><td>BTCUSDT.P 15m</td><td><span class="num">60.2%</span></td><td><span class="num">63.9%</span></td><td class="cell-null"><span class="num">&minus;3.7</span></td><td>108</td><td class="thin"><span class="num">18.5</span></td></tr>
+        <tr><td>XAUUSD 30m</td><td><span class="num">65.4%</span></td><td><span class="num">71.3%</span></td><td class="cell-null"><span class="num">&minus;5.9</span></td><td>202</td><td class="thin"><span class="num">12.9</span></td></tr>
+        <tr><td>BTCUSDT.P 30m</td><td><span class="num">65.5%</span></td><td><span class="num">70.9%</span></td><td class="cell-null"><span class="num">&minus;5.4</span></td><td>203</td><td class="thin"><span class="num">12.9</span></td></tr>
+        <tr><td style="color:var(--accent)">XAUUSD 45m</td><td><span class="num">70.8%</span></td><td><span class="num">72.4%</span></td><td class="cell-null"><span class="num">&minus;1.6</span></td><td>185</td><td class="thin"><span class="num">13.1</span></td></tr>
+        <tr><td style="color:var(--accent)">BTCUSDT.P 45m</td><td><span class="num">69.8%</span></td><td><span class="num">73.7%</span></td><td class="cell-null"><span class="num">&minus;3.9</span></td><td>179</td><td class="thin"><span class="num">13.3</span></td></tr>
+        <tr><td>XAUUSD 1h</td><td><span class="num">78.5%</span></td><td><span class="num">76.4%</span></td><td class="cell-null"><span class="num">+2.1</span></td><td>382</td><td class="thin"><span class="num">8.5</span></td></tr>
+        <tr><td>BTCUSDT.P 1h</td><td><span class="num">71.4%</span></td><td><span class="num">75.3%</span></td><td class="cell-null"><span class="num">&minus;3.9</span></td><td>255</td><td class="thin"><span class="num">11.0</span></td></tr>
+        <tr><td style="color:var(--accent)">XAUUSD 2h</td><td><span class="num">82.9%</span></td><td><span class="num">82.3%</span></td><td class="cell-null"><span class="num">+0.6</span></td><td>503</td><td class="cell-pos"><span class="num">6.7</span></td></tr>
+        <tr><td style="color:var(--accent)">BTCUSDT.P 2h</td><td><span class="num">78.1%</span></td><td><span class="num">79.9%</span></td><td class="cell-null"><span class="num">&minus;1.8</span></td><td>437</td><td class="thin"><span class="num">7.7</span></td></tr>
+        <tr><td style="color:var(--accent)">XAUUSD 3h</td><td><span class="num">84.2%</span></td><td><span class="num">83.4%</span></td><td class="cell-null"><span class="num">+0.8</span></td><td>523</td><td class="cell-pos"><span class="num">6.4</span></td></tr>
+        <tr><td style="color:var(--accent)">BTCUSDT.P 3h</td><td><span class="num">79.6%</span></td><td><span class="num">83.3%</span></td><td class="cell-null"><span class="num">&minus;3.7</span></td><td>402</td><td class="thin"><span class="num">7.7</span></td></tr>
+        <tr><td>XAUUSD 4h</td><td><span class="num">84.2%</span></td><td><span class="num">84.8%</span></td><td class="cell-null"><span class="num">&minus;0.6</span></td><td>508</td><td class="cell-pos"><span class="num">6.4</span></td></tr>
+        <tr><td>BTCUSDT.P 4h</td><td><span class="num">82.0%</span></td><td><span class="num">84.7%</span></td><td class="cell-null"><span class="num">&minus;2.7</span></td><td>411</td><td class="cell-pos"><span class="num">7.3</span></td></tr>
+        <tr><td>XAUUSD 1D</td><td><span class="num">91.1%</span></td><td><span class="num">91.6%</span></td><td class="cell-null"><span class="num">&minus;0.5</span></td><td>1457</td><td class="cell-pos"><span class="num">2.9</span></td></tr>
+        <tr><td>BTCUSDT.P 1D</td><td><span class="num">89.5%</span></td><td><span class="num">90.8%</span></td><td class="cell-null"><span class="num">&minus;1.3</span></td><td>622</td><td class="cell-pos"><span class="num">4.7</span></td></tr>
+        <tr><td>XAUUSD 1W</td><td><span class="num">87.8%</span></td><td><span class="num">89.9%</span></td><td class="cell-null"><span class="num">&minus;2.1</span></td><td>673</td><td class="cell-pos"><span class="num">4.8</span></td></tr>
+        <tr><td>BTCUSDT.P 1W</td><td><span class="num">88.8%</span></td><td><span class="num">88.1%</span></td><td class="cell-null"><span class="num">+0.7</span></td><td>268</td><td class="thin"><span class="num">7.7</span></td></tr>
+        <tr class="pooled"><td><strong>1 day, both instruments</strong></td><td colspan="2">fixed effect</td><td class="cell-null"><strong><span class="num">&minus;0.7</span> &plusmn; <span class="num">0.9</span></strong></td><td><strong>2,079</strong></td><td class="cell-pos"><strong><span class="num">2.5</span></strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>Pooled by bar size, two instruments each: <span class="num">&minus;25.0</span> at 1m and <span class="num">+3.1</span> at 3m &mdash; both on <span class="num">n&nbsp;&lt;&nbsp;35</span> and meaningless &mdash; then <span class="num">+2.0</span> at 5m, <span class="num">&minus;2.0</span> at 15m, <span class="num">&minus;5.7</span> at 30m, <span class="num">&minus;2.7</span> at 45m, <span class="num">&minus;0.1</span> at 1h, <span class="num">&minus;0.7</span> at 2h, <span class="num">&minus;1.0</span> at 3h, <span class="num">&minus;1.5</span> at 4h, <span class="num">&minus;0.7</span> at 1D, <span class="num">&minus;1.3</span> at 1W. Every rung sits under the <span class="num">6.4pp</span> noise floor and not one reaches even an uncorrected <span class="num">1.96</span>, let alone the <span class="num">z&nbsp;3.0</span> this project&rsquo;s cell count demands.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Two measurements on the same twelve charts, and why their samples diverge</caption>
+      <thead><tr><th>Rung</th><th>One period is</th><th>Periods on a 5,000-bar chart</th><th>Poor extremes</th><th>Resolved trades</th></tr></thead>
+      <tbody>
+        <tr><td>1 minute</td><td class="thin">1,440 bars</td><td class="thin"><span class="num">3</span></td><td class="cell-neg"><span class="num">8</span></td><td><span class="num">307</span></td></tr>
+        <tr><td>5 minutes</td><td class="thin">288 bars</td><td class="thin"><span class="num">17</span></td><td class="cell-neg"><span class="num">53</span></td><td><span class="num">289</span></td></tr>
+        <tr><td>30 minutes</td><td class="thin">48 bars</td><td class="thin"><span class="num">104</span></td><td><span class="num">405</span></td><td><span class="num">586</span></td></tr>
+        <tr><td>2 hours</td><td class="thin">12 bars</td><td class="thin"><span class="num">417</span></td><td class="cell-pos"><span class="num">940</span></td><td><span class="num">415</span></td></tr>
+        <tr class="pooled"><td>1 day</td><td class="thin">1 bar</td><td class="thin"><span class="num">5,000</span></td><td class="cell-pos"><span class="num">2,079</span></td><td><span class="num">213</span></td></tr>
+        <tr class="pooled"><td colspan="3"><strong>Span across the full ladder</strong></td><td class="cell-neg"><strong><span class="num">260&times;</span></strong></td><td><strong><span class="num">2.8&times;</span></strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">A correction to this project&rsquo;s own advice, shipped in a tooltip</span>
+    <p>The indicator&rsquo;s <code>poorBars</code> tooltip told the reader that single-digit <span class="num">n</span> &ldquo;across a chart spanning hundreds of periods&rdquo; means the classifier is mis-set. The clause did all the work and went unnoticed: <strong>a low-timeframe chart does not span hundreds of periods.</strong> At one minute it spans about three.</p>
+    <p>So below roughly 15 minutes the advice inverted &mdash; it sent the reader hunting for a threshold to fix something no threshold can reach. The tooltip now separates the two cases: a starved count at a low bar size is the chart, and a starved count at an hour or above, where the chart really does hold hundreds of periods, is genuinely the input. Every guidance string this project ships is a claim, and this one had not been tested against the range of charts it would be read on.</p>
+  </div>
+
+  <div class="note">
+    <span class="note-k">This test gains power going up the timeframes. The sweep test lost it.</span>
+    <p>The 4-hour cells carry <span class="num">508</span> and <span class="num">411</span> poor extremes against <span class="num">98</span> and <span class="num">108</span> at 15 minutes &mdash; and the pooled MDL falls to <span class="num">4.8pp</span>, <strong>finally below the noise floor</strong>. That is the first properly-powered reading of this hypothesis in the entire project: a sample that could comfortably have seen a <span class="num">6.4pp</span> effect, returning <span class="num">&minus;1.5</span>.</p>
+    <p>The contrast with the timescale section above is exact and it is not a contradiction. The sweep test&rsquo;s unit of observation is a <em>bar</em>, so raising the bar size buys nothing and loses chart history &mdash; one sweep per thirty bars either way. This test&rsquo;s unit is a <em>period</em>, and 200 bars spans sixteen times as many periods at 4 hours as at 15 minutes. <strong>Which direction a timeframe ladder helps depends on what the denominator counts.</strong></p>
+  </div>
+
+  <div class="note">
+    <span class="note-k">Stated exactly</span>
+    <p>A poor extreme is revisited about as often as any level the same distance away &mdash; if anything very slightly less, consistently, on two unrelated instruments at four bar sizes. At the one rung where the sample can resolve an effect worth acting on, it reads <span class="num">&minus;1.5pp</span>. <strong>A real null, not an underpowered one, replicated eight times.</strong></p>
+    <p>The claim that a poor high is unfinished business the market must return to is not supported. The reason it survived this long is that every earlier test of it scored against an imported constant, using a watcher that invented misses.</p>
+  </div>
+
+  <h2>Checking any of this</h2>
+  <p>Every figure above came off a screenshot read by eye, which is a poor foundation for a record that spends its length insisting on rigour. The raw counts and the code that turns them into these tables are now in the repository:</p>
+  <div class="settings">
+    <div class="srow"><b><code>data/sweeps.csv</code></b><span>19 charts, 5,934 sweeps, exact stratum counts</span></div>
+    <div class="srow"><b><code>analysis/meta.py</code></b><span>recomputes every table here, no dependencies</span></div>
+  </div>
+  <p>Running it caught two things. The log had been quoting gold at <span class="num">&minus;9.9pp</span> and platinum at <span class="num">&minus;9.7pp</span> &mdash; panel figures captured at a slightly different bar count &mdash; where the exact counts give <span class="num">&minus;9.6</span> and <span class="num">&minus;9.4</span>, moving the pooled estimate from <span class="num">&minus;2.99</span> to <span class="num">&minus;2.95</span>. Nothing on this page turns on the difference, and every number above has been reconciled to the script rather than the other way round. The script also had a line that printed the same quantity twice, once wrongly, which is the fifteenth instance of the only mistake this project ever really made.</p>
+</section>
+
+<section>
+  <h2>The seventeen corrections</h2>
+  <p>This is the part with lasting value. Each row is a way a number on this page looked real and was not, in the order the data forced it out.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>Every correction, and the result it killed</caption>
+      <thead><tr><th>#</th><th>Correction</th><th>What it killed</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td>The mirror &mdash; every level and every signal gets its own opposite</td><td>&ldquo;Poor high revisited 80%&rdquo;. The mirror baseline is <span class="num">76%</span> &mdash; later measured per chart at <span class="num">71%</span> (30m) and <span class="num">62%</span> (15m). See correction 16.</td></tr>
+        <tr><td>2</td><td>The null is arithmetic: <code>1/(1+n)</code>, not estimated</td><td>&ldquo;Cut losses, let winners run.&rdquo; Zero at every target, 8,302 trades.</td></tr>
+        <tr><td>3</td><td>The noise floor is <span class="num">6.4pp</span>, measured feed-to-feed</td><td>Every result smaller than the data vendor&rsquo;s disagreement with itself.</td></tr>
+        <tr><td>4</td><td>Multiplicity &mdash; the <span class="num">z</span> bar rises with the cell count</td><td><span class="num">z&nbsp;2.25</span> over 15 cells: 31% likely by chance.</td></tr>
+        <tr><td>5</td><td>Censoring and cost are not rounding</td><td>The speed ladder, unreadable; and every crypto result, on cost alone.</td></tr>
+        <tr><td>6</td><td>Direction stratification &mdash; <code>LIFT*</code> inside each stratum</td><td>Nothing at 30m, where buckets were balanced &mdash; then <span class="num">1.3pp</span> of gold&rsquo;s 4-hour result, exactly as predicted</td></tr>
+        <tr><td>7</td><td>Power &mdash; state the smallest effect the sample could see</td><td>Six &ldquo;nulls&rdquo; that were empty instruments, not measurements.</td></tr>
+        <tr><td>8</td><td>Fix the target rung before looking, not after</td><td>A verdict that picked its own best-by-net-R cell and reported another cell&rsquo;s power.</td></tr>
+        <tr><td>9</td><td>Non-overlapping trades only</td><td>The fixed-effect <span class="num">z&nbsp;&minus;3.12</span> &mdash; the one number that cleared the bar.</td></tr>
+        <tr><td>10</td><td>Split-half persistence</td><td>Gold&rsquo;s <span class="num">&minus;9.7</span> and GBPJPY&rsquo;s <span class="num">&minus;6.3</span>. Both were windows.</td></tr>
+        <tr><td>11</td><td><strong>Resolution invariance</strong> &mdash; does it survive changing the bar size?</td><td>Bitcoin, the last survivor, and then gold: <span class="num">&minus;9.6pp</span> at 30m is a lone spike among <span class="num">+3.9</span>, <span class="num">+4.6</span>, <span class="num">&minus;4.2</span></td></tr>
+        <tr><td>12</td><td>Test significance <em>before</em> sign, in the persistence verdict</td><td>A false FLIPS on gold 15m: <span class="num">+11.7</span> vs <span class="num">&minus;1.7</span> at <span class="num">z&nbsp;1.45</span>, reported as an unstable sign</td></tr>
+        <tr><td>13</td><td>The same, in the independence verdict &mdash; and require the full sample to have made a claim</td><td>A false DISAGREES on gold 5m: <em>&ldquo;the full-sample z was overlap&rdquo;</em> where the full-sample z was <span class="num">+0.84</span></td></tr>
+        <tr><td>14</td><td>The same again, in the colours &mdash; the most visible thing on the panel</td><td><strong>27 cells painted as findings across the whole project. None cleared the gate printed two lines below them.</strong></td></tr>
+        <tr><td>15</td><td>The colour must apply the <em>sample</em> gates too, not just the z</td><td>The first green cell ever produced, one run after correction 14 shipped &mdash; and a false positive</td></tr>
+        <tr><td>16</td><td><strong>One watcher per level, not one slot per side</strong> &mdash; and measure the baseline on the chart being read</td><td>Every poor-revisit number this project ever printed. The single slot scored overwritten watches as misses; the imported baseline was a different number at every bar size.</td></tr>
+        <tr class="pooled"><td>17</td><td><strong>Zero variance is no measurement, not a perfect one</strong> &mdash; and a law needs its domain stated</td><td>An edge &ldquo;clearing its own resolution&rdquo; on five trades, at <span class="num">&plusmn;0</span>; and the unbounded reading of the Rev. 21 power law, which a weekly chart missed by <span class="num">6&sigma;</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Every green and red cell in this record was painted on magnitude alone</span>
+    <p><code>LIFT*</code> took a verdict colour the moment it cleared the <span class="num">6.4pp</span> floor &mdash; whatever its <span class="num">z</span>, whatever its N. Counted across every panel this project produced: <strong>27 cells were coloured as findings and not one of them cleared the <span class="num">|z*| &ge; 3.0</span> gate printed two lines below on the same panel.</strong> Not one was even larger than its own MDL.</p>
+    <p>Bitcoin's 15-minute <code>SWEEP+HTF</code> was painted green at <span class="num">N&nbsp;=&nbsp;32</span>, needing <span class="num">32pp</span> more lift before it could be seen at all &mdash; while the MDL column beside it printed orange saying precisely that. The panel contradicted itself in adjacent columns for the entire session, and every screenshot in this record shows it doing so.</p>
+    <p>Three states now: grey below the floor, <strong>amber</strong> above the floor but below the bar &mdash; which is where essentially everything lands &mdash; and a verdict colour only when both clear.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="note-k">Correction 14 shipped, and the next run produced a green cell</span>
+    <p>BTC at 15 minutes, <code>SWEEP+REJ</code>: <span class="num">+15.7pp</span> at <span class="num">z&nbsp;+3.01</span>. The first cell this project ever painted as a finding under the new rule, and the only one that has ever cleared the bar. It is wrong on four further counts &mdash; <span class="num">N&nbsp;=&nbsp;164</span> against the panel's own gate of 200, smaller than its own MDL (<span class="num">15.7</span> against <span class="num">20</span>), not the headline bucket, and contradicted by the same instrument one timeframe up at <span class="num">&minus;8.4pp</span>.</p>
+    <p>And the history settles it. That cell read <span class="num">z&nbsp;+2.88</span> at <span class="num">N&nbsp;=&nbsp;162</span> two hours earlier. <strong>Two more trades loaded and it crossed the threshold.</strong> A number that changes verdict on two observations is sitting on its threshold, not standing over it &mdash; and <span class="num">z&nbsp;3.0</span> was chosen <em>for</em> roughly thirty cells, so one cell landing on it is the multiplicity correction working rather than failing.</p>
+    <p>The gap was structural: the verdict enforces N and the MDL, but only for the selected bucket, so any other row could be coloured with nothing checking it. A verdict colour now needs all four. Across the four panels run afterwards &mdash; twenty bucket cells on two instruments at two timeframes &mdash; <strong>not one is green or red.</strong> Every cell is grey or amber. That is not the tool failing to find something; it is the tool finally agreeing with its own evidence.</p>
+  </div>
+
+  <div class="note">
+    <span class="note-k">The pattern in the list</span>
+    <p>Correction 17 comes in two halves that are the same mistake. A proportion sitting exactly on <span class="num">0</span> or <span class="num">1</span> makes its own variance vanish, so the panel read five trades as infinitely precise; and a fitted law with no stated domain reads every extrapolation as equally trustworthy, so a curve that had predicted three rungs to within a point missed the fourth by six sigma. <strong>Both are a confidence that was never measured, only inherited from a formula that had no way to say &ldquo;not here&rdquo;.</strong></p>
+  <p>Correction 16 is the only one here that no reading of a panel could have exposed. Its numbers looked entirely plausible &mdash; a poor high revisited half the time is a perfectly believable result. It surfaced because the fix for correction 15 required the single-slot watcher to become an array, and the number moved <span class="num">12.5pp</span> when it did. <strong>Some measurement errors are invisible from the output and only fall out of unrelated repairs.</strong></p>
+  <p>Corrections 1, 3, 4 and 7 are about the <strong>denominator</strong> &mdash; what a number is being compared against, and how many chances it had. Corrections 9 and 10 are about <strong>what counts as one observation</strong>. Correction 11 is about whether the thing being measured belongs to the market or to the chart. Corrections 12 through 15 are the panel caught making the exact mistake it was built to prevent &mdash; four times, in four consecutive passes, each time in a different part of the same file &mdash; the last of them one run after the fix that was supposed to settle it. All three were written before corrections 7 and 10 existed, and none was revisited when they did. <strong>A standard added late does not propagate backwards through the code that preceded it.</strong> That is the most transferable thing this project produced, and it cost three rounds of finding it the hard way. Not one of the seventeen is about the trading logic. <strong>Every single result this project lost, it lost to measurement rather than to a bad idea about markets.</strong></p>
+  </div>
+</section>
+
+<section>
+  <h2>Ten hypotheses, ten answers</h2>
+  <div class="tbl">
+    <table>
+      <caption>Every hypothesis this project tested, and what it returned</caption>
+      <thead><tr><th>Hypothesis</th><th>Reads</th><th>Trades</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Auction Cipher</td><td>price at value edges</td><td>15 uncontrolled cells</td><td class="cell-null">best z 2.25 &mdash; 31% likely by chance</td></tr>
+        <tr><td>Trap Engine</td><td>stop sweeps and reclaims</td><td>512</td><td class="cell-null">&minus;0.7pp, z &minus;0.34</td></tr>
+        <tr><td>Positioning Engine</td><td>open interest and basis</td><td>408</td><td class="cell-null">&minus;1.0pp, z &minus;0.42</td></tr>
+        <tr><td>Magnet test</td><td>destination, not direction</td><td>1,567 pairs</td><td class="cell-neg">&minus;5.4pp, z &minus;2.25 &mdash; backwards from theory</td></tr>
+        <tr><td>Regime test</td><td>extreme quality as regime</td><td>217 calls</td><td class="cell-null">&minus;6.4pp, z &minus;1.90 &mdash; wrong more than drift</td></tr>
+        <tr><td>Session test</td><td>the clock and the initial balance</td><td>2,478 extensions</td><td class="cell-null">+0.17pp, then &minus;0.15pp on a rerun</td></tr>
+        <tr><td>Excursion test</td><td>the shape of the return tail</td><td>8,302</td><td class="cell-null">all six targets within 0.40pp of 1/(1+n)</td></tr>
+        <tr><td>Setup excursion</td><td>SFP, rejection, HTF confluence</td><td>4,356</td><td class="cell-neg">18 of 20 cells negative</td></tr>
+        <tr><td>Inducement test</td><td>the two-stage liquidity grab</td><td>406 induced</td><td class="cell-null">less bad than plain sweeps, not better than random</td></tr>
+        <tr class="pooled"><td>Edge Lab &mdash; sweep vs mirror</td><td>continuation vs reversal</td><td>4,846</td><td class="cell-null">&minus;2.99pp, random-effects z &minus;1.96</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Ten structurally different readings of the same markets. Ten correct ledgers. <strong>Ten results on or near break-even</strong>, and the two with enough power to make a real claim are the two that say zero most precisely.</p>
+  <p>The common factor is not the logic in any one of them. It is the <em>category</em>: short-horizon directional prediction from public data on the most liquid instruments in the world. An eleventh hypothesis of the same kind has no particular reason to come out differently.</p>
+  <p><strong>What is not falsified is the instrument itself.</strong> Nothing here argues that value areas, naked POCs, excess and poor extremes, initial balance or absorption are unreal or unhelpful to look at. What is falsified is the claim that a fixed rule over them prints money unattended. Those are different claims, and only the second one was ever tested.</p>
+</section>
+
+<section>
+  <h2>Where this actually lands</h2>
+  <p>The answer is not &ldquo;no edge&rdquo;. It is narrower, and more useful:</p>
+  <div class="note">
+    <span class="note-k">The finding, stated exactly</span>
+    <p>There is a small tendency for swept levels to be <strong>followed rather than faded</strong> &mdash; roughly <span class="num">3&ndash;4pp</span> at a 2R target. It keeps the same sign under direction-stratification, under non-overlapping sampling, and on three of five instruments across both halves of their charts.</p>
+    <p>It is also smaller than the <span class="num">6.4pp</span> disagreement between two feeds on the same asset, worth about <span class="num">+0.02R</span> a trade against a <span class="num">0.035R</span> CFD cost, and would need roughly <strong>4,100 sweeps &mdash; about nine years of 30-minute history &mdash;</strong> to establish at the standard this record enforces.</p>
+  </div>
+  <p>And the day ended on a shape that is not coincidence. Where the effect was large enough to pay for its venue, it did not persist; where it persisted, the venue ate it.</p>
+
+  <div class="tbl">
+    <table>
+      <caption>The three finalists, and why each one stops</caption>
+      <thead><tr><th>Instrument</th><th>Effect</th><th>Persistence</th><th>Why it ends</th></tr></thead>
+      <tbody>
+        <tr><td>XAUUSD</td><td class="cell-neg">&minus;9.7pp</td><td class="cell-neg">FLIPS</td><td>the whole effect is one half of the chart</td></tr>
+        <tr><td>BTCUSDT.P</td><td class="cell-neg">&minus;8.4pp</td><td class="cell-neg">inverts at 15m</td><td>opposite sign one timeframe down, <span class="num">z&nbsp;3.20</span> apart &mdash; and cost exceeds it anyway</td></tr>
+        <tr><td>XPTUSD</td><td class="cell-neg">&minus;9.1pp</td><td class="cell-pos">stable</td><td>attenuates to <span class="num">~4pp</span> under every independence check</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>That is what an efficient market looks like from the inside: not a wall, a ledger that balances to roughly zero once every cost and every correction is paid.</p>
+
+  <h3>If anything is ever tested again</h3>
+  <ol class="q">
+    <li>
+      <h3>Fix the configuration and the rung before looking</h3>
+      <p>The target rung, the stop width, the instrument list and the dates, all written down first. Correction 8 exists because a verdict that picks its own best cell is not a test.</p>
+    </li>
+    <li>
+      <h3>Budget the sample from the effect you would act on</h3>
+      <p>Below <span class="num">1,600</span> trades a <span class="num">6.4pp</span> effect is found less than half the time. Below <span class="num">400</span> the test cannot separate anything from feed noise and should not be run.</p>
+    </li>
+    <li>
+      <h3>Report the non-overlapping number alongside the nominal one</h3>
+      <p>They differ by a factor of <span class="num">1.3</span> in the standard error here. An effect that lives only in the nominal column is overlap.</p>
+    </li>
+    <li>
+      <h3>Cut the sample in half before believing any of it</h3>
+      <p>The cheapest correction on the list and the one that killed the most. Two of the five largest effects measured did not survive it.</p>
+    </li>
+  </ol>
+</section>
+
+<footer>
+  <p><strong>On the tooling:</strong> Pine&rsquo;s <code>+</code> format specifier emits the forced plus <em>after</em> the minus sign, so <code>str.tostring(-9.1, "+#.#")</code> renders <code>-+9.1</code>. Every negative this panel printed carried that prefix for five versions, which is why several signs in this record had to be recovered by arithmetic from raw counts before they could be trusted. Fixed in build 4854831. A measurement tool that is hard to read is a measurement tool that gets misread.</p>
+  <p>Rev. 24 completes the ladder at the bottom with 1 and 3 minutes, making twelve bar sizes in all. Every sub-daily rung now sits within <span class="num">0.9&sigma;</span> of the law over a <span class="num">238&times;</span> span, and the bottom end shows the sampling mechanism from the other side: the poor-extreme count runs <span class="num">8</span> to <span class="num">2,079</span> across the ladder while the resolved-trade count on the same charts moves under <span class="num">3&times;</span>, because one is counted per period and the other per bar. That also exposed a tooltip this project shipped whose advice inverted below 15 minutes. Rev. 23 adds 2 hours and 1 week, and retracts the <em>scope</em> of the Rev. 21 law: 2&#8202;h is a third successful out-of-sample prediction, 1&#8202;W misses by <span class="num">6.00&sigma;</span>. The auction period stops being a day once the bar is one, so the horizon has to be counted in periods rather than days &mdash; and on that axis daily and weekly coincide, as they must. It also records correction 17: a direction stratum at exactly 0 or 1 contributes zero variance, so the panel reported an edge clearing its own resolution on five trades. Rev. 22 adds 45 minutes and 3 hours as a <strong>prediction test</strong> of the power law published in Rev. 21. The line was fitted on five rungs; these two were measured against it afterwards and landed <span class="num">0.85pp</span> and <span class="num">0.08pp</span> from prediction. Nothing else in this record has predicted a number before measuring it. Rev. 21 extends the ladder to six bar sizes and twenty-four cells, from 5 minutes to daily &mdash; a horizon range of <span class="num">288&times;</span>. The mirror baseline turns out to obey a power law in the horizon, <span class="num">survival &#8733; T<sup>&minus;0.32</sup></span> at <span class="num">R&sup2;&nbsp;0.999</span>, on two unrelated instruments at once. The daily rung carries <span class="num">2,079</span> poor extremes and an MDL of <span class="num">2.5pp</span> &mdash; well inside the noise floor, the best-powered measurement anywhere in this record &mdash; and it returns <span class="num">&minus;0.7pp</span>. Rev. 20 completed that ladder to four bar sizes and sixteen cells. The mirror baseline turns out to be a clean monotone function of the horizon &mdash; <span class="num">62%</span>, <span class="num">71%</span>, <span class="num">76%</span>, <span class="num">85%</span> as 200 bars grows from two days to thirty-three &mdash; with two unrelated instruments agreeing to within <span class="num">0.1&ndash;3.7pp</span> at every rung. The imported <span class="num">76%</span> matches the 1-hour value exactly and is wrong by <span class="num">14pp</span> and <span class="num">9pp</span> at the ends. It also produced the project&rsquo;s first properly-powered poor-extreme reading, because unlike the sweep test this one gains sample going up the timeframes: its unit is a period, not a bar. Rev. 19 holds the indicator&rsquo;s own stats panel to the standards the rest of this record enforces: drift control by direction-stratification, and a poor-extreme baseline measured on the chart being read rather than imported. Doing so exposed correction 16 &mdash; a single-slot watcher that had been scoring overwritten watches as misses, deflating every poor-revisit number this project ever printed, including the one Rev. 18 would have published as its first resolvable finding. It also found that the mirror baseline is a property of the bar size (<span class="num">71%</span> at 30m, <span class="num">62%</span> at 15m, replicated on two unrelated instruments), so the imported <span class="num">76%</span> was defensible at 30 minutes and would have manufactured a <span class="num">14pp</span> deficit at 15. Rev. 18 completes the bar-size ladder with the 1-hour cells and retracts the previous revision's reading of gold's 30-minute result as an isolated spike; with the gap filled, gold's ladder tests flat and Bitcoin's is the one that does not. Rev. 17 records the first green cell this project ever produced, one run after the correction that made green possible, and why it was a false positive. Rev. 16 makes the record reproducible &mdash; raw counts and a script &mdash; and reconciles every figure to it. Rev. 15 records that every coloured cell in this entire record was painted without a significance test, and none would have been coloured under the panel's own stated gate. Rev. 14 adds gold's four-bar-size ladder, which reduced its headline result to a lone spike between near-zero neighbours, and two corrections earned by the panel misreporting its own verdicts. Rev. 13 adds the resolution test, which inverted the last surviving result and produced the only <span class="num">z&nbsp;&gt;&nbsp;3</span> in the project &mdash; a contradiction rather than a finding. Rev. 12 adds the 4-hour test, which showed that a higher timeframe loses sample rather than gaining it, and produced the first case where direction-stratification actually repaired a number rather than merely guaranteeing it. Rev. 11 adds the Edge Lab &mdash; the mirror, fourteen instruments, and the four corrections that killed the last surviving result, including one this page had published a revision earlier. Rev. 10 tested the objection that the excursion run used random entries rather than setups. Rev. 9 added the excursion test. Rev. 8 added the session test and the accidental replication that settled the per-instrument splits. Rev. 7 added the regime test. Rev. 6 added the magnet test. Rev. 5 added the Positioning Engine. Rev. 4 closed the Trap Engine A/B. Rev. 3 added the Trap Engine cells. Rev. 2 added the 1-hour and Bitcoin cells and revised the conclusion they overturned. Superseded figures were corrected, not deleted.</p>
+  <p>All figures are out-of-sample readings from the indicators&rsquo; own measurement panels, computed on confirmed bars with next-bar-open fills, the stop tested after the favourable excursion is recorded, and expired trades counted rather than discarded.</p>
+</footer>
+
+</div>
+
+
+</body>
+</html>
