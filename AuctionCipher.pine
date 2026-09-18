@@ -5154,7 +5154,17 @@ f_drawStats() =>
     float drift = both ? (pL - pS) / 2 * 100 : na
     float dfSe  = both ? math.sqrt(pL * (1 - pL) / nL + pS * (1 - pS) / nS) / 2 * 100 : na
     float dfEdge = na(dfHit) or na(beRate) ? na : dfHit - beRate
-    float dfMdl = na(dfSe) ? na : 2.8 * dfSe
+    // SEVENTEENTH CORRECTION, exposed by a weekly Bitcoin chart. A direction
+    // stratum whose hit rate is exactly 0 or exactly 1 contributes p(1-p) = 0
+    // to the variance. With both strata degenerate the standard error is zero,
+    // the MDL is zero, and `weak` then reports that ANY edge clears its own
+    // resolution - infinite precision from five trades. The panel printed
+    // "+13.9pp +/- 0" on 2 longs and 3 shorts.
+    //
+    // Only the n >= 100 gate stopped that being coloured, which is one gate too
+    // few: a boundary proportion on a larger sample would have walked straight
+    // through. Zero variance now reads as no measurement, not a perfect one.
+    float dfMdl = na(dfSe) or dfSe <= 0 ? na : 2.8 * dfSe
     bool  thin  = nL + nS < 100
     bool  weak  = na(dfEdge) or na(dfMdl) or math.abs(dfEdge) < dfMdl
     bool  under = not na(dfEdge) and math.abs(dfEdge) < 6.4
