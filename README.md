@@ -114,6 +114,7 @@ died the same way.
 | `AuctionCipher.pine` | The original v3.0 indicator, 5,606 lines. A good chart tool. Audited clean; its R accounting reconciles by construction |
 | `AuctionFootprint.pine` | Companion footprint/volume-profile renderer |
 | `ValueAreaReversion.pine` | A third-party value-area reclaim indicator (SFP family), with the measurement panel bolted on so it reports its own hit rate against `1/(1+R)` instead of being argued about. Result pending |
+| `ICTTest.pine` | The full ICT sequence assembled — liquidity sweep, then market-structure shift, then entry — measured as one setup rather than as separate primitives. Its parts were each measured flat or negative elsewhere in this log; this tests whether the sequence is more than their sum. Same measurement panel. Result pending |
 
 ### The experiments, in the order they were run
 
