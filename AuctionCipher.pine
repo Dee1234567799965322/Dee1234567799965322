@@ -375,7 +375,17 @@ color  cSess3   = input.color(color.new(#66bb6a, 88), "New York", group=G_SESS)
 string G_STAT = "23 - STATISTICS"
 bool   statOn_in   = input.bool(true, "Show Statistics Table", group=G_STAT,
      tooltip="Everything this indicator asserts - poor highs get revisited, excess holds, balance breaks follow through - is a CLAIM until it is counted on your instrument. This counts them.\n\nTreat a low sample size as no answer at all. Under about 20 occurrences the percentages mean nothing.")
-int    statHorizon = input.int(200, "Outcome Horizon (bars)", minval=5, maxval=500, group=G_STAT,
+// The cap was 500. Raised because the bar-size ladder turned out to be
+// measuring this input rather than the bar size: what sets the revisit
+// baseline is the horizon expressed in AUCTION PERIODS, and that is
+// statHorizon x bar size / period length. Changing the chart timeframe moves
+// three things at once - the bar, the ATR the stop is drawn from, and the
+// horizon - so a ladder of timeframes cannot say which one matters.
+//
+// Sweeping THIS input on one chart moves only the horizon. Same bars, same
+// stops, same signals, one variable. That is the experiment the timeframe
+// ladder was a proxy for, and it needs no subscription to run.
+int    statHorizon = input.int(200, "Outcome Horizon (bars)", minval=5, maxval=2000, group=G_STAT,
      tooltip="How long a trade gets to reach its target or its stop before it is given up on and booked as EXPIRED.\n\nRaised from 50 because 50 was distorting every number above it. An expired trade is not a result - it is a position still open when the clock ran out, marked at whatever R it happened to show. On a 30m gold sample with the target cap OFF, that bucket held between 23R and 38R of unrealised paper against headline totals of 9R to 53R: in one configuration the strategy had made 2.9R of real money and the table reported 40.8R.\n\nAt 200 almost everything resolves into a genuine win or loss, so Total R becomes a number you can read rather than one you have to take apart. Lower it only if you deliberately want to measure how fast setups resolve.")
 string statPos  = input.string("Bottom Left", "Table Position",
      options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_STAT)
