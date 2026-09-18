@@ -3609,7 +3609,10 @@ var int sigSkip = 0
 // Total R alone cannot say WHERE the money went, which is why realised R is
 // split by how each trade ended: an edge that was never there looks nothing
 // like an edge the exits are handing back.
-var array<float> ledger = array.new<float>(11, 0.0)
+// Seven slots, not eleven. The R win/loss/expired/flat split was accumulated
+// on every close and, once the rows that printed it were cut for space, read
+// by nothing. Dead weight in the hot path of every resolved trade.
+var array<float> ledger = array.new<float>(7, 0.0)
 int LG_WIN   = 0
 int LG_LOSS  = 1
 int LG_EXP   = 2
@@ -3617,10 +3620,6 @@ int LG_FLAT  = 3
 int LG_NCL   = 4
 int LG_REALR = 5
 int LG_PLANR = 6
-int LG_RWIN  = 7
-int LG_RLOSS = 8
-int LG_REXP  = 9
-int LG_RFLAT = 10
 
 f_ledAdd(int k, float v) =>
     ledger.set(k, ledger.get(k) + v)
@@ -4592,7 +4591,6 @@ f_closeReversals() =>
             float en = opEntry.get(i)
             float flatR = rk > 0 ? (d == 1 ? close - en : en - close) / rk : 0.0
             f_ledAdd(LG_REALR, flatR)
-            f_ledAdd(LG_RFLAT, flatR)
             f_ledAdd(LG_PLANR, nz(opRPlan.get(i)))
             f_ledAdd(LG_NCL, 1)
             f_ledAdd(LG_FLAT, 1)
@@ -4711,12 +4709,6 @@ f_manageTrades() =>
                 label.delete(td.info)
                 opDraw.remove(i)
             f_ledAdd(LG_REALR, realR)
-            if outc == 1
-                f_ledAdd(LG_RWIN, realR)
-            else if outc == 2
-                f_ledAdd(LG_RLOSS, realR)
-            else
-                f_ledAdd(LG_REXP, realR)
             f_ledAdd(LG_PLANR, nz(opRPlan.get(i)))
             f_ledAdd(LG_NCL, 1)
             // the same resolution, recorded a second time under the direction
@@ -4858,10 +4850,6 @@ int   sigFlat    = int(ledger.get(LG_FLAT))
 int   nClosed    = int(ledger.get(LG_NCL))
 float sumRealR   = ledger.get(LG_REALR)
 float sumPlanR   = ledger.get(LG_PLANR)
-float sumRWin    = ledger.get(LG_RWIN)
-float sumRLoss   = ledger.get(LG_RLOSS)
-float sumRExp    = ledger.get(LG_REXP)
-float sumRFlat   = ledger.get(LG_RFLAT)
 
 float expectR = nClosed > 0 ? sumRealR / nClosed : na
 float avgPlanR = nClosed > 0 ? sumPlanR / nClosed : na
@@ -4932,7 +4920,7 @@ f_pct(int hit, int tot) =>
     // only ever read 0% or 100%. Multiplying first keeps it in floating point.
     tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "-"
 
-var table stat = table.new(f_tablePos(statPos), 2, 21, bgcolor=cTblBg,
+var table stat = table.new(f_tablePos(statPos), 2, 14, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -5044,7 +5032,6 @@ f_drawStats() =>
          text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
 
     int sigTot = sigWin + sigLoss
-    int sigAll = sigWin + sigLoss + sigExpired + sigFlat
     // BREAK-EVEN IS NOT 50%. This row used to go green above a 50% win rate,
     // which at a 2R target is fifty percent ABOVE the level that actually pays.
     // Break-even is 1/(1 + avg R targeted): about 34% at 2R. A 40% win rate is
@@ -5059,8 +5046,7 @@ f_drawStats() =>
     // remove, and I left it in the row the eye reads first.
     string hitTxt = f_pct(sigWin, sigTot) +
          (na(beRate) ? "" : "   be " + str.tostring(beRate, "#.#") + "%")
-    f_pair2(2, "Hit target (all)", f_pct(sigWin, sigAll), sigAll < 20 ? C_NE : C_WN)
-    f_pair2(3, "Win/Loss/Exp/Flat", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" +
+    f_pair2(2, "Win/Loss/Exp/Flat", str.tostring(sigWin) + "/" + str.tostring(sigLoss) + "/" +
          str.tostring(sigExpired) + "/" + str.tostring(sigFlat), C_NE)
     // THE row - and 20 trades was never the right bar. The smallest win-rate
     // edge a sample can resolve, at 80% power and two sigma, is
@@ -5085,17 +5071,14 @@ f_drawStats() =>
     // the sample can see.
     f_pair2(1, "Hit target (resolved)", hitTxt,
          sigTot < 20 or na(wEdge) ? C_NE : not powOk ? C_WN : wEdge > 0 ? C_UP : C_DN)
-    f_pair2(4, "Expectancy  R/trade", na(expectR) ? "-" : str.tostring(expectR, "#.##") + "R", expCol)
-    f_pair2(5, "Total R", na(expectR) ? "-" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
-    f_pair2(6, "Avg R targeted", na(avgPlanR) ? "-" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
-    // WHERE the R went. If wins minus losses is positive while the total is
-    // not, the entries are finding an edge and the EXITS are handing it back.
-    f_pair2(7, "R  win / loss",
-         (sumRWin >= 0 ? "+" : "") + str.tostring(sumRWin, "#.#") + " / " + str.tostring(sumRLoss, "#.#"),
-         sumRWin + sumRLoss > 0 ? C_UP : C_DN)
-    f_pair2(8, "R  expired / flat",
-         str.tostring(sumRExp, "#.#") + " / " + str.tostring(sumRFlat, "#.#"),
-         sumRExp + sumRFlat > 0 ? C_UP : C_DN)
+    f_pair2(3, "Expectancy  R/trade", na(expectR) ? "-" : str.tostring(expectR, "#.##") + "R", expCol)
+    f_pair2(4, "Total R", na(expectR) ? "-" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
+    f_pair2(5, "Avg R targeted", na(avgPlanR) ? "-" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
+    // The R win/loss and expired/flat splits used to sit here. They answered
+    // "are the exits handing back what the entries find", which is a real
+    // question, but Total R and expectancy already say whether the thing pays
+    // and the file is 622 tokens over Pine's ceiling. Diagnostics lose to the
+    // answer when something has to go.
     // THESE TWO ROWS HAVE A BASELINE NOW, AND IT COSTS THEM EVERYTHING.
     // A separate controlled test registered every level with a MIRROR - same
     // distance, same instant, opposite side - and found that ANY level near
@@ -5113,9 +5096,9 @@ f_drawStats() =>
     // before the multiply - the same trap f_pct already carries a comment about.
     // 76 is the mirror baseline measured on other instruments at 30m, not on
     // this chart. Balance break's null is a coin flip, so it reads against 50.
-    f_base(9,  "Poor high vs 76% base", poorHiHit, poorHiTotal, 76.0)
-    f_base(10, "Poor low vs 76% base",  poorLoHit, poorLoTotal, 76.0)
-    f_base(11, "Balance break vs 50%",  balHold,   balTotal,    50.0)
+    f_base(6,  "Poor high vs 76% base", poorHiHit, poorHiTotal, 76.0)
+    f_base(7, "Poor low vs 76% base",  poorLoHit, poorLoTotal, 76.0)
+    f_base(8, "Balance break vs 50%",  balHold,   balTotal,    50.0)
     // THE CAP, STATED RATHER THAN INFERRED.
     // "Avg R targeted" cannot tell you whether the cap is on, and I spent
     // several rounds wrongly insisting it could. With next-bar-open fills the R
@@ -5126,24 +5109,14 @@ f_drawStats() =>
     // shrink R below the floor, while keeping the adverse ones. The average is
     // biased upward by construction, so it can sit above the cap with the cap
     // switched on. This row reads the input itself and settles it.
-    f_pair2(14, "Target cap", riskTgtCap > 0 ? str.tostring(riskTgtCap, "#.#") + "R  ON" : "OFF",
+    f_pair2(10, "Target cap", riskTgtCap > 0 ? str.tostring(riskTgtCap, "#.#") + "R  ON" : "OFF",
          riskTgtCap > 0 ? C_UP : C_WN)
-    f_pair2(12, "CME gaps filled", str.tostring(gapFilled) + " open " + str.tostring(gapTop.size()), C_NE)
-    // WHAT THIS SAMPLE COULD HAVE SEEN. Printed whether or not anything was
-    // found, because "no edge" and "could not have detected one" are different
-    // statements and this panel used to make only the first.
-    // Labelled with its sample, so it cannot be read as describing a different
-    // row's denominator.
-    f_pair2(15, "Win-edge visible (n=" + str.tostring(sigTot) + ")",
-         na(mdlPP) ? "-" : str.tostring(mdlPP, "#.#") + "pp",
-         na(mdlPP) ? C_NE : mdlPP > 6.4 ? C_WN : C_UP)
-    f_pair2(16, "Verdict (no drift control)", sigTot < 20 ? "too few trades" :
-         na(mdlPP) or na(wEdge) ? "-" :
-         math.abs(wEdge) < mdlPP ? "UNDERPOWERED" :
-         wEdge > 0 ? "clears its own noise, trend not removed" : "negative, and resolvable",
-         sigTot < 20 or na(mdlPP) or na(wEdge) ? C_NE :
-         math.abs(wEdge) < mdlPP ? C_WN : C_WN)
-
+    // Rows 15 and 16 used to print the raw win-edge's MDL and a verdict built
+    // on it. Both are superseded by the drift-controlled pair below, which
+    // answers the same question without the trend in it, and keeping the
+    // optimistic version alongside invited reading whichever was nicer. mdlPP
+    // and wEdge are still computed - the hit-rate and expectancy rows colour
+    // themselves from the power test.
     // ------------------------------------------------------------------
     // DRIFT CONTROL. Everything above compares the signals with gambler's
     // ruin, which assumes no drift. These split them by their own direction,
@@ -5165,18 +5138,17 @@ f_drawStats() =>
     bool  weak  = na(dfEdge) or na(dfMdl) or math.abs(dfEdge) < dfMdl
     bool  under = not na(dfEdge) and math.abs(dfEdge) < 6.4
 
-    f_pair2(17, "Hit by direction",
-         na(pL) or na(pS) ? "one direction only" :
-         "L " + str.tostring(pL * 100, "#.#") + "% n " + str.tostring(int(nL)) +
-         "   S " + str.tostring(pS * 100, "#.#") + "% n " + str.tostring(int(nS)), C_NE)
-    f_pair2(18, "Trend inside the headline",
-         na(drift) ? "-" : (drift > 0 ? "+" : "") + str.tostring(drift, "#.#") + "pp",
-         na(drift) ? C_NE : math.abs(drift) < 6.4 ? C_NE : C_WN)
-    f_pair2(19, "Drift-free edge (n=" + str.tostring(int(nL + nS)) + ")",
+    f_pair2(11, "By direction, and the trend in it",
+         not both ? "one direction only" :
+         "L " + str.tostring(pL * 100, "#.#") + "% " + str.tostring(int(nL)) +
+         "  S " + str.tostring(pS * 100, "#.#") + "% " + str.tostring(int(nS)) +
+         "  trend " + (drift > 0 ? "+" : "") + str.tostring(drift, "#.#"),
+         not both ? C_NE : math.abs(drift) < 6.4 ? C_NE : C_WN)
+    f_pair2(12, "Drift-free edge (n=" + str.tostring(int(nL + nS)) + ")",
          na(dfEdge) ? "-" : (dfEdge > 0 ? "+" : "") + str.tostring(dfEdge, "#.#") +
          "pp  +/- " + (na(dfMdl) ? "-" : str.tostring(dfMdl, "#.#")),
          na(dfEdge) or thin or weak or under ? C_NE : dfEdge > 0 ? C_UP : C_DN)
-    f_pair2(20, "Verdict (drift-controlled)",
+    f_pair2(13, "Verdict (drift-controlled)",
          not both ? "needs both directions" :
          thin ? "too few resolved trades" :
          na(dfEdge) ? "-" :
@@ -5185,7 +5157,7 @@ f_drawStats() =>
          dfEdge > 0 ? "EDGE SURVIVES THE TREND" : "negative once trend is removed",
          not both or thin or weak or under ? C_WN : dfEdge > 0 ? C_UP : C_DN)
 
-    f_pair2(13, "Open now  (live R)",
+    f_pair2(9, "Open now  (live R)",
          str.tostring(sigOpen) + (na(openR) ? "" : "   " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"),
          na(openR) ? C_NE : (openR > 0 ? C_UP : C_DN))
 
