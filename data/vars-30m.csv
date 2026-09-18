@@ -1,6 +1,7 @@
-# Value Area Reversion Signals (VARS) - nine-instrument test
+# Value Area Reversion Signals (VARS) - twelve-instrument test
 # All rows: 30m charts, previous-day value area only, "Require breakout volume
-# to slow" ON (default), 2R target, 1 ATR(14) stop, 100-bar horizon, panel m1.
+# to slow" ON (default), 2R target, 1 ATR(14) stop, 100-bar horizon. Panels m1 (first nine) and m2 (last three);
+# the build tag changes only how the detection floor is computed, never the counts.
 # Settings were not altered between instruments.
 # win_l/n_l and win_s/n_s are resolved trades only; timeouts were zero on every
 # instrument, so nothing was censored.
@@ -15,3 +16,6 @@ EURUSD,30m,2,8,2,5,0,0
 USDJPY,30m,2,4,1,12,0,0
 NAS100USD,30m,1,6,0,8,0,0
 US30USD,30m,1,2,2,5,0,0
+GBPUSD,30m,3,7,3,9,0,0
+BRENT,30m,2,4,2,7,0,0
+SPX,30m,3,6,1,5,0,0
