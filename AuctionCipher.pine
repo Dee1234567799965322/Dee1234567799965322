@@ -3357,7 +3357,6 @@ if cmeOn and cmeNewDay and not na(cmeC[1]) and barClosed and (not cmeWeekOnly or
             gapBot.shift()
 
 // a gap is closed once price has traded through it
-var int gapFilled = 0
 if gapTop.size() > 0 and barClosed
     for i = gapTop.size() - 1 to 0
         if low <= gapTop.get(i) and high >= gapBot.get(i)
@@ -3365,7 +3364,6 @@ if gapTop.size() > 0 and barClosed
             gapBox.remove(i)
             gapTop.remove(i)
             gapBot.remove(i)
-            gapFilled += 1
 
 // ============================================================================
 // 19g. SESSION RANGES
@@ -4854,65 +4852,79 @@ float sumPlanR   = ledger.get(LG_PLANR)
 float expectR = nClosed > 0 ? sumRealR / nClosed : na
 float avgPlanR = nClosed > 0 ? sumPlanR / nClosed : na
 
-// --- does a POOR extreme really get revisited?
-var int poorHiTotal = 0
-var int poorHiHit = 0
-var int poorLoTotal = 0
-var int poorLoHit = 0
-var float poorHiLvl = na
-var int poorHiBar = na
-var float poorLoLvl = na
-var int poorLoBar = na
+// --- does a POOR extreme really get revisited, and MORE than any level would?
+//
+// The old version counted poor revisits and scored them against 76 - a number
+// measured on OTHER instruments at 30m and carried in here as a constant. A
+// gap against an imported baseline can be a real deficit or just a baseline
+// that does not describe this chart, and nothing on the panel could tell them
+// apart.
+//
+// So every poor extreme now registers a MIRROR at the same instant: a level the
+// same distance from price on the opposite side, watched for the same horizon.
+// Whatever a level near price is worth on THIS chart - its volatility, its bar
+// size, its session - the mirror is worth the same, because it was placed at
+// the same moment at the same distance. The difference between the two is what
+// being a poor extreme is worth, and it needs no imported constant at all.
+//
+// Registration now requires the level to be UNTOUCHED at the moment it is
+// registered - a prior high already below price has been revisited before the
+// watch begins, and counting it scored a hit for free. That guard is also what
+// makes the mirror symmetric: both levels start on their own side of price.
+//
+// High and low extremes are POOLED. They read within a point of each other
+// every time they have been measured separately, and pooling doubles the n
+// behind one MDL instead of splitting it across two underpowered rows.
+//
+// pv: 0/1 poor total and hit, 2/3 mirror total and hit.
+var array<float> pv   = array.new<float>(4, 0.0)
+var array<float> wLvl = array.new<float>()
+var array<int>   wBar = array.new<int>()
+// slot and direction in one int: +(slot+1) watches for a touch from below,
+// -(slot+1) from above. A separate direction array is a fifth array and four
+// more lines to say what a sign already says.
+var array<int>   wSd  = array.new<int>()
 
-if isNewPeriod and priorHighQual == "POOR" and not na(priorHiLvl)
-    poorHiLvl := priorHiLvl
-    poorHiBar := bar_index
-    poorHiTotal += 1
-if not na(poorHiLvl)
-    if high >= poorHiLvl
-        poorHiHit += 1
-        poorHiLvl := na
-    else if bar_index - poorHiBar > statHorizon
-        poorHiLvl := na
+f_watch(float lvl, int sd) =>
+    wLvl.push(lvl)
+    wBar.push(bar_index)
+    wSd.push(sd)
+    int sl = math.abs(sd) - 1
+    pv.set(sl, pv.get(sl) + 1)
+    wLvl.size()
 
-if isNewPeriod and priorLowQual == "POOR" and not na(priorLoLvl)
-    poorLoLvl := priorLoLvl
-    poorLoBar := bar_index
-    poorLoTotal += 1
-if not na(poorLoLvl)
-    if low <= poorLoLvl
-        poorLoHit += 1
-        poorLoLvl := na
-    else if bar_index - poorLoBar > statHorizon
-        poorLoLvl := na
+// One loop for both kinds, because two hand-written watchers is two chances
+// for the poor side and the mirror side to disagree about what a touch is -
+// and that disagreement would land directly in the lift.
+f_runWatch() =>
+    for i = wLvl.size() - 1 to 0
+        int sd = wSd.get(i)
+        bool hit = sd > 0 ? high >= wLvl.get(i) : low <= wLvl.get(i)
+        if hit
+            int sl = math.abs(sd) - 1
+            pv.set(sl + 1, pv.get(sl + 1) + 1)
+        if hit or bar_index - wBar.get(i) > statHorizon
+            wLvl.remove(i)
+            wBar.remove(i)
+            wSd.remove(i)
+    wLvl.size()
 
-// --- does a balance break actually follow through?
-var int balTotal = 0
-var int balHold = 0
-var float balBrkLvl = na
-var int balBrkBar = na
-var int balBrkDir = 0
-if balBreakUp or balBreakDn
-    balTotal += 1
-    balBrkLvl := balBreakUp ? balHi : balLo
-    balBrkBar := bar_index
-    balBrkDir := balBreakUp ? 1 : -1
-if not na(balBrkLvl)
-    float need = atr14 * 1.5
-    if balBrkDir == 1
-        if close > balBrkLvl + need
-            balHold += 1
-            balBrkLvl := na
-        else if close < balBrkLvl
-            balBrkLvl := na
-    else
-        if close < balBrkLvl - need
-            balHold += 1
-            balBrkLvl := na
-        else if close > balBrkLvl
-            balBrkLvl := na
-    if not na(balBrkLvl) and bar_index - balBrkBar > statHorizon
-        balBrkLvl := na
+if isNewPeriod and priorHighQual == "POOR" and not na(priorHiLvl) and priorHiLvl > close
+    f_watch(priorHiLvl, 1)
+    f_watch(2 * close - priorHiLvl, -3)
+if isNewPeriod and priorLowQual == "POOR" and not na(priorLoLvl) and priorLoLvl < close
+    f_watch(priorLoLvl, -1)
+    f_watch(2 * close - priorLoLvl, 3)
+if wLvl.size() > 0
+    f_runWatch()
+
+// The balance-break follow-through test used to live here. It read -6.9pp on
+// n=102, -7.4pp on n=101 and -10.8pp on n=74 - consistently negative, never
+// once clearing its own MDL, and it needed its own watcher because it races
+// two barriers on CLOSE where the level watcher above tests a touch on
+// high/low. At the token ceiling a diagnostic that has never resolved loses to
+// the measurement it is standing in front of. Restoring it is one revert.
+
 
 f_pct(int hit, int tot) =>
     // INT DIVISION BUG: hit and tot are both int, so hit / tot truncated to 0
@@ -4920,7 +4932,7 @@ f_pct(int hit, int tot) =>
     // only ever read 0% or 100%. Multiplying first keeps it in floating point.
     tot > 0 ? str.tostring(math.round(hit * 100.0 / tot)) + "%  (" + str.tostring(tot) + ")" : "-"
 
-var table stat = table.new(f_tablePos(statPos), 2, 14, bgcolor=cTblBg,
+var table stat = table.new(f_tablePos(statPos), 2, 10, bgcolor=cTblBg,
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -4930,19 +4942,24 @@ f_pair2(int r, string k, string v, color c) =>
     table.cell(stat, 0, r, k, text_color=color.new(cTxt, 40), text_size=size.tiny, text_halign=text.align_left)
     table.cell(stat, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
 
-// Three stats rows share one shape: a hit count against a stated null, its own
-// MDL, and a colour that stays grey unless the gap clears BOTH the 6.4pp noise
-// floor and that MDL. Written once rather than three times inline - the file is
-// at Pine's token ceiling, and three copies of one piece of arithmetic is the
-// cheapest thing in it to give up. Top level, not inside f_drawStats: Pine has
-// no nested function definitions.
-f_base(int row, string k, int hit, int tot, float nullPP) =>
-    float lf = tot > 0 ? hit * 100.0 / tot - nullPP : na
-    float ph = tot > 0 ? hit * 1.0 / tot : na
-    float md = na(ph) ? na : 2.8 * math.sqrt(ph * (1 - ph) / tot) * 100
+// Three stats rows share one shape: a hit count against a baseline, the MDL of
+// that comparison, and a colour that stays grey unless the gap clears BOTH the
+// 6.4pp noise floor and that MDL.
+//
+// The baseline can be MEASURED - a paired mirror with its own counts, whose
+// variance belongs in the MDL - or a fixed null like a coin flip, which has no
+// sampling error of its own. n2 <= 0 selects the second, and fbPP supplies it.
+// Top level, not inside f_drawStats: Pine has no nested function definitions.
+f_lift(int row, string k, int h1, int n1, int h2, int n2, float fbPP) =>
+    float p1 = n1 > 0 ? h1 * 1.0 / n1 : na
+    float p2 = n2 > 0 ? h2 * 1.0 / n2 : na
+    float bs = na(p2) ? fbPP : p2 * 100
+    float lf = na(p1) or na(bs) ? na : p1 * 100 - bs
+    float vr = na(p1) ? na : p1 * (1 - p1) / n1 + (na(p2) ? 0.0 : p2 * (1 - p2) / n2)
+    float md = na(vr) or vr <= 0 ? na : 2.8 * math.sqrt(vr) * 100
     f_pair2(row, k, na(lf) ? "-" :
-         (lf > 0 ? "+" : "") + str.tostring(lf, "#.#") + "pp  n " + str.tostring(tot),
-         tot < 20 or na(lf) or math.abs(lf) < 6.4 or
+         (lf > 0 ? "+" : "") + str.tostring(lf, "#.#") + "pp  n " + str.tostring(n1),
+         n1 < 20 or na(lf) or math.abs(lf) < 6.4 or
          na(md) or math.abs(lf) < md ? C_NE : lf > 0 ? C_UP : C_DN)
     lf
 
@@ -5072,8 +5089,6 @@ f_drawStats() =>
     f_pair2(1, "Hit target (resolved)", hitTxt,
          sigTot < 20 or na(wEdge) ? C_NE : not powOk ? C_WN : wEdge > 0 ? C_UP : C_DN)
     f_pair2(3, "Expectancy  R/trade", na(expectR) ? "-" : str.tostring(expectR, "#.##") + "R", expCol)
-    f_pair2(4, "Total R", na(expectR) ? "-" : (sumRealR >= 0 ? "+" : "") + str.tostring(sumRealR, "#.#") + "R", expCol)
-    f_pair2(5, "Avg R targeted", na(avgPlanR) ? "-" : str.tostring(avgPlanR, "#.##") + "R", C_NE)
     // The R win/loss and expired/flat splits used to sit here. They answered
     // "are the exits handing back what the entries find", which is a real
     // question, but Total R and expectancy already say whether the thing pays
@@ -5096,21 +5111,12 @@ f_drawStats() =>
     // before the multiply - the same trap f_pct already carries a comment about.
     // 76 is the mirror baseline measured on other instruments at 30m, not on
     // this chart. Balance break's null is a coin flip, so it reads against 50.
-    f_base(6,  "Poor high vs 76% base", poorHiHit, poorHiTotal, 76.0)
-    f_base(7, "Poor low vs 76% base",  poorLoHit, poorLoTotal, 76.0)
-    f_base(8, "Balance break vs 50%",  balHold,   balTotal,    50.0)
-    // THE CAP, STATED RATHER THAN INFERRED.
-    // "Avg R targeted" cannot tell you whether the cap is on, and I spent
-    // several rounds wrongly insisting it could. With next-bar-open fills the R
-    // is recomputed from the FILL, not the signal: an open that gaps against
-    // you shrinks the distance to the stop and stretches the distance to the
-    // target, so the realised R goes UP even though the target price was
-    // capped. And the minimum-R filter then discards the favourable gaps, which
-    // shrink R below the floor, while keeping the adverse ones. The average is
-    // biased upward by construction, so it can sit above the cap with the cap
-    // switched on. This row reads the input itself and settles it.
-    f_pair2(10, "Target cap", riskTgtCap > 0 ? str.tostring(riskTgtCap, "#.#") + "R  ON" : "OFF",
-         riskTgtCap > 0 ? C_UP : C_WN)
+    // n is the POOR count; the baseline row carries the mirror's.
+    f_lift(4, "Poor extreme vs mirror", int(pv.get(1)), int(pv.get(0)),
+         int(pv.get(3)), int(pv.get(2)), na)
+    f_pair2(5, "Mirror baseline (measured here)",
+         pv.get(2) > 0 ? str.tostring(pv.get(3) / pv.get(2) * 100, "#.#") + "%  n " +
+         str.tostring(int(pv.get(2))) + "   vs 76% imported" : "-", C_NE)
     // Rows 15 and 16 used to print the raw win-edge's MDL and a verdict built
     // on it. Both are superseded by the drift-controlled pair below, which
     // answers the same question without the trend in it, and keeping the
@@ -5138,17 +5144,17 @@ f_drawStats() =>
     bool  weak  = na(dfEdge) or na(dfMdl) or math.abs(dfEdge) < dfMdl
     bool  under = not na(dfEdge) and math.abs(dfEdge) < 6.4
 
-    f_pair2(11, "By direction, and the trend in it",
+    f_pair2(7, "By direction, and the trend in it",
          not both ? "one direction only" :
          "L " + str.tostring(pL * 100, "#.#") + "% " + str.tostring(int(nL)) +
          "  S " + str.tostring(pS * 100, "#.#") + "% " + str.tostring(int(nS)) +
          "  trend " + (drift > 0 ? "+" : "") + str.tostring(drift, "#.#"),
          not both ? C_NE : math.abs(drift) < 6.4 ? C_NE : C_WN)
-    f_pair2(12, "Drift-free edge (n=" + str.tostring(int(nL + nS)) + ")",
+    f_pair2(8, "Drift-free edge (n=" + str.tostring(int(nL + nS)) + ")",
          na(dfEdge) ? "-" : (dfEdge > 0 ? "+" : "") + str.tostring(dfEdge, "#.#") +
          "pp  +/- " + (na(dfMdl) ? "-" : str.tostring(dfMdl, "#.#")),
          na(dfEdge) or thin or weak or under ? C_NE : dfEdge > 0 ? C_UP : C_DN)
-    f_pair2(13, "Verdict (drift-controlled)",
+    f_pair2(9, "Verdict (drift-controlled)",
          not both ? "needs both directions" :
          thin ? "too few resolved trades" :
          na(dfEdge) ? "-" :
@@ -5157,7 +5163,7 @@ f_drawStats() =>
          dfEdge > 0 ? "EDGE SURVIVES THE TREND" : "negative once trend is removed",
          not both or thin or weak or under ? C_WN : dfEdge > 0 ? C_UP : C_DN)
 
-    f_pair2(9, "Open now  (live R)",
+    f_pair2(6, "Open now  (live R)",
          str.tostring(sigOpen) + (na(openR) ? "" : "   " + (openR >= 0 ? "+" : "") + str.tostring(openR, "0.00") + "R"),
          na(openR) ? C_NE : (openR > 0 ? C_UP : C_DN))
 
