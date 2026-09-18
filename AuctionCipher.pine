@@ -5084,7 +5084,12 @@ f_drawAudit() =>
 // Moved into a function to keep the main body under Pine's size cap.
 f_drawStats() =>
     table.cell(stat, 0, 0, "MEASURED ON THIS CHART", text_color=cTxt, text_size=size.tiny, text_halign=text.align_left)
-    table.cell(stat, 1, 0, str.tostring(statHorizon) + "b" + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
+    // The panel now says which BUILD produced it. Three times in one session a
+    // reading had to be attributed to the wrong code because the only way to
+    // tell which file was loaded was to notice that a count had not moved.
+    // A measurement instrument that cannot state its own version makes every
+    // number it prints ambiguous the moment the version changes.
+    table.cell(stat, 1, 0, "r18  " + str.tostring(statHorizon) + "b" + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
          text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
 
     int sigTot = sigWin + sigLoss
