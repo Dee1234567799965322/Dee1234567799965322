@@ -1,0 +1,7 @@
+# WaveTrend Dot Test - Market Cipher 9/12/3 buy/sell dots (every cross)
+# from the Liquidity Tracker v2 oscillator, engine copied verbatim.
+# buy dot -> long, sell dot -> short. 2R target, 1 ATR(14) stop, 100-bar
+# horizon, panel build m2. Null = 1/(1+R) = 33.33%.
+# One instrument, single chart load, 1647 resolved trades.
+symbol,timeframe,win_buy,n_buy,win_sell,n_sell,timeout
+CRYPTO,intraday,263,824,291,823,0
