@@ -4867,7 +4867,22 @@ float avgPlanR = nClosed > 0 ? sumPlanR / nClosed : na
 // the same moment at the same distance. The difference between the two is what
 // being a poor extreme is worth, and it needs no imported constant at all.
 //
-// Registration now requires the level to be UNTOUCHED at the moment it is
+// SIXTEENTH CORRECTION, and the array above is what exposed it. The watcher
+// this replaced held ONE level per side. A new poor high arriving while the
+// previous was still pending did `poorHiLvl := priorHiLvl` straight over it:
+// the total was incremented, the old watch vanished, and a level that vanishes
+// can never register a hit. It was counted as a miss by construction.
+//
+// That was not a rare collision. The horizon is statHorizon bars - 200 on the
+// default - and a 30m period is 48, so a watch spans about four periods and
+// several were in flight at all times. Most watches were overwritten before
+// they could resolve, and the poor revisit rate was deflated by roughly the
+// overlap rate. Measured: 52.9% under the old watcher, 65.4% under this one,
+// on the same chart. Every poor-revisit number this project ever printed was
+// biased downward, including the -23.5pp that looked like its first resolvable
+// finding.
+//
+// Registration also now requires the level to be UNTOUCHED at the moment it is
 // registered - a prior high already below price has been revisited before the
 // watch begins, and counting it scored a hit for free. That guard is also what
 // makes the mirror symmetric: both levels start on their own side of price.
