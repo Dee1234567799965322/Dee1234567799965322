@@ -470,7 +470,7 @@ string gateMode  = input.string("Window (legacy)", "Gate Mode",
 int   gateTol    = input.int(4, "Event Tolerance (bars)", minval=0, maxval=6, group=G_CSIG,
      tooltip="How far the rejection and the momentum cross may sit from the divergence's own pivot and still count as the same swing. 0 demands they land on the exact pivot bar. Same event mode only.")
 string csigSens  = input.string("Strict (all 4)", "Sensitivity",
-     options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)"], group=G_CSIG,
+     options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)", "Wave only (trigger)"], group=G_CSIG,
      tooltip="How many of the four WINDOW-mode gates must pass. Location and trigger are always required - sensitivity only relaxes context and proof.\n\nONLY APPLIES WHEN GATE MODE ABOVE IS \"Window (legacy)\". On \"Same event (strict)\" - the default - every requirement is mandatory by design and this input is read nowhere, so moving it will not change anything you see. The dials that actually loosen Same event are Event Tolerance, Minimum Level Confluence and Minimum Divergence Quality.\n\nIf you are on Window and seeing no signals at all, this is the dial to turn first.")
 bool  csigZoneOnly = input.bool(false, "Cross Must Be In Extreme Zone", group=G_CSIG,
      tooltip="ON is the purist reading, but on ranging days WaveTrend may never reach +/-53 and you will see nothing for days. OFF accepts any cross that clears the other gates.")
@@ -4325,8 +4325,23 @@ else if csigSens == "Loose (location + trigger)"
 // location and trigger are never optional, whatever the sensitivity
 // Strict replaces the window test outright; context is the one gate it keeps,
 // because "the regime permits this direction" is a state, not an event.
-bool rawBuySig  = csigOn and (strictMode ? (evtBuy  and ctxBuy)  : (atLowEdge  and trigBuy  and gatesBuy  >= needGates))
-bool rawSellSig = csigOn and (strictMode ? (evtSell and ctxSell) : (atHighEdge and trigSell and gatesSell >= needGates))
+// WAVE ONLY is the ablation. Location and trigger were "never optional,
+// whatever the sensitivity" - this is the setting that tests whether that was
+// true or merely asserted. It fires on the WaveTrend cross alone, which is the
+// signal the other three layers were built to filter.
+//
+// If the four-gate stack is doing work, removing it should make the result
+// worse. If it reads the same, the hierarchy is description rather than
+// mechanism, and that is worth knowing before anyone trades it.
+//
+// It also buys something no other configuration on this chart has: SAMPLE.
+// The gates cut gold's 1-hour chart to 327 resolved trades, where the power
+// table says a 6.4pp effect needs roughly 1,600 to be found half the time.
+// Dropping them may be the only setting in this file that can reach a sample
+// large enough to answer the question it is asking.
+bool waveOnly = csigSens == "Wave only (trigger)"
+bool rawBuySig  = csigOn and (strictMode ? (evtBuy  and ctxBuy)  : (trigBuy  and (waveOnly or (atLowEdge  and gatesBuy  >= needGates))))
+bool rawSellSig = csigOn and (strictMode ? (evtSell and ctxSell) : (trigSell and (waveOnly or (atHighEdge and gatesSell >= needGates))))
 
 // LOGIC ERROR FOUND: these were independent, so a wide bar that touched a low
 // level AND a high level satisfied both location tests and printed BUY and SELL
