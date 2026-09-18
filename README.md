@@ -116,6 +116,7 @@ died the same way.
 | `ValueAreaReversion.pine` | A third-party value-area reclaim indicator (SFP family), with the measurement panel bolted on so it reports its own hit rate against `1/(1+R)` instead of being argued about. Result pending |
 | `ICTTest.pine` | The full ICT sequence assembled — liquidity sweep, then market-structure shift, then entry — measured as one setup rather than as separate primitives. Its parts were each measured flat or negative elsewhere in this log; this tests whether the sequence is more than their sum. Same measurement panel. Result pending |
 | `SMCTest.pine` | The World Class SMC *primary* entry from the source PDFs — break of structure, then an inducement (IDM) sweep by an IFC candle, entering in the trend direction, with an optional imbalance filter. This is trend continuation, distinct from ICTTest's reversal. Same measurement panel. Result pending |
+| `WaveTrendTest.pine` | The buy/sell dots from the Liquidity Tracker's oscillator (Market Cipher 9/12/3 on hlc3), measured with the standard panel. The WaveTrend engine is copied verbatim so the dots are identical; the rest of that indicator draws context levels and makes no directional claim. Result pending |
 
 ### The experiments, in the order they were run
 
