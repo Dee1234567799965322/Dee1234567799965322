@@ -22,6 +22,9 @@ int   wtChanInput = input.int(9, "Channel length", minval = 2, maxval = 100, gro
 int   wtAvgInput  = input.int(12, "Average length", minval = 2, maxval = 200, group = G_WT)
 int   wtSigInput  = input.int(3, "Signal length", minval = 1, maxval = 50, group = G_WT)
 bool  extOnlyInput = input.bool(false, "Only dots at the extreme", tooltip = "Off: every fast/slow cross is a dot (Market Cipher default). On: the slow wave must also be beyond the extreme - far fewer, bigger-turn dots.", group = G_WT)
+bool  bigExtInput  = input.bool(true, "Larger dot when the cross is beyond the extreme", tooltip = "Matches the source indicator: ordinary crosses print a tiny dot, crosses beyond the extreme level print a larger one.", group = G_WT)
+color colBuyInput  = input.color(#26A69A, "Buy dot",  inline = "dc", group = G_WT)
+color colSellInput = input.color(#EF5350, "Sell dot", inline = "dc", group = G_WT)
 
 float wtSrc = hlc3
 float esa = ta.ema(wtSrc, wtChanInput)
@@ -41,8 +44,10 @@ plot(wt1, "WaveTrend", color = color.new(#42A5F5, 0), linewidth = 2)
 plot(wt2, "WaveTrend slow", color = color.new(#B2B5BE, 45), linewidth = 1)
 hline( wtExtInput, "Overbought", color = color.new(#EF5350, 65), linestyle = hline.style_dashed)
 hline(-wtExtInput, "Oversold",   color = color.new(#26A69A, 65), linestyle = hline.style_dashed)
-plotshape(buyDot  ? wt2 : na, "Buy dot",  shape.circle, location.absolute, #26A69A, size = size.tiny)
-plotshape(sellDot ? wt2 : na, "Sell dot", shape.circle, location.absolute, #EF5350, size = size.tiny)
+plotshape(buyDot  and (not bigExtInput or not wtOversold)   ? wt2 : na, "Buy dot",  shape.circle, location.absolute, colBuyInput,  size = size.tiny)
+plotshape(sellDot and (not bigExtInput or not wtOverbought) ? wt2 : na, "Sell dot", shape.circle, location.absolute, colSellInput, size = size.tiny)
+plotshape(bigExtInput and buyDot  and wtOversold   ? wt2 : na, "Buy dot (extreme)",  shape.circle, location.absolute, colBuyInput,  size = size.small)
+plotshape(bigExtInput and sellDot and wtOverbought ? wt2 : na, "Sell dot (extreme)", shape.circle, location.absolute, colSellInput, size = size.small)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MEASUREMENT PANEL  (build m2)   -- identical apparatus to the other tests
