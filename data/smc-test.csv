@@ -1,0 +1,12 @@
+# SMC IDM-Sweep Test - World Class SMC primary entry (Trend Trading: Sweep IDM)
+# BOS in trend direction -> inducement (IDM) swept by IFC candle -> entry in
+# trend direction. pivotLen 5, IDM window 30, imbalance filter OFF.
+# 2R target, 1 ATR(14) stop, 100-bar horizon, panel build m2.
+# Timeouts zero on every panel; nothing censored. Null = 1/(1+R) = 33.33%.
+symbol,timeframe,win_l,n_l,win_s,n_s,timeout_l,timeout_s
+BTCUSDT.P,4h,4,14,4,17,0,0
+BTCUSDT.P,30m,12,44,16,35,0,0
+BTCUSDT.P,15m,5,22,5,21,0,0
+XAUUSD,4h,5,18,8,16,0,0
+XAUUSD,30m,8,27,4,21,0,0
+XAUUSD,15m,8,18,2,18,0,0
