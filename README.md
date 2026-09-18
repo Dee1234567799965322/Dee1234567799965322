@@ -113,6 +113,7 @@ died the same way.
 | `EdgeLab.pine` | The harness above. Six setup buckets, each against its own mirror, with all ten corrections enforced |
 | `AuctionCipher.pine` | The original v3.0 indicator, 5,606 lines. A good chart tool. Audited clean; its R accounting reconciles by construction |
 | `AuctionFootprint.pine` | Companion footprint/volume-profile renderer |
+| `ValueAreaReversion.pine` | A third-party value-area reclaim indicator (SFP family), with the measurement panel bolted on so it reports its own hit rate against `1/(1+R)` instead of being argued about. Result pending |
 
 ### The experiments, in the order they were run
 
