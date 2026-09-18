@@ -1,0 +1,17 @@
+# Value Area Reversion Signals (VARS) - nine-instrument test
+# All rows: 30m charts, previous-day value area only, "Require breakout volume
+# to slow" ON (default), 2R target, 1 ATR(14) stop, 100-bar horizon, panel m1.
+# Settings were not altered between instruments.
+# win_l/n_l and win_s/n_s are resolved trades only; timeouts were zero on every
+# instrument, so nothing was censored.
+# Drift-free hit rate = (win_l/n_l + win_s/n_s) / 2. Chance baseline = 1/(1+R) = 33.33%.
+symbol,timeframe,win_l,n_l,win_s,n_s,timeout_l,timeout_s
+BTCUSDT.P,30m,3,8,7,16,0,0
+ETHUSDT.P,30m,3,5,4,18,0,0
+SOLUSDT.P,30m,2,10,5,16,0,0
+XAUUSD,30m,1,2,2,4,0,0
+XAGUSD,30m,3,4,0,4,0,0
+EURUSD,30m,2,8,2,5,0,0
+USDJPY,30m,2,4,1,12,0,0
+NAS100USD,30m,1,6,0,8,0,0
+US30USD,30m,1,2,2,5,0,0
