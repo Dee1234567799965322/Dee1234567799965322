@@ -4910,25 +4910,32 @@ var array<int>   wBar = array.new<int>()
 // more lines to say what a sign already says.
 var array<int>   wSd  = array.new<int>()
 
-// EIGHTEENTH CORRECTION. The total used to be incremented HERE, at
-// registration. Every level within statHorizon bars of the chart's right edge
-// is then counted in the denominator while having only part of its horizon to
-// be revisited in - and a level that runs out of chart is scored a miss
-// exactly like one that ran out of clock.
+// CORRECTION 18, ATTEMPTED AND REVERTED - left here because a failed repair
+// is worth as much as a successful one and costs more to rediscover.
 //
-// The bias is downward and grows with the horizon, which is precisely what the
-// residuals showed: on one weekly chart, the same 673 levels read 1.5pp under
-// the fitted line at a 200-bar horizon and 0.4pp under it at 29. More horizon,
-// more truncation, more invented misses. This is correction 16 again in a
-// different costume - counting an observation that never had a chance.
+// THE BIAS IS REAL. Every level within statHorizon bars of the chart's right
+// edge enters the denominator with only part of its horizon available, and a
+// level that runs out of chart is scored a miss exactly like one that ran out
+// of clock. Measured on one weekly chart at three horizons, the same 673
+// levels sat 0.36, 0.92 and 1.53pp under the fitted line at 29, 50 and 200
+// bars. Monotone in the horizon, which is the signature and not a coincidence.
 //
-// A watch now enters the denominator when it COMPLETES, hit or expired. One
-// still pending when the chart ends is not a miss, it is not yet an
-// observation, and it is counted as neither.
+// THE FIX WAS TO COUNT ON COMPLETION rather than at registration - move this
+// pv.set into the branch below that retires a watch. It reads correctly, the
+// control flow is right, and on a live chart it blanked the poor-extreme and
+// mirror rows on both instruments at once. Counting at registration is what
+// has produced every number in the record, so it goes back until the
+// replacement is understood rather than merely plausible.
+//
+// So the baselines published carry a small downward bias that grows with the
+// horizon. That is stated rather than silently corrected, which is the whole
+// point of the exercise.
 f_watch(float lvl, int sd) =>
     wLvl.push(lvl)
     wBar.push(bar_index)
     wSd.push(sd)
+    int sl = math.abs(sd) - 1
+    pv.set(sl, pv.get(sl) + 1)
     wLvl.size()
 
 // One loop for both kinds, because two hand-written watchers is two chances
@@ -4938,11 +4945,10 @@ f_runWatch() =>
     for i = wLvl.size() - 1 to 0
         int sd = wSd.get(i)
         bool hit = sd > 0 ? high >= wLvl.get(i) : low <= wLvl.get(i)
-        if hit or bar_index - wBar.get(i) > statHorizon
+        if hit
             int sl = math.abs(sd) - 1
-            pv.set(sl, pv.get(sl) + 1)
-            if hit
-                pv.set(sl + 1, pv.get(sl + 1) + 1)
+            pv.set(sl + 1, pv.get(sl + 1) + 1)
+        if hit or bar_index - wBar.get(i) > statHorizon
             wLvl.remove(i)
             wBar.remove(i)
             wSd.remove(i)
