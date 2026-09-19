@@ -113,7 +113,7 @@ int    statHorizonInput = input.int(100, "Horizon (bars)", minval = 5, maxval = 
 float  statCostRInput   = input.float(0.05, "Round-trip cost (R)", minval = 0.0, maxval = 1.0, step = 0.005, group = STAT_GROUP)
 int    statMinNInput    = input.int(30, "Minimum resolved per direction", minval = 5, maxval = 500, group = STAT_GROUP)
 bool   statOneAtATimeInput = input.bool(false, "One trade at a time", group = STAT_GROUP)
-string statPosInput     = input.string("Top Right", "Panel position", options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = STAT_GROUP)
+string statPosInput     = input.string("Bottom Left", "Panel position", options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = STAT_GROUP)
 
 f_statPos(string p) =>
     switch p
