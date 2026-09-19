@@ -1,0 +1,7 @@
+# Support / Resistance Bounce Test - buy the hold at support, sell the reject
+# at resistance, level = confirmed swing pivot (10 bars each side, no lookahead).
+# 2R target, 1 ATR(14) stop, 100-bar horizon, panel build m2. Null = 33.33%.
+# XAUUSD 30m, single load, 282 resolved trades.
+# support hit 31.9% of 141, resistance 36.2% of 141.
+symbol,timeframe,win_sup,n_sup,win_res,n_res,timeout
+XAUUSD,30m,45,141,51,141,0
