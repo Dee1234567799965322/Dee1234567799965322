@@ -5,3 +5,4 @@
 # support hit 31.9% of 141, resistance 36.2% of 141.
 symbol,timeframe,win_sup,n_sup,win_res,n_res,timeout
 XAUUSD,30m,45,141,51,141,0
+XAUUSD,1m,39,103,39,108,0
