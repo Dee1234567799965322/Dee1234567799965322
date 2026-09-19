@@ -118,6 +118,7 @@ died the same way.
 | `SMCTest.pine` | The World Class SMC *primary* entry from the source PDFs — break of structure, then an inducement (IDM) sweep by an IFC candle, entering in the trend direction, with an optional imbalance filter. This is trend continuation, distinct from ICTTest's reversal. Same measurement panel. Result pending |
 | `WaveTrendTest.pine` | The buy/sell dots from the Liquidity Tracker's oscillator (Market Cipher 9/12/3 on hlc3), measured with the standard panel. The WaveTrend engine is copied verbatim so the dots are identical; the rest of that indicator draws context levels and makes no directional claim. Result pending |
 | `TradeJournal.pine` | Turns the measurement panel on the user's own discretionary entries. Log each real trade as a slot (Long/Short + entry time); it opens a synthetic 2R trade at that bar and scores your entries against the same 1/(1+R) null as every signal test. The last unmeasured input, and the only one honesty rather than code has to guarantee. |
+| `SupportResistanceTest.pine` | The oldest idea in trading: buy the bounce off support, sell the rejection at resistance, where a level is a confirmed swing pivot. Long when price holds a prior swing low, short when it rejects a prior swing high. Each level arms one bounce then is spent. Same measurement panel. Result pending |
 
 ### The experiments, in the order they were run
 

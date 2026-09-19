@@ -1,0 +1,251 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/ MPL-2.0
+//@version=6
+indicator("Support / Resistance Bounce Test", "SR-TEST", overlay = true, max_lines_count = 100, max_labels_count = 100, max_bars_back = 5000)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHAT THIS TESTS  -  the oldest idea in trading
+// ═══════════════════════════════════════════════════════════════════════════
+// Price bounces off support, rejects at resistance. A level is a prior swing
+// pivot. The classic trade is the bounce:
+//   - LONG  when price trades down into a prior swing LOW (support) - within a
+//     tolerance band - and the bar closes back ABOVE it. The level held.
+//   - SHORT when price trades up into a prior swing HIGH (resistance) and the
+//     bar closes back BELOW it. The level rejected.
+//
+// Each such bounce opens a paper trade at the close, scored on the same terms
+// as every other test in this project: 2R target, 1 ATR stop, 100-bar horizon,
+// against the exact 1/(1+R) null, drift removed by averaging the two direction
+// strata, MDL = 2.8 x se (Haldane-corrected).
+//
+// Levels are confirmed pivots (equal left/right legs), so a level is only known
+// pivotLen bars after it prints - no lookahead. Each level arms one bounce and
+// then is spent, so the same level is not counted twice. This measures the pure
+// "the level held" idea with nothing else attached.
+
+string G_SR = "Support / Resistance"
+int   pivLenInput   = input.int(10, "Level pivot length", minval = 2, maxval = 50, tooltip = "Bars each side of a pivot. Larger = fewer, more major levels, confirmed later.", group = G_SR)
+float bandAtrInput  = input.float(0.5, "Touch band (x ATR)", minval = 0.05, maxval = 5.0, step = 0.05, tooltip = "How close price must come to the level to count as a touch. Price must reach within this band and the bar must close back on the level's holding side.", group = G_SR)
+int   levelTTLInput = input.int(300, "Level stays live (bars)", minval = 10, maxval = 5000, tooltip = "A level older than this is retired unused. It also retires once it produces a bounce or once price closes decisively through it.", group = G_SR)
+int   maxLevelsInput = input.int(20, "Levels tracked each side", minval = 1, maxval = 50, group = G_SR)
+bool  showLvlInput  = input.bool(true, "Draw the levels", group = G_SR)
+
+float atrSR = ta.atr(14)
+float band  = nz(atrSR, syminfo.mintick * 10) * bandAtrInput
+
+float pivHi = ta.pivothigh(pivLenInput, pivLenInput)
+float pivLo = ta.pivotlow(pivLenInput, pivLenInput)
+
+// Resistance levels (prior swing highs) and support levels (prior swing lows).
+var array<float> resPx = array.new<float>()
+var array<int>   resBar = array.new<int>()
+var array<float> supPx = array.new<float>()
+var array<int>   supBar = array.new<int>()
+
+if not na(pivHi)
+    resPx.push(pivHi)
+    resBar.push(bar_index)
+    if resPx.size() > maxLevelsInput
+        resPx.shift()
+        resBar.shift()
+if not na(pivLo)
+    supPx.push(pivLo)
+    supBar.push(bar_index)
+    if supPx.size() > maxLevelsInput
+        supPx.shift()
+        supBar.shift()
+
+bool srLong  = false
+bool srShort = false
+
+// Support bounce: low pierces into the band under a support level, close holds above it.
+if supPx.size() > 0
+    int i = supPx.size() - 1
+    while i >= 0
+        float lv = supPx.get(i)
+        bool expired = bar_index - supBar.get(i) > levelTTLInput
+        bool brokeDown = close < lv - band
+        bool touch = low <= lv + band and close > lv and close >= open
+        if touch and not srShort
+            srLong := true
+        if touch or expired or brokeDown
+            supPx.remove(i)
+            supBar.remove(i)
+        i := i - 1
+
+// Resistance rejection: high pierces into the band over a resistance level, close holds below it.
+if resPx.size() > 0
+    int i = resPx.size() - 1
+    while i >= 0
+        float lv = resPx.get(i)
+        bool expired = bar_index - resBar.get(i) > levelTTLInput
+        bool brokeUp = close > lv + band
+        bool touch = high >= lv - band and close < lv and close <= open
+        if touch and not srLong
+            srShort := true
+        if touch or expired or brokeUp
+            resPx.remove(i)
+            resBar.remove(i)
+        i := i - 1
+
+if showLvlInput and not na(pivHi)
+    line.new(bar_index - pivLenInput, pivHi, bar_index + 5, pivHi, xloc = xloc.bar_index, color = color.new(#EF5350, 40), width = 1)
+if showLvlInput and not na(pivLo)
+    line.new(bar_index - pivLenInput, pivLo, bar_index + 5, pivLo, xloc = xloc.bar_index, color = color.new(#26A69A, 40), width = 1)
+
+plotshape(srLong,  "Support bounce", style = shape.triangleup,   location = location.belowbar, color = color.new(#26A69A, 0), text = "S", textcolor = color.white, size = size.tiny)
+plotshape(srShort, "Resistance reject", style = shape.triangledown, location = location.abovebar, color = color.new(#EF5350, 0), text = "R", textcolor = color.white, size = size.tiny)
+
+alertcondition(srLong,  "Support bounce",   "Price held a prior swing low.")
+alertcondition(srShort, "Resistance reject","Price rejected a prior swing high.")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MEASUREMENT PANEL  (build m2)   -- identical apparatus to every other test
+// ═══════════════════════════════════════════════════════════════════════════
+bool ictBull = srLong
+bool ictBear = srShort
+
+string STAT_GROUP  = "Measurement"
+bool   statOnInput      = input.bool(true, "Show measurement panel", group = STAT_GROUP)
+float  statTargetRInput = input.float(2.0, "Target (R)", minval = 0.5, maxval = 10.0, step = 0.5, group = STAT_GROUP)
+float  statStopAtrInput = input.float(1.0, "Stop = ATR x", minval = 0.1, maxval = 10.0, step = 0.1, group = STAT_GROUP)
+int    statAtrLenInput  = input.int(14, "ATR length", minval = 2, maxval = 200, group = STAT_GROUP)
+int    statHorizonInput = input.int(100, "Horizon (bars)", minval = 5, maxval = 2000, group = STAT_GROUP)
+float  statCostRInput   = input.float(0.05, "Round-trip cost (R)", minval = 0.0, maxval = 1.0, step = 0.005, group = STAT_GROUP)
+int    statMinNInput    = input.int(30, "Minimum resolved per direction", minval = 5, maxval = 500, group = STAT_GROUP)
+bool   statOneAtATimeInput = input.bool(false, "One trade at a time", group = STAT_GROUP)
+string statPosInput     = input.string("Top Right", "Panel position", options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = STAT_GROUP)
+
+f_statPos(string p) =>
+    switch p
+        "Top Left"      => position.top_left
+        "Middle Right"  => position.middle_right
+        "Bottom Right"  => position.bottom_right
+        "Bottom Left"   => position.bottom_left
+        => position.top_right
+
+f_statPct(float v) =>
+    na(v) ? "—" : str.tostring(v, "#.#") + "%"
+
+f_statPp(float v) =>
+    na(v) ? "—" : (v > 0 ? "+" : "") + str.tostring(v, "#.#") + "pp"
+
+var array<float> statEntry  = array.new<float>()
+var array<float> statStop   = array.new<float>()
+var array<float> statTarget = array.new<float>()
+var array<int>   statDir    = array.new<int>()
+var array<int>   statOpened = array.new<int>()
+
+var int statSigLong  = 0
+var int statSigShort = 0
+var int statWinLong  = 0
+var int statLosLong  = 0
+var int statTimLong  = 0
+var int statWinShort = 0
+var int statLosShort = 0
+var int statTimShort = 0
+
+float statAtr = ta.atr(statAtrLenInput)
+bool  statLive = statOnInput and barstate.isconfirmed
+
+if statLive and array.size(statEntry) > 0
+    for tradeIndex = array.size(statEntry) - 1 to 0
+        int   tradeDir = array.get(statDir, tradeIndex)
+        float tradeTarget = array.get(statTarget, tradeIndex)
+        float tradeStop = array.get(statStop, tradeIndex)
+        bool  stopHit = tradeDir > 0 ? low <= tradeStop : high >= tradeStop
+        bool  targetHit = tradeDir > 0 ? high >= tradeTarget : low <= tradeTarget
+        bool  expired = bar_index - array.get(statOpened, tradeIndex) >= statHorizonInput
+        bool  resolved = stopHit or targetHit or expired
+        if stopHit
+            if tradeDir > 0
+                statLosLong += 1
+            else
+                statLosShort += 1
+        else if targetHit
+            if tradeDir > 0
+                statWinLong += 1
+            else
+                statWinShort += 1
+        else if expired
+            if tradeDir > 0
+                statTimLong += 1
+            else
+                statTimShort += 1
+        if resolved
+            array.remove(statEntry, tradeIndex)
+            array.remove(statStop, tradeIndex)
+            array.remove(statTarget, tradeIndex)
+            array.remove(statDir, tradeIndex)
+            array.remove(statOpened, tradeIndex)
+
+float statStopDistance = na(statAtr) ? na : statStopAtrInput * statAtr
+bool  statCanOpen = statLive and not na(statStopDistance) and statStopDistance > 0
+if statCanOpen and ictBull and (not statOneAtATimeInput or array.size(statEntry) == 0)
+    array.push(statEntry, close)
+    array.push(statStop, close - statStopDistance)
+    array.push(statTarget, close + statTargetRInput * statStopDistance)
+    array.push(statDir, 1)
+    array.push(statOpened, bar_index)
+    statSigLong += 1
+if statCanOpen and ictBear and (not statOneAtATimeInput or array.size(statEntry) == 0)
+    array.push(statEntry, close)
+    array.push(statStop, close + statStopDistance)
+    array.push(statTarget, close - statTargetRInput * statStopDistance)
+    array.push(statDir, -1)
+    array.push(statOpened, bar_index)
+    statSigShort += 1
+
+int   statNLong  = statWinLong + statLosLong
+int   statNShort = statWinShort + statLosShort
+float statPLong  = statNLong > 0 ? statWinLong / float(statNLong) : na
+float statPShort = statNShort > 0 ? statWinShort / float(statNShort) : na
+bool  statBothSides = not na(statPLong) and not na(statPShort)
+float statDriftFree = statBothSides ? (statPLong + statPShort) / 2 * 100 : na
+float statDrift     = statBothSides ? (statPLong - statPShort) / 2 * 100 : na
+float statVLong     = statNLong  > 0 ? (statWinLong  + 0.5) / (statNLong  + 1) : na
+float statVShort    = statNShort > 0 ? (statWinShort + 0.5) / (statNShort + 1) : na
+float statSe        = statBothSides ? math.sqrt(statVLong * (1 - statVLong) / statNLong + statVShort * (1 - statVShort) / statNShort) / 2 * 100 : na
+float statNull      = 100.0 / (1.0 + statTargetRInput)
+float statEdge      = na(statDriftFree) ? na : statDriftFree - statNull
+float statMdl       = na(statSe) or statSe <= 0 ? na : 2.8 * statSe
+float statExpR      = na(statDriftFree) ? na : statDriftFree / 100 * statTargetRInput - (1 - statDriftFree / 100) - statCostRInput
+float statNeeded    = (1.0 + statCostRInput) / (1.0 + statTargetRInput) * 100
+
+string statVerdict = "NEED MORE DATA"
+color  statVerdictColor = color.gray
+if statBothSides and statNLong >= statMinNInput and statNShort >= statMinNInput
+    if na(statMdl) or math.abs(statEdge) < statMdl
+        statVerdict := "NO EDGE DETECTABLE"
+        statVerdictColor := color.gray
+    else if statEdge < 0
+        statVerdict := "NEGATIVE"
+        statVerdictColor := color.red
+    else if statExpR > 0
+        statVerdict := "EDGE, net " + str.tostring(statExpR, "#.##") + "R"
+        statVerdictColor := color.green
+    else
+        statVerdict := "EDGE BELOW COST"
+        statVerdictColor := color.orange
+
+var table statTable = table.new(f_statPos(statPosInput), 2, 13, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+
+f_statRow(int rowIndex, string label, string value, color valueColor) =>
+    table.cell(statTable, 0, rowIndex, label, text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_left)
+    table.cell(statTable, 1, rowIndex, value, text_color = valueColor, text_size = size.small, text_halign = text.align_right)
+    rowIndex
+
+if statOnInput and barstate.islast
+    table.cell(statTable, 0, 0, "S/R BOUNCE MEASUREMENT", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(statTable, 1, 0, "m2  " + str.tostring(statTargetRInput, "#.#") + "R / " + str.tostring(statHorizonInput) + "b", text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    f_statRow(1,  "Bounces  sup / res",   str.tostring(statSigLong) + " / " + str.tostring(statSigShort), color.new(color.white, 10))
+    f_statRow(2,  "Resolved  sup / res",  str.tostring(statNLong) + " / " + str.tostring(statNShort), color.new(color.white, 10))
+    f_statRow(3,  "Timed out  sup / res", str.tostring(statTimLong) + " / " + str.tostring(statTimShort), color.new(color.white, 45))
+    f_statRow(4,  "Still open", str.tostring(array.size(statEntry)), color.new(color.white, 45))
+    f_statRow(5,  "Hit rate  support", f_statPct(statPLong * 100), color.new(color.white, 10))
+    f_statRow(6,  "Hit rate  resistance", f_statPct(statPShort * 100), color.new(color.white, 10))
+    f_statRow(7,  "Drift-free hit rate", f_statPct(statDriftFree), color.new(color.white, 0))
+    f_statRow(8,  "Drift removed", f_statPp(statDrift), color.new(color.white, 45))
+    f_statRow(9,  "Chance baseline  1/(1+R)", f_statPct(statNull) + "  (need " + str.tostring(statNeeded, "#.#") + "% after cost)", color.new(color.white, 45))
+    f_statRow(10, "Edge vs chance", f_statPp(statEdge), na(statEdge) ? color.gray : statEdge > 0 ? color.green : color.red)
+    f_statRow(11, "Detection floor  MDL", na(statMdl) ? "—" : "±" + str.tostring(statMdl, "#.#") + "pp", color.new(color.white, 45))
+    f_statRow(12, "VERDICT", statVerdict, statVerdictColor)
