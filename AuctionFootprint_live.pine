@@ -1,0 +1,827 @@
+//@version=6
+// ============================================================================
+// AUCTION FOOTPRINT
+// ----------------------------------------------------------------------------
+// A footprint / order flow grid for TradingView.
+//
+// READ THIS FIRST - what this can and cannot be.
+//
+// A real footprint chart splits each price level into volume that hit the BID
+// (an aggressive seller) and volume that lifted the ASK (an aggressive buyer).
+// That split comes from a trade feed that tags every fill with its aggressor.
+// Pine Script has no such feed. It has no order book, no bid, no ask, and no
+// tick-by-tick aggressor flag. Nothing will change that - it is not a matter of
+// effort, the data is not exposed to the language.
+//
+// What Pine DOES have is request.security_lower_tf, which returns the OHLCV of
+// every lower-timeframe bar inside the current one. So each of those small bars
+// is treated as one unit of trade, and its direction - close against open -
+// stands in for the aggressor. A sample that closed above its open is counted
+// as buying, below as selling, and a sample that closed exactly on its open is
+// split down the middle rather than being silently handed to one side.
+//
+// That is an APPROXIMATION, and it is the same approximation every non-exchange
+// footprint script makes. It is good enough for the things that matter - where
+// the imbalances stack, where the bar's point of control sat, whether the
+// extremes finished - and it is not good enough to count individual prints.
+//
+// Its quality is decided by ONE number: how many lower-timeframe samples fit
+// inside a chart bar. Sixty 1-minute samples in a 1-hour bar is a real
+// footprint. Five 1-minute samples in a 5-minute bar is five numbers in a
+// column and means nothing. The dashboard reports that number on every bar and
+// says so plainly when it is too low, rather than drawing a convincing grid out
+// of nothing.
+//
+// Seconds-resolution data is a paid TradingView feature. This script never
+// requests it, so it runs on every plan - it simply cannot go below 1 minute.
+// ============================================================================
+indicator("Auction Footprint", shorttitle="FOOTPRINT", overlay=true,
+     max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=500)
+
+// ============================================================================
+// TYPES
+// ----------------------------------------------------------------------------
+// buy and sell are parallel arrays, index i being the price band that starts at
+// pLo + i * step. One object per bar keeps them together: two loose arrays that
+// every site has to index identically is the classic way to get a footprint
+// showing one bar's buying against another bar's selling.
+//
+// pLo and step are stored PER BAR, in price, and this matters. The first version
+// stored an integer row index instead and converted it back to a price at draw
+// time using the CURRENT row height. Row height is derived from a rolling
+// average range, so it drifts - and a row index means nothing except alongside
+// the row height it was measured with. Every stored bar was therefore redrawn at
+// its own row index times somebody else's row height, which scales the price. On
+// a 4h gold chart that threw whole columns hundreds of dollars away from the
+// bars they came from. A price is a price on any bar; that is why it is stored
+// as one.
+// ============================================================================
+// A price somebody defended. px is the level, dir says which side was doing the
+// defending, born is when it was spotted and ok is whether it has survived long
+// enough to be believed.
+type AbsLvl
+    float px
+    int   dir
+    int   born
+    bool  ok
+    float vol
+    line  ln
+    label lb
+
+type FpBar
+    int          bi
+    float        pLo
+    float        step
+    array<float> buy
+    array<float> sell
+    float        delta
+    float        total
+    int          pocIdx
+    float        dMax
+    float        dMin
+    int          vaHi
+    int          vaLo
+    bool         absorbUp
+    bool         absorbDn
+    bool         unfinHi
+    bool         unfinLo
+    bool         clipped
+
+// ============================================================================
+// 1. INPUTS
+// ============================================================================
+string G_FP = "1 - FOOTPRINT"
+bool   fpOn      = input.bool(true, "Show Footprint", group=G_FP)
+int    fpCount   = input.int(12, "Bars Shown", minval=1, maxval=40, group=G_FP,
+     tooltip="How many of the most recent bars get a footprint.\n\nPine allows the whole script 500 boxes and every cell is one box, so bars times rows is the real budget. 12 bars at 20 rows is 240 boxes. Ask for more than fits and the oldest bars are dropped rather than the newest, because the newest are the ones you are trading.")
+string fpPlace   = input.string("To the right", "Placement", options=["To the right", "On the bars"], group=G_FP,
+     tooltip="TO THE RIGHT (default) - the grid is drawn in the empty space past the last bar, one wide column per bar. The numbers are legible at normal zoom and nothing is hidden behind them.\n\nON THE BARS - each grid sits on the bar it came from, which is what a footprint chart actually looks like. A cell is then one bar wide, so the numbers are unreadable until you zoom right in. Use it when you want to read the grid against the candles rather than read the numbers.")
+int    fpColW    = input.int(6, "Column Width (bars)", minval=1, maxval=30, group=G_FP,
+     tooltip="Width of each footprint column in the To The Right placement. Wider is more legible and eats the 500-bar forward drawing limit faster.")
+int    fpGap     = input.int(1, "Gap Between Columns", minval=0, maxval=10, group=G_FP)
+int    fpOffset  = input.int(6, "Offset (bars right of price)", minval=1, maxval=200, group=G_FP)
+
+string G_ROW = "2 - PRICE ROWS"
+string rowMode   = input.string("Auto", "Row Height", options=["Auto", "Ticks per row"], group=G_ROW,
+     tooltip="AUTO sizes the rows so a typical bar lands near the target row count below, whatever the instrument and timeframe. TICKS PER ROW pins them to an exact tick multiple, which is what you want if you already know the increment your market trades in.")
+int    rowTarget = input.int(14, "Target Rows per Bar", minval=4, maxval=40, group=G_ROW)
+int    rowTicks  = input.int(10, "Ticks per Row", minval=1, maxval=100000, group=G_ROW)
+int    rowMax    = input.int(26, "Maximum Rows per Bar", minval=4, maxval=60, group=G_ROW,
+     tooltip="Hard cap. A bar that needs more rows than this has its grid clipped and is flagged in the dashboard - the fix is coarser rows, not a bigger cap, because every row is a drawing object.")
+
+string G_CELL = "3 - CELL CONTENT"
+string cellTxt   = input.string("Delta", "Show in Each Cell", options=["Delta", "Buy x Sell", "Total volume", "Nothing"], group=G_CELL,
+     tooltip="DELTA - buying minus selling at that price. One signed number, the fastest to read, and what the commercial footprints default to.\n\nBUY x SELL - both sides. More information, half the legibility.\n\nTOTAL VOLUME - ignores direction, turns the grid into a per-bar volume profile.")
+bool   cellHeat  = input.bool(true, "Shade Cells by Delta", group=G_CELL)
+bool   showPocCell = input.bool(true, "Mark the Bar's Point of Control", group=G_CELL)
+bool   showBarDelta = input.bool(true, "Bar Delta Under Each Column", group=G_CELL)
+string cellSize  = input.string("Tiny", "Text Size", options=["Tiny", "Small", "Normal"], group=G_CELL)
+
+string G_IMB = "4 - IMBALANCES"
+bool   imbOn     = input.bool(true, "Mark Imbalances", group=G_IMB,
+     tooltip="The diagonal comparison, which is the one that matters. Buying at a price is compared against SELLING ONE ROW BELOW it - the two are what a buyer and a seller had to choose between at the same moment. Comparing buying and selling at the SAME price tells you far less, because both sides had to agree on that price for a trade to happen there at all.")
+float  imbRatio  = input.float(3.0, "Imbalance Ratio", minval=1.5, maxval=20.0, step=0.5, group=G_IMB,
+     tooltip="How lopsided the diagonal has to be. 3.0 means one side did three times the volume of the other and is the industry default. Raise it for fewer, harder imbalances.")
+float  imbMinPct = input.float(3.0, "Ignore Cells Under (% of bar volume)", minval=0.0, maxval=25.0, step=0.5, group=G_IMB,
+     tooltip="A ratio between two tiny numbers is noise: 3 against 1 is a 3:1 imbalance and means nothing. Cells holding less than this share of the bar's volume cannot raise an imbalance at all.")
+int    stackMin  = input.int(3, "Stacked Imbalance Length", minval=2, maxval=10, group=G_IMB,
+     tooltip="Consecutive same-side imbalances needed before the zone is marked as a level and drawn forward. A single imbalance is a moment; three stacked is a shelf somebody had to keep filling, and it is the thing price comes back to.")
+bool   stackLine = input.bool(true, "Extend Stacked Zones Right", group=G_IMB)
+int    stackKeep = input.int(8, "Stacked Zones Kept", minval=1, maxval=30, group=G_IMB)
+
+string G_LVL = "5 - LEVELS"
+bool   pocLine   = input.bool(true, "Extend Each Bar's POC Right", group=G_LVL,
+     tooltip="A line at the busiest price of each bar, running forward until price trades back through it. Untested bar POCs are the short-term version of a naked POC - unfinished business at a price that mattered.")
+int    pocKeep   = input.int(10, "Bar POCs Kept", minval=1, maxval=30, group=G_LVL)
+float  unfinMin  = input.float(25.0, "Unfinished Needs Minority Side (%)", minval=1.0, maxval=50.0, step=1.0, group=G_LVL,
+     tooltip="How much of the extreme row the SMALLER side has to hold before the auction there counts as unfinished. At 25 the weaker side must be at least a quarter of that row.\n\nWithout a floor this fires on every bar at both ends: each lower-timeframe sample is spread over its own range, so practically every row ends up holding a trace of both sides, and a flag that is always on is not a flag.")
+bool   unfinOn   = input.bool(true, "Mark Unfinished Auctions", group=G_LVL,
+     tooltip="A bar whose extreme row still has BOTH buying and selling in it. The auction was still two-sided when the bar ended - nobody was driven out - so the high or low was not a rejection and price tends to come back and finish the job.\n\nA finished extreme shows one side only: the last row is all buying at a high, all selling at a low.")
+
+string G_ABS = "5b - ABSORPTION"
+bool   absLvlOn  = input.bool(true, "Detect Absorption Levels", group=G_ABS,
+     tooltip="A price where one side pushed hard, traded an unusual amount, and then FAILED to get through.\n\nThe distinction that makes this worth having: an imbalance says one side was more aggressive at a price. Absorption says they were more aggressive AND IT DID NOT WORK. Somebody was sitting there filling every one of them, and that somebody is still there. Heavy BUYING at a high that does not break is buyers being absorbed by a passive seller - so the level is resistance, not support, even though the tape there was green.\n\nThat is why it cannot be judged on the bar it happens: whether the push failed is only known from what came next. A level is drawn dotted while it is still a candidate and turned solid once it has survived, and deleted outright the moment price closes through it.")
+float  absMult   = input.float(2.5, "Heavy Row Multiple", minval=1.2, maxval=10.0, step=0.1, group=G_ABS,
+     tooltip="How much more than an average row of that bar the price has to have traded before it counts as a defended one. 2.5 means two and a half times the bar's own average row.")
+float  absEdge   = input.float(30.0, "Edge Band (% of bar)", minval=5.0, maxval=50.0, step=5.0, group=G_ABS,
+     tooltip="How much of the bar counts as its extreme. Absorption in the middle of a bar is ordinary two-way trade; it only means something where price was actually trying to go.")
+int    absConf   = input.int(3, "Bars to Confirm", minval=1, maxval=20, group=G_ABS,
+     tooltip="How long a candidate has to hold before it is drawn as a real level. Shorter is earlier and wronger.")
+int    absKeep   = input.int(8, "Levels Kept", minval=1, maxval=30, group=G_ABS)
+
+string G_OF = "6 - ORDER FLOW READS"
+bool   vaOn      = input.bool(true, "Mark Each Bar's Value Area", group=G_OF,
+     tooltip="The rows holding the middle 70% of that bar's volume - where the bar actually did business, as opposed to where it merely passed through. Rows outside it are the part of the range price covered without trading much, and those are the parts that get revisited fastest.")
+float  vaPct     = input.float(70.0, "Value Area %", minval=40.0, maxval=95.0, step=5.0, group=G_OF)
+bool   absorbOn  = input.bool(true, "Mark Delta Divergence", group=G_OF,
+     tooltip="A bar that closed UP while net flow was SELLING, or DOWN while net flow was BUYING.\n\nThis is the reading a footprint exists for and no candle can show you. Price rose while aggressive sellers were hitting bids: every one of them was absorbed by somebody willing to take the other side, and price went the wrong way for them. That is hidden strength. The mirror - closing down on positive delta - is hidden weakness.\n\nIt is not a signal on its own. It says who is being hurt, and the levels tell you where.")
+float  absorbMin = input.float(10.0, "Divergence Needs Delta Over (% of volume)", minval=1.0, maxval=60.0, step=1.0, group=G_OF,
+     tooltip="A bar closing up on a delta of minus three is not absorbing anything, it is rounding error. The delta has to be this share of the bar's own volume before the divergence counts.")
+
+string G_SUM = "7 - SUMMARY TABLE"
+bool   sumOn     = input.bool(true, "Show Bar Summary Table", group=G_SUM,
+     tooltip="The numbers the grid cannot make legible. A footprint cell is at most a few pixels wide, so the per-bar figures that actually drive a decision - delta, how far delta swung inside the bar, volume - are put in a table you can read at normal zoom instead.")
+int    sumBars   = input.int(6, "Bars in Table", minval=2, maxval=20, group=G_SUM)
+string sumPos    = input.string("Bottom Right", "Table Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_SUM)
+
+string G_C = "6b - COLOURS"
+color cBuy    = input.color(#26a69a, "Buying", inline="c1", group=G_C)
+color cSell   = input.color(#ef5350, "Selling", inline="c1", group=G_C)
+color cCellBg = input.color(color.new(#1e222d, 20), "Cell Background", group=G_C)
+color cImbBuy = input.color(color.new(#00e676, 25), "Buy Imbalance", inline="c2", group=G_C)
+color cImbSell= input.color(color.new(#ff1744, 25), "Sell Imbalance", inline="c2", group=G_C)
+color cStack  = input.color(#e040fb, "Stacked Zone", group=G_C)
+color cPocCol = input.color(color.new(#ffb300, 20), "Point of Control", group=G_C)
+color cUnfin  = input.color(#ffea00, "Unfinished Auction", group=G_C)
+color cVaEdge = input.color(color.new(#26c6da, 40), "Value Area Edge", group=G_C)
+color cAbsLvl = input.color(#ff6d00, "Absorption Level", group=G_C)
+color cAbsUp  = input.color(#00e5ff, "Hidden Strength", inline="ab", group=G_C)
+color cAbsDn  = input.color(#ff9100, "Hidden Weakness", inline="ab", group=G_C)
+color cTxt    = input.color(#d1d4dc, "Text", group=G_C)
+
+string G_TBL = "7 - DASHBOARD"
+bool   dashOn = input.bool(true, "Show Data Quality Dashboard", group=G_TBL,
+     tooltip="Says how many lower-timeframe samples are going into each bar. That single number decides whether the grid below it is information or decoration, so it is on by default and worth looking at before you trust anything else on the chart.")
+string dashPos= input.string("Top Right", "Position", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right"], group=G_TBL)
+
+// ============================================================================
+// 2. LOWER TIMEFRAME DATA
+// ----------------------------------------------------------------------------
+// Never requests a seconds resolution. Those are a paid TradingView feature and
+// the request alone breaks the script for anyone without it, so a chart with no
+// usable MINUTE subdivision - anything at 1 minute or below - gets no intrabar
+// data and says so rather than failing.
+// ============================================================================
+int chartSec = timeframe.in_seconds(timeframe.period)
+bool useLtf  = chartSec > 60
+
+string ltfEff = chartSec >= 86400 ? "15" : chartSec >= 14400 ? "5" : "1"
+
+array<float> lH = na
+array<float> lL = na
+array<float> lC = na
+array<float> lO = na
+array<float> lV = na
+
+if useLtf
+    [rH, rL, rC, rO, rV] = request.security_lower_tf(syminfo.tickerid, ltfEff,
+         [high, low, close, open, volume], ignore_invalid_symbol=true)
+    lH := rH
+    lL := rL
+    lC := rC
+    lO := rO
+    lV := rV
+
+bool ltfOk = false
+if useLtf
+    if not na(lH)
+        if lH.size() > 0
+            ltfOk := true
+
+int nSamples = 1
+if ltfOk
+    nSamples := lH.size()
+
+// Pine re-runs the whole script on every tick of the live bar. Scalars roll
+// back, ARRAYS AND DRAWINGS DO NOT - so every mutation of stored state is gated
+// on the bar being closed, or one live bar would push a new footprint per tick.
+bool barClosed = barstate.isconfirmed
+
+// ============================================================================
+// 3. THE PRICE GRID
+// ----------------------------------------------------------------------------
+// One grid shared by every bar, anchored at zero, so a price falls in the same
+// row whichever bar it traded in. That is what makes the columns line up
+// horizontally and what makes a stacked imbalance at one price readable across
+// several bars. Sizing each bar's rows to its own range would be easier and
+// would destroy exactly that.
+// ============================================================================
+float avgRange = ta.sma(high - low, 50)
+float autoStep = rowTarget > 0 and not na(avgRange) and avgRange > 0 ? avgRange / rowTarget : syminfo.mintick
+// rounded to a whole number of ticks, because a row boundary that falls between
+// two tradeable prices puts the same price in different rows on different bars
+float autoTicks = math.max(1.0, math.round(autoStep / syminfo.mintick))
+float rowSize = rowMode == "Auto" ? autoTicks * syminfo.mintick : rowTicks * syminfo.mintick
+
+// Where price p falls inside a bar whose grid starts at pLo with height step.
+f_rowIn(float px, float pLo, float step) =>
+    int((px - pLo) / step)
+
+// The bottom of row i of that bar.
+f_rowPx(FpBar f, int i) =>
+    f.pLo + i * f.step
+
+// An extreme row counts as UNFINISHED when both sides are meaningfully present.
+// The first version asked only that both were above zero, which on a grid where
+// every sample is spread across its own range is true almost everywhere - so
+// nearly every bar was flagged at both ends and the label meant nothing. The
+// smaller side now has to carry a real share of the row.
+f_unfin(float b, float sv, float thr) =>
+    float t = b + sv
+    t > 0 and math.min(b, sv) / t >= thr
+
+f_txtSize() =>
+    switch cellSize
+        "Small"  => size.small
+        "Normal" => size.normal
+        => size.tiny
+
+f_short(float v) =>
+    float a = math.abs(v)
+    a >= 1000000 ? str.tostring(v / 1000000, "#.#") + "M" : a >= 1000 ? str.tostring(v / 1000, "#.#") + "K" : str.tostring(v, "#")
+
+// ============================================================================
+// 4. BUILD THE BAR
+// ----------------------------------------------------------------------------
+// Each lower-timeframe sample is spread across the rows its own range covers,
+// the same way the volume profile spreads it, so the footprint totals and the
+// profile agree instead of quietly disagreeing. Direction is taken once per
+// sample from close against open; a sample that closed on its open is split
+// rather than being handed to one side.
+// ============================================================================
+var array<FpBar> fpBars = array.new<FpBar>()
+
+if fpOn and barClosed and high > low
+    // A bar needing more rows than the cap is COARSENED, not truncated. The
+    // first version clipped it to the lowest rowMax rows, which quietly deleted
+    // the top of the widest and most interesting bars on the chart - exactly
+    // the ones worth looking at. Wider rows lose resolution; clipping loses the
+    // high.
+    float stepUse = rowSize
+    int want = int(math.ceil((high - low) / stepUse)) + 1
+    bool clip = want > rowMax
+    if clip
+        stepUse := math.ceil((high - low) / rowMax / syminfo.mintick) * syminfo.mintick
+        want := int(math.ceil((high - low) / stepUse)) + 1
+    int nR = math.max(1, math.min(want, rowMax))
+    float pLo = math.floor(low / stepUse) * stepUse
+
+    array<float> bu = array.new<float>(nR, 0.0)
+    array<float> se = array.new<float>(nR, 0.0)
+
+    // LIVE PERF: the buy/sell binning and the delta-swing path (dMx/dMn - how
+    // far delta travelled inside the bar) are built in ONE pass over the
+    // lower-timeframe samples. They used to be two separate loops over the same
+    // array, which doubled the per-tick cost on the forming bar - the one place
+    // a live footprint is rebuilt on every update. Direction (up/dn) is now read
+    // once per sample and reused for both the binning and the swing.
+    float dRun = 0.0
+    float dMx  = 0.0
+    float dMn  = 0.0
+    if ltfOk
+        for i = 0 to lH.size() - 1
+            float v = lV.get(i)
+            if not na(v) and v > 0
+                int a = math.max(0, math.min(nR - 1, f_rowIn(lL.get(i), pLo, stepUse)))
+                int b = math.max(0, math.min(nR - 1, f_rowIn(lH.get(i), pLo, stepUse)))
+                float share = v / (b - a + 1)
+                bool  up = lC.get(i) > lO.get(i)
+                bool  dn = lC.get(i) < lO.get(i)
+                float upShare = up ? share : dn ? 0.0 : share * 0.5
+                float dnShare = share - upShare
+                for r = a to b
+                    bu.set(r, bu.get(r) + upShare)
+                    se.set(r, se.get(r) + dnShare)
+                dRun += up ? v : dn ? -v : 0.0
+                dMx  := math.max(dMx, dRun)
+                dMn  := math.min(dMn, dRun)
+    else
+        // No usable subdivision. The bar is one sample, so the grid degenerates
+        // to a single direction smeared over the range. Kept rather than hidden
+        // so the dashboard's warning has something to point at.
+        float v = nz(volume)
+        if v > 0
+            float share = v / nR
+            float upShare = close > open ? share : close < open ? 0.0 : share * 0.5
+            for r = 0 to nR - 1
+                bu.set(r, bu.get(r) + upShare)
+                se.set(r, se.get(r) + (share - upShare))
+
+    // LIVE PERF: each side is summed once and reused for both the total and the
+    // bar delta, instead of calling bu.sum()/se.sum() four times per bar.
+    float buSum = bu.sum()
+    float seSum = se.sum()
+    float tot = buSum + seSum
+    if tot > 0
+        int poc = 0
+        float best = -1.0
+        for r = 0 to nR - 1
+            float t = bu.get(r) + se.get(r)
+            if t > best
+                best := t
+                poc := r
+
+        // --- this bar's own value area, grown out from its point of control.
+        // LIVE PERF: skipped entirely when the value-area overlay is off, so a
+        // disabled feature costs nothing on the live bar.
+        int vHi = poc
+        int vLo = poc
+        if vaOn
+            float target = tot * vaPct / 100.0
+            float acc = bu.get(poc) + se.get(poc)
+            while acc < target and (vHi < nR - 1 or vLo > 0)
+                float upv = vHi < nR - 1 ? bu.get(vHi + 1) + se.get(vHi + 1) : -1.0
+                float dnv = vLo > 0 ? bu.get(vLo - 1) + se.get(vLo - 1) : -1.0
+                if upv < 0 and dnv < 0
+                    break
+                if upv >= dnv
+                    acc += upv
+                    vHi += 1
+                else
+                    acc += dnv
+                    vLo -= 1
+
+        // --- delta divergence
+        float bd = buSum - seSum
+        bool bigEnough = math.abs(bd) >= tot * absorbMin / 100.0
+        bool aUp = absorbOn and bigEnough and close > open and bd < 0
+        bool aDn = absorbOn and bigEnough and close < open and bd > 0
+        // An extreme row with BOTH sides still in it is an auction that had not
+        // finished when the bar closed.
+        float uThr = unfinMin / 100.0
+        bool uHi = f_unfin(bu.get(nR - 1), se.get(nR - 1), uThr)
+        bool uLo = f_unfin(bu.get(0), se.get(0), uThr)
+        fpBars.push(FpBar.new(bi = bar_index, pLo = pLo, step = stepUse, buy = bu, sell = se,
+             delta = bd, total = tot, pocIdx = poc, dMax = dMx, dMin = dMn,
+             vaHi = vHi, vaLo = vLo, absorbUp = aUp, absorbDn = aDn,
+             unfinHi = uHi, unfinLo = uLo, clipped = clip))
+        while fpBars.size() > fpCount
+            fpBars.shift()
+
+// ============================================================================
+// 5. IMBALANCE TEST
+// ----------------------------------------------------------------------------
+// The DIAGONAL comparison. Buying at a row is judged against selling one row
+// BELOW it, because those two are the choice a buyer and a seller faced at the
+// same instant. Comparing the two sides at the SAME price says much less - a
+// trade only happens there because both sides agreed to it.
+// ============================================================================
+f_buyImb(FpBar f, int i, float minVol) =>
+    bool outv = false
+    if i >= 1
+        float b = f.buy.get(i)
+        if b >= minVol
+            float s = f.sell.get(i - 1)
+            outv := s <= 0 ? b > 0 : b >= s * imbRatio
+    outv
+
+f_sellImb(FpBar f, int i, float minVol) =>
+    bool outv = false
+    if i <= f.sell.size() - 2
+        float s = f.sell.get(i)
+        if s >= minVol
+            float b = f.buy.get(i + 1)
+            outv := b <= 0 ? s > 0 : s >= b * imbRatio
+    outv
+
+// ============================================================================
+// 6. LEVELS CARRIED FORWARD
+// ----------------------------------------------------------------------------
+// Stacked imbalance zones and bar POCs are drawn forward and DELETED the moment
+// price trades back through them, so what is left on the chart is only what has
+// not been revisited. A level that has been traded through is history, and
+// leaving it up is how a chart fills with lines that mean nothing.
+// ============================================================================
+var array<float> stkPx  = array.new<float>()
+var array<line>  stkLn  = array.new<line>()
+var array<int>   stkDir = array.new<int>()
+var array<float> pocPx  = array.new<float>()
+var array<line>  pocLn  = array.new<line>()
+
+bool alertStackBuy  = false
+bool alertStackSell = false
+
+if fpOn and barClosed and fpBars.size() > 0
+    FpBar f = fpBars.get(fpBars.size() - 1)
+    if f.bi == bar_index
+        float minVol = f.total * imbMinPct / 100.0
+        int nR = f.buy.size()
+
+        // --- stacked imbalances
+        if stackLine and imbOn and nR >= stackMin
+            int runBuy = 0
+            int runSell = 0
+            for i = 0 to nR - 1
+                runBuy  := f_buyImb(f, i, minVol)  ? runBuy + 1  : 0
+                runSell := f_sellImb(f, i, minVol) ? runSell + 1 : 0
+                if runBuy == stackMin or runSell == stackMin
+                    bool isBuy = runBuy == stackMin
+                    // middle of the stacked run, not its edge
+                    float py = f_rowPx(f, i - int(stackMin / 2)) + f.step / 2
+                    stkPx.push(py)
+                    stkDir.push(isBuy ? 1 : -1)
+                    stkLn.push(line.new(bar_index, py, bar_index + 1, py, xloc=xloc.bar_index,
+                         color=cStack, width=2, style=line.style_solid, extend=extend.right))
+                    alertStackBuy  := alertStackBuy  or isBuy
+                    alertStackSell := alertStackSell or not isBuy
+                    while stkPx.size() > stackKeep
+                        line.delete(stkLn.shift())
+                        stkPx.shift()
+                        stkDir.shift()
+
+        // --- this bar's POC
+        if pocLine
+            float py = f_rowPx(f, f.pocIdx) + f.step / 2
+            pocPx.push(py)
+            pocLn.push(line.new(bar_index, py, bar_index + 1, py, xloc=xloc.bar_index,
+                 color=color.new(cPocCol, 30), width=1, style=line.style_dotted, extend=extend.right))
+            while pocPx.size() > pocKeep
+                line.delete(pocLn.shift())
+                pocPx.shift()
+
+// --- retire anything price has traded back through
+if barClosed
+    if stkPx.size() > 0
+        for i = stkPx.size() - 1 to 0
+            float p = stkPx.get(i)
+            if high >= p and low <= p
+                line.delete(stkLn.get(i))
+                stkLn.remove(i)
+                stkPx.remove(i)
+                stkDir.remove(i)
+    if pocPx.size() > 0
+        for i = pocPx.size() - 1 to 0
+            float p = pocPx.get(i)
+            if high >= p and low <= p
+                line.delete(pocLn.get(i))
+                pocLn.remove(i)
+                pocPx.remove(i)
+
+// ============================================================================
+// 6b. ABSORPTION LEVELS
+// ----------------------------------------------------------------------------
+// An imbalance says one side was more aggressive at a price. Absorption says
+// they were more aggressive AND IT DID NOT WORK - somebody was sitting there
+// filling every one of them, and that somebody is still there.
+//
+// So the signs invert, and this is the part people get wrong. Heavy BUYING at a
+// high that then fails is buyers being absorbed by a passive seller: the level
+// is RESISTANCE, even though every print there was green. Heavy selling at a
+// low that holds is support. The aggressive side is the side that lost.
+//
+// It also cannot be judged on the bar it happens, because whether the push
+// failed is only knowable from what came next. A candidate is drawn dotted,
+// promoted to solid once it has survived absConf bars, and deleted outright the
+// moment price closes through it - a level that has been broken is not a level.
+// ============================================================================
+var array<AbsLvl> absLvls = array.new<AbsLvl>()
+float atr14 = ta.atr(14)
+float absTol = nz(atr14, syminfo.mintick * 10) * 0.15
+
+bool alertAbsSup = false
+bool alertAbsRes = false
+
+if absLvlOn and barClosed and fpBars.size() > 0
+    FpBar fa = fpBars.get(fpBars.size() - 1)
+    if fa.bi == bar_index
+        int nR = fa.buy.size()
+        float avgRow = fa.total / nR
+        int band = math.max(1, math.min(nR, int(math.round(nR * absEdge / 100.0))))
+
+        // --- resistance: the heaviest BUY-dominant row in the top band
+        int bR = -1
+        float bRv = 0.0
+        for i = math.max(0, nR - band) to nR - 1
+            float v = fa.buy.get(i) + fa.sell.get(i)
+            if v >= avgRow * absMult and fa.buy.get(i) > fa.sell.get(i) and v > bRv
+                bRv := v
+                bR := i
+
+        // --- support: the heaviest SELL-dominant row in the bottom band
+        int bS = -1
+        float bSv = 0.0
+        for i = 0 to math.min(nR - 1, band - 1)
+            float v = fa.buy.get(i) + fa.sell.get(i)
+            if v >= avgRow * absMult and fa.sell.get(i) > fa.buy.get(i) and v > bSv
+                bSv := v
+                bS := i
+
+        if bR >= 0
+            float py = f_rowPx(fa, bR) + fa.step / 2
+            absLvls.push(AbsLvl.new(px = py, dir = -1, born = bar_index, ok = false, vol = bRv,
+                 ln = line.new(bar_index, py, bar_index + 1, py, xloc=xloc.bar_index,
+                      color=color.new(cAbsLvl, 45), width=1, style=line.style_dotted, extend=extend.right),
+                 lb = na))
+        if bS >= 0
+            float py = f_rowPx(fa, bS) + fa.step / 2
+            absLvls.push(AbsLvl.new(px = py, dir = 1, born = bar_index, ok = false, vol = bSv,
+                 ln = line.new(bar_index, py, bar_index + 1, py, xloc=xloc.bar_index,
+                      color=color.new(cAbsLvl, 45), width=1, style=line.style_dotted, extend=extend.right),
+                 lb = na))
+        while absLvls.size() > absKeep
+            AbsLvl old = absLvls.shift()
+            line.delete(old.ln)
+            label.delete(old.lb)
+
+if absLvlOn and barClosed and absLvls.size() > 0
+    for i = absLvls.size() - 1 to 0
+        AbsLvl a = absLvls.get(i)
+        if bar_index > a.born
+            // Broken on a CLOSE through it, not a wick. A wick through the
+            // level is price testing whoever is there; a close through it is
+            // them being gone.
+            bool broken = a.dir > 0 ? close < a.px - absTol : close > a.px + absTol
+            if broken
+                line.delete(a.ln)
+                label.delete(a.lb)
+                absLvls.remove(i)
+            else if not a.ok and bar_index - a.born >= absConf
+                a.ok := true
+                line.set_style(a.ln, line.style_solid)
+                line.set_width(a.ln, 2)
+                line.set_color(a.ln, cAbsLvl)
+                a.lb := label.new(bar_index, a.px, a.dir > 0 ? "ABSORB buy" : "ABSORB sell",
+                     xloc=xloc.bar_index, style=label.style_label_left,
+                     color=color.new(cAbsLvl, 80), textcolor=cAbsLvl, size=size.tiny,
+                     tooltip=(a.dir > 0
+                         ? "Sellers pushed into this price, traded " + f_short(a.vol) + " there, and could not get through it. Somebody was filling all of it. Support until price CLOSES below it."
+                         : "Buyers pushed into this price, traded " + f_short(a.vol) + " there, and could not get through it. Somebody was filling all of it. Resistance until price CLOSES above it."))
+                alertAbsSup := alertAbsSup or a.dir > 0
+                alertAbsRes := alertAbsRes or a.dir < 0
+
+// ============================================================================
+// 7. DRAW THE GRID
+// ============================================================================
+var array<box>   fpBoxes = array.new<box>()
+var array<label> fpLabs  = array.new<label>()
+
+// What is left of the 500-box allowance after the stacked zones, the POC lines
+// and the per-bar delta cells have taken their share.
+int CELL_BUDGET = 430
+
+if barstate.islast
+    for b in fpBoxes
+        box.delete(b)
+    fpBoxes.clear()
+    for lb in fpLabs
+        label.delete(lb)
+    fpLabs.clear()
+
+    if fpOn and fpBars.size() > 0
+        int n = fpBars.size()
+        bool toRight = fpPlace == "To the right"
+        int slot = fpColW + fpGap
+        int drawn = 0
+
+        // Newest first. When the budget runs out it is the oldest column that
+        // goes missing, never the one still forming.
+        for k = n - 1 to 0
+            if drawn < CELL_BUDGET
+                FpBar f = fpBars.get(k)
+                int nR = f.buy.size()
+                float minVol = f.total * imbMinPct / 100.0
+
+                int x1 = toRight ? bar_index + fpOffset + k * slot : f.bi
+                int x2 = toRight ? bar_index + fpOffset + k * slot + fpColW : f.bi + 1
+                // Never past the 500-bar forward drawing limit
+                if x2 <= bar_index + 495
+                    for i = 0 to nR - 1
+                        if drawn < CELL_BUDGET
+                            float bv = f.buy.get(i)
+                            float sv = f.sell.get(i)
+                            float tv = bv + sv
+                            if tv > 0
+                                float dv = bv - sv
+                                float pRowLo = f_rowPx(f, i)
+                                float pRowHi = pRowLo + f.step
+
+                                bool bImb = imbOn and f_buyImb(f, i, minVol)
+                                bool sImb = imbOn and f_sellImb(f, i, minVol)
+                                bool isPoc = showPocCell and i == f.pocIdx
+
+                                color bg = cCellBg
+                                if cellHeat and f.total > 0
+                                    // shaded by how much of the bar's biggest
+                                    // cell this one holds, not by raw volume,
+                                    // so the scale means the same on every bar
+                                    float inten = math.min(1.0, math.abs(dv) / math.max(f.total / math.max(nR, 1) * 3, 0.000000001))
+                                    bg := color.new(dv >= 0 ? cBuy : cSell, 90 - int(inten * 55))
+                                if isPoc
+                                    bg := cPocCol
+                                if bImb
+                                    bg := cImbBuy
+                                if sImb
+                                    bg := cImbSell
+
+                                string txt = ""
+                                if cellTxt == "Delta"
+                                    txt := (dv > 0 ? "+" : "") + f_short(dv)
+                                else if cellTxt == "Buy x Sell"
+                                    txt := f_short(bv) + "x" + f_short(sv)
+                                else if cellTxt == "Total volume"
+                                    txt := f_short(tv)
+
+                                // An imbalance border wins over a value area
+                                // edge: one says somebody had to keep filling
+                                // here, the other only says the bar was busy.
+                                bool vaEdge = vaOn and (i == f.vaHi or i == f.vaLo)
+                                color bc = (bImb or sImb) ? cStack : vaEdge ? cVaEdge : color(na)
+                                fpBoxes.push(box.new(x1, pRowHi, x2, pRowLo, bgcolor=bg,
+                                     border_color=bc,
+                                     border_width=(bImb or sImb) or vaEdge ? 1 : 0,
+                                     text=txt, text_color=cTxt, text_size=f_txtSize(),
+                                     text_halign=text.align_center, text_valign=text.align_center))
+                                drawn += 1
+
+                    // --- unfinished auction markers
+                    // An arrow, not the word. "unfinished" is several times
+                    // wider than the column it belongs to, so on a chart
+                    // carrying a dozen of them the labels collided with their
+                    // neighbours and hid the grid they were annotating. The
+                    // arrow says the same thing and takes no horizontal room;
+                    // the sentence is in its tooltip.
+                    if unfinOn
+                        if f.unfinHi
+                            fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPx(f, nR - 1) + f.step,
+                                 "", xloc=xloc.bar_index, style=label.style_triangledown,
+                                 color=cUnfin, size=size.tiny,
+                                 tooltip="Unfinished auction at the HIGH. Both sides were still trading the top row when the bar closed, so nobody was driven out - this was not a rejection, and price tends to come back and finish it."))
+                        if f.unfinLo
+                            fpLabs.push(label.new(int((x1 + x2) / 2), f_rowPx(f, 0),
+                                 "", xloc=xloc.bar_index, style=label.style_triangleup,
+                                 color=cUnfin, size=size.tiny,
+                                 tooltip="Unfinished auction at the LOW. Both sides were still trading the bottom row when the bar closed, so nobody was driven out - this was not a rejection, and price tends to come back and finish it."))
+
+                    // --- delta divergence
+                    if f.absorbUp or f.absorbDn
+                        fpLabs.push(label.new(int((x1 + x2) / 2),
+                             f.absorbUp ? f_rowPx(f, 0) - f.step * 2.6 : f_rowPx(f, nR - 1) + f.step * 2.0,
+                             f.absorbUp ? "STR" : "WEA", xloc=xloc.bar_index,
+                             style=f.absorbUp ? label.style_label_up : label.style_label_down,
+                             color=color.new(f.absorbUp ? cAbsUp : cAbsDn, 20),
+                             textcolor=#000000, size=size.tiny,
+                             tooltip=f.absorbUp
+                                 ? "HIDDEN STRENGTH. The bar closed UP while net flow was SELLING - every aggressive seller was absorbed by somebody taking the other side, and price went the wrong way for them.\n\nDelta " + f_short(f.delta) + " on " + f_short(f.total) + " volume."
+                                 : "HIDDEN WEAKNESS. The bar closed DOWN while net flow was BUYING - the buyers lifting offers were absorbed and price went the wrong way for them.\n\nDelta +" + f_short(f.delta) + " on " + f_short(f.total) + " volume."))
+
+                    // --- the bar's own delta, under its column
+                    if showBarDelta
+                        float dBot = f_rowPx(f, 0) - f.step * 1.4
+                        fpBoxes.push(box.new(x1, dBot + f.step, x2, dBot,
+                             bgcolor=color.new(f.delta >= 0 ? cBuy : cSell, 55),
+                             border_color=color(na),
+                             text=(f.delta > 0 ? "+" : "") + f_short(f.delta),
+                             text_color=cTxt, text_size=f_txtSize(),
+                             text_halign=text.align_center, text_valign=text.align_center))
+                        drawn += 1
+
+// ============================================================================
+// 8. DATA QUALITY DASHBOARD
+// ----------------------------------------------------------------------------
+// The samples-per-bar number is the whole story. Everything above it is drawn
+// from that many data points, and a grid built from five of them looks exactly
+// as convincing as one built from three hundred.
+// ============================================================================
+f_pos(string s) =>
+    switch s
+        "Top Left"      => position.top_left
+        "Bottom Right"  => position.bottom_right
+        "Bottom Left"   => position.bottom_left
+        "Middle Right"  => position.middle_right
+        => position.top_right
+
+var table dash = table.new(f_pos(dashPos), 2, 6, bgcolor=color.new(#131722, 10),
+     border_color=color.new(#000000, 60), border_width=1,
+     frame_color=color.new(#000000, 50), frame_width=1)
+
+// Declared here, at global scope. Pine does not allow a function to be defined
+// inside a conditional block, however local to that block it looks.
+f_row(int r, string k, string v, color c) =>
+    table.cell(dash, 0, r, k, text_color=color.new(cTxt, 45), text_size=size.tiny, text_halign=text.align_left)
+    table.cell(dash, 1, r, v, text_color=c, text_size=size.tiny, text_halign=text.align_right)
+
+if dashOn and barstate.islast
+    string quality = "NO INTRABAR DATA"
+    color  qCol    = #ff1744
+    if ltfOk
+        if nSamples >= 60
+            quality := "good"
+            qCol    := #26a69a
+        else if nSamples >= 20
+            quality := "usable"
+            qCol    := #ffa726
+        else
+            quality := "TOO COARSE"
+            qCol    := #ff1744
+
+    int nClip = 0
+    if fpBars.size() > 0
+        for f in fpBars
+            nClip += f.clipped ? 1 : 0
+
+    f_row(0, "Footprint source", ltfOk ? ltfEff + "m intrabar" : "chart bars only", ltfOk ? cTxt : #ff1744)
+    f_row(1, "Samples per bar", str.tostring(nSamples), qCol)
+    f_row(2, "Grid quality", quality, qCol)
+    f_row(3, "Row height", str.tostring(rowSize, format.mintick), cTxt)
+    // Not an instruction any more. Clipping used to DELETE the top of an
+    // oversized bar and this row told you to go and fix it by hand. The bar is
+    // now coarsened automatically and keeps its whole range, so this reports
+    // what happened instead of asking for something.
+    f_row(4, "Auto-coarsened bars", nClip > 0 ? str.tostring(nClip) + " of " + str.tostring(fpBars.size()) : "none",
+         nClip > 0 ? #ffa726 : color.new(cTxt, 55))
+    f_row(5, "Split basis", "candle direction, not bid/ask", color.new(cTxt, 55))
+
+// ============================================================================
+// 9. SUMMARY TABLE
+// ----------------------------------------------------------------------------
+// The numbers the grid physically cannot make legible. A footprint cell is a
+// few pixels wide at any normal zoom, so the per-bar figures that actually
+// drive a decision go in a table instead and the grid is left to do what it is
+// good at - showing WHERE in the bar the volume sat.
+//
+// Delta swing is the column worth learning. A bar that ends at +2K having never
+// been below +1K is steady one-way buying. A bar that ends at +2K after being
+// at -8K is a reversal that happened inside one candle. The closing delta -
+// which is all any other tool shows you - cannot tell those apart.
+// ============================================================================
+var table sumT = table.new(f_pos(sumPos), 6, 22, bgcolor=color.new(#131722, 10),
+     border_color=color.new(#000000, 60), border_width=1,
+     frame_color=color.new(#000000, 50), frame_width=1)
+
+f_sumCell(int col, int row, string v, color c, color bg) =>
+    table.cell(sumT, col, row, v, text_color=c, text_size=size.tiny,
+         text_halign=col == 0 ? text.align_left : text.align_right, bgcolor=bg)
+
+if sumOn and barstate.islast and fpBars.size() > 0
+    table.clear(sumT, 0, 0, 5, 21)
+    color hdr = color.new(cTxt, 40)
+    f_sumCell(0, 0, "bar",     hdr, color.new(#1e222d, 30))
+    f_sumCell(1, 0, "delta",   hdr, color.new(#1e222d, 30))
+    f_sumCell(2, 0, "d%",      hdr, color.new(#1e222d, 30))
+    f_sumCell(3, 0, "swing",   hdr, color.new(#1e222d, 30))
+    f_sumCell(4, 0, "volume",  hdr, color.new(#1e222d, 30))
+    f_sumCell(5, 0, "read",    hdr, color.new(#1e222d, 30))
+
+    int shown = math.min(sumBars, fpBars.size())
+    for k = 0 to shown - 1
+        FpBar f = fpBars.get(fpBars.size() - 1 - k)
+        int row = k + 1
+        float dPct = f.total > 0 ? f.delta / f.total * 100 : 0.0
+        color dc = f.delta >= 0 ? cBuy : cSell
+        string tag = f.absorbUp ? "STRENGTH" : f.absorbDn ? "WEAKNESS" : f.unfinHi ? "unfin hi" : f.unfinLo ? "unfin lo" : "-"
+        color tc = f.absorbUp ? cAbsUp : f.absorbDn ? cAbsDn : f.unfinHi or f.unfinLo ? cUnfin : color.new(cTxt, 60)
+        f_sumCell(0, row, k == 0 ? "now" : "-" + str.tostring(k), color.new(cTxt, 30), color(na))
+        f_sumCell(1, row, (f.delta > 0 ? "+" : "") + f_short(f.delta), dc, color(na))
+        f_sumCell(2, row, str.tostring(dPct, "#") + "%", dc, color(na))
+        // the path delta took inside the bar, low to high
+        f_sumCell(3, row, f_short(f.dMin) + " " + f_short(f.dMax), color.new(cTxt, 25), color(na))
+        f_sumCell(4, row, f_short(f.total), color.new(cTxt, 35), color(na))
+        f_sumCell(5, row, tag, tc, color(na))
+
+// ============================================================================
+// 10. ALERTS
+// ============================================================================
+bool lastAbsUp = false
+bool lastAbsDn = false
+if fpBars.size() > 0
+    FpBar fz = fpBars.get(fpBars.size() - 1)
+    if fz.bi == bar_index
+        lastAbsUp := fz.absorbUp
+        lastAbsDn := fz.absorbDn
+
+alertcondition(alertStackBuy,  "Stacked buy imbalance",  "Footprint: stacked BUY imbalance")
+alertcondition(alertStackSell, "Stacked sell imbalance", "Footprint: stacked SELL imbalance")
+alertcondition(lastAbsUp, "Hidden strength", "Footprint: bar closed UP on negative delta - sellers absorbed")
+alertcondition(lastAbsDn, "Hidden weakness", "Footprint: bar closed DOWN on positive delta - buyers absorbed")
+alertcondition(alertAbsSup, "Absorption support confirmed", "Footprint: absorption SUPPORT confirmed - sellers could not get through")
+alertcondition(alertAbsRes, "Absorption resistance confirmed", "Footprint: absorption RESISTANCE confirmed - buyers could not get through")
