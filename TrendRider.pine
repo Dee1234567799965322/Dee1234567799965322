@@ -76,6 +76,7 @@ var float peakR    = 0.0
 var float maxDD    = 0.0       // max drawdown in R
 var int   barsInWin  = 0
 var int   barsInLoss = 0
+var int   nGap       = 0        // losers where a gap blew through the stop (realized worse than -1R)
 
 
 if conf
@@ -114,6 +115,11 @@ if conf
         else
             sumLossR += math.abs(r)
             barsInLoss += bar_index - posBar
+            // the initial stop defines 1R. A confirmed close well past it means
+            // price GAPPED through the stop - the "1R risk" was never real. This
+            // is the account-ending tail, so count it explicitly.
+            if r < -1.10
+                nGap += 1
         bestR  := math.max(bestR, r)
         worstR := math.min(worstR, r)
         cumR += r
@@ -172,6 +178,9 @@ float expLong  = nLong  > 0 ? sumRLong  / nLong  : na
 float expShort = nShort > 0 ? sumRShort / nShort : na
 // break-even hit rate given this payoff: p*W - (1-p)*L = 0 -> p = L/(W+L)
 float beHit    = not na(avgWin) and not na(avgLoss) ? avgLoss / (avgWin + avgLoss) * 100 : na
+// share of ALL trades where the stop failed to contain 1R (gap-through). This is
+// the tail that sizing on the notional 1R stop ignores - and blows up an account.
+float gapPct   = nTrades > 0 ? nGap / float(nTrades) * 100 : na
 
 string verdict = "NEED MORE DATA"
 color  vCol = color.gray
@@ -191,7 +200,7 @@ f_r(int row, string k, string v, color c, table t) =>
     table.cell(t, 1, row, v, text_color = c, text_size = size.small, text_halign = text.align_right)
     row
 
-var table sc = table.new(f_pos(sPos), 2, 15, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+var table sc = table.new(f_pos(sPos), 2, 16, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 
 f_pp(float v) => na(v) ? "—" : str.tostring(v, "#.#") + "%"
 f_rr(float v) => na(v) ? "—" : (v >= 0 ? "+" : "") + str.tostring(v, "#.##") + "R"
@@ -211,8 +220,9 @@ if sOn and barstate.islast
     f_r(10, "  after cost", f_rr(expNet), na(expNet) ? color.gray : expNet > 0 ? color.green : color.red, sc)
     f_r(11, "Net R  (equity)", f_rr(sumR), sumR >= 0 ? color.green : color.red, sc)
     f_r(12, "Max drawdown", "-" + str.tostring(maxDD, "#.#") + "R", color.new(color.white, 30), sc)
-    f_r(13, "Best / worst trade", f_rr(bestR) + " / " + f_rr(worstR), color.new(color.white, 30), sc)
-    f_r(14, "VERDICT", verdict, vCol, sc)
+    f_r(13, "Stop overruns (gap>1R)", na(gapPct) ? "—" : str.tostring(nGap) + "  (" + str.tostring(gapPct, "#.#") + "%)", nGap == 0 ? color.new(color.white, 30) : gapPct > 5 ? color.red : color.orange, sc)
+    f_r(14, "Best / worst trade", f_rr(bestR) + " / " + f_rr(worstR), color.new(color.white, 30), sc)
+    f_r(15, "VERDICT", verdict, vCol, sc)
 
 alertcondition(posDir == 1 and posDir[1] != 1, "Trend Rider long", "Trend Rider: long entry")
 alertcondition(posDir == -1 and posDir[1] != -1, "Trend Rider short", "Trend Rider: short entry")
