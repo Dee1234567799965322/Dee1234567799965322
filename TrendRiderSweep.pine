@@ -1,0 +1,194 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/ MPL-2.0
+//@version=6
+indicator("Trend Rider - robustness sweep", "TR-SWEEP", overlay = false)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHAT THIS ANSWERS
+// ═══════════════════════════════════════════════════════════════════════════
+// TrendRider showed a small POSITIVE after-cost expectancy on a few daily
+// crypto names at ONE fixed setting: breakout 20 / EMA 100 / chandelier x3.
+// The honest question is whether that number is a broad PLATEAU (a real,
+// robust edge that survives changing the knobs) or a lonely SPIKE (an
+// artefact of one lucky parameter combination = overfit noise to ignore).
+//
+// This runs the identical entry/exit/ledger logic MANY times in one pass and
+// prints two 1-D curves:
+//   - expectancy vs BREAKOUT length   (EMA 100, chandelier x3 held fixed)
+//   - expectancy vs CHANDELIER mult    (breakout 20, EMA 100 held fixed)
+// The centre of each curve is your default 20 / x3, marked with «.
+//
+// READ IT LIKE THIS: if the after-cost column stays green and roughly flat as
+// you step away from the centre in BOTH tables, the edge is a plateau - worth
+// taking seriously. If only the centre is green and its neighbours flip
+// negative, the "edge" was curve-fitting and should be discarded.
+//
+// Everything is on CONFIRMED bars, entered/exited at the close - no repaint,
+// same as the main indicator, so the numbers are directly comparable.
+
+// ── Fixed dimensions (the two NOT being swept) ────────────────────────────────
+int   emaFixed   = input.int(100, "Trend EMA (held fixed)", minval = 10, maxval = 500)
+int   atrFixed   = input.int(22,  "ATR length", minval = 2, maxval = 200)
+int   breakFixed = input.int(20,  "Breakout length for the chandelier sweep", minval = 5, maxval = 200)
+float chMultFixed= input.float(3.0,"Chandelier mult for the breakout sweep", minval = 1.0, maxval = 10.0, step = 0.5)
+bool  useTrendExit = input.bool(true, "Also exit on EMA cross")
+float costR      = input.float(0.05, "Round-trip cost (R)", minval = 0.0, maxval = 1.0, step = 0.005)
+string sPos      = input.string("Top Right", "Table position", options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"])
+
+f_pos(string p) =>
+    switch p
+        "Top Left"     => position.top_left
+        "Middle Right" => position.middle_right
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+// ── The swept values ──────────────────────────────────────────────────────────
+// breakout lengths (centre = 20 at index 2) and chandelier mults (centre = 3.0 at index 2)
+var int   nBreak = 7
+var int   nChand = 6
+var int   nCombos = nBreak + nChand            // 0..6 breakout sweep, 7..12 chandelier sweep
+var float[] multsArr  = array.from(2.0, 2.5, 3.0, 3.5, 4.0, 5.0)
+
+// ── Shared indicator series ───────────────────────────────────────────────────
+float ema = ta.ema(close, emaFixed)
+float atr = ta.atr(atrFixed)
+bool  trendUp = close > ema
+bool  trendDn = close < ema
+
+// breakout-sweep windows (literal lengths so ta.highest/lowest take a const)
+float[] hiCurArr  = array.from(ta.highest(high, 10),  ta.highest(high, 15),  ta.highest(high, 20),  ta.highest(high, 25),  ta.highest(high, 30),  ta.highest(high, 40),  ta.highest(high, 50))
+float[] hiPrevArr = array.from(ta.highest(high, 10)[1], ta.highest(high, 15)[1], ta.highest(high, 20)[1], ta.highest(high, 25)[1], ta.highest(high, 30)[1], ta.highest(high, 40)[1], ta.highest(high, 50)[1])
+float[] loCurArr  = array.from(ta.lowest(low, 10),  ta.lowest(low, 15),  ta.lowest(low, 20),  ta.lowest(low, 25),  ta.lowest(low, 30),  ta.lowest(low, 40),  ta.lowest(low, 50))
+float[] loPrevArr = array.from(ta.lowest(low, 10)[1], ta.lowest(low, 15)[1], ta.lowest(low, 20)[1], ta.lowest(low, 25)[1], ta.lowest(low, 30)[1], ta.lowest(low, 40)[1], ta.lowest(low, 50)[1])
+
+// chandelier-sweep window (fixed breakout, one series)
+float fixHiCur  = ta.highest(high, breakFixed)
+float fixHiPrev = ta.highest(high, breakFixed)[1]
+float fixLoCur  = ta.lowest(low,  breakFixed)
+float fixLoPrev = ta.lowest(low,  breakFixed)[1]
+
+// ── Per-combo state + ledger (arrays persist; arrays are mutable, globals are not) ─
+var int[]   dirA     = array.new_int(nCombos, 0)
+var float[] entryA   = array.new_float(nCombos, na)
+var float[] stopA    = array.new_float(nCombos, na)
+var float[] riskA    = array.new_float(nCombos, na)
+var int[]   ntA      = array.new_int(nCombos, 0)
+var int[]   winA     = array.new_int(nCombos, 0)
+var float[] sumRA    = array.new_float(nCombos, 0.0)
+var float[] sumWinRA = array.new_float(nCombos, 0.0)
+var float[] sumLossRA= array.new_float(nCombos, 0.0)
+var float[] worstA   = array.new_float(nCombos, 0.0)
+
+if barstate.isconfirmed
+    for i = 0 to nCombos - 1
+        bool  isBreak = i < nBreak
+        float mult = isBreak ? chMultFixed : array.get(multsArr, i - nBreak)
+        float hiC  = isBreak ? array.get(hiCurArr,  i) : fixHiCur
+        float hiP  = isBreak ? array.get(hiPrevArr, i) : fixHiPrev
+        float loC  = isBreak ? array.get(loCurArr,  i) : fixLoCur
+        float loP  = isBreak ? array.get(loPrevArr, i) : fixLoPrev
+
+        int   dir   = array.get(dirA,   i)
+        float entry = array.get(entryA, i)
+        float stop  = array.get(stopA,  i)
+        float risk  = array.get(riskA,  i)
+
+        // manage an open position; on exit record R into the ledger arrays
+        bool doClose = false
+        float r = na
+        if dir == 1
+            float trail = hiC - atr * mult
+            stop := math.max(stop, trail)
+            if close < stop or (useTrendExit and trendDn)
+                doClose := true
+                r := (close - entry) / risk
+        else if dir == -1
+            float trail = loC + atr * mult
+            stop := math.min(stop, trail)
+            if close > stop or (useTrendExit and trendUp)
+                doClose := true
+                r := (entry - close) / risk
+
+        if doClose
+            array.set(ntA, i, array.get(ntA, i) + 1)
+            array.set(sumRA, i, array.get(sumRA, i) + r)
+            if r > 0
+                array.set(winA, i, array.get(winA, i) + 1)
+                array.set(sumWinRA, i, array.get(sumWinRA, i) + r)
+            else
+                array.set(sumLossRA, i, array.get(sumLossRA, i) + math.abs(r))
+            array.set(worstA, i, math.min(array.get(worstA, i), r))
+            dir := 0
+
+        // new entry only when flat
+        if dir == 0 and not na(atr) and atr > 0
+            if trendUp and not na(hiP) and close > hiP
+                dir := 1
+                entry := close
+                stop  := close - atr * mult
+                risk  := atr * mult
+            else if trendDn and not na(loP) and close < loP
+                dir := -1
+                entry := close
+                stop  := close + atr * mult
+                risk  := atr * mult
+
+        array.set(dirA,   i, dir)
+        array.set(entryA, i, entry)
+        array.set(stopA,  i, stop)
+        array.set(riskA,  i, risk)
+
+// ── Output table ──────────────────────────────────────────────────────────────
+var table t = table.new(f_pos(sPos), 5, 18, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+
+f_rr(float v) => na(v) ? "—" : (v >= 0 ? "+" : "") + str.tostring(v, "#.###") + "R"
+
+f_head(int row, string c0, string c1, string c2, string c3, string c4) =>
+    table.cell(t, 0, row, c0, text_color = color.new(color.white, 0), text_size = size.small, text_halign = text.align_left,  bgcolor = color.new(color.gray, 75))
+    table.cell(t, 1, row, c1, text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_right, bgcolor = color.new(color.gray, 75))
+    table.cell(t, 2, row, c2, text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_right, bgcolor = color.new(color.gray, 75))
+    table.cell(t, 3, row, c3, text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_right, bgcolor = color.new(color.gray, 75))
+    table.cell(t, 4, row, c4, text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_right, bgcolor = color.new(color.gray, 75))
+    row
+
+f_row(int row, string param, int combo, bool centre) =>
+    int   nt   = array.get(ntA, combo)
+    float sr   = array.get(sumRA, combo)
+    float sw   = array.get(sumWinRA, combo)
+    float sl   = array.get(sumLossRA, combo)
+    float wst  = array.get(worstA, combo)
+    float exp  = nt > 0 ? sr / nt : na
+    float en   = na(exp) ? na : exp - costR
+    float pf   = sl > 0 ? sw / sl : na
+    color enC  = na(en) ? color.gray : en > 0 ? color.green : color.red
+    color bg   = centre ? color.new(color.blue, 78) : color.new(color.black, 100)
+    table.cell(t, 0, row, (centre ? "« " : "  ") + param, text_color = centre ? color.white : color.new(color.white, 20), text_size = size.small, text_halign = text.align_left,  bgcolor = bg)
+    table.cell(t, 1, row, str.tostring(nt),                text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_right, bgcolor = bg)
+    table.cell(t, 2, row, f_rr(en),                        text_color = enC,                        text_size = size.small, text_halign = text.align_right, bgcolor = bg)
+    table.cell(t, 3, row, na(pf) ? "—" : str.tostring(pf, "#.##"), text_color = na(pf) ? color.gray : pf > 1 ? color.green : color.red, text_size = size.small, text_halign = text.align_right, bgcolor = bg)
+    table.cell(t, 4, row, f_rr(wst),                       text_color = color.new(color.white, 30), text_size = size.small, text_halign = text.align_right, bgcolor = bg)
+    row
+
+if barstate.islast
+    table.cell(t, 0, 0, "TREND RIDER ROBUSTNESS", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, 0, "EMA " + str.tostring(emaFixed), text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    table.cell(t, 2, 0, "cost " + str.tostring(costR, "#.###") + "R", text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    table.cell(t, 3, 0, "", text_color = color.gray, text_size = size.small)
+    table.cell(t, 4, 0, "", text_color = color.gray, text_size = size.small)
+    // breakout sweep
+    f_head(1, "BREAKOUT  (x" + str.tostring(chMultFixed, "#.#") + ")", "n", "exp/net", "PF", "worst")
+    f_row(2, "break 10", 0, false)
+    f_row(3, "break 15", 1, false)
+    f_row(4, "break 20", 2, true)
+    f_row(5, "break 25", 3, false)
+    f_row(6, "break 30", 4, false)
+    f_row(7, "break 40", 5, false)
+    f_row(8, "break 50", 6, false)
+    // chandelier sweep
+    f_head(9, "CHANDELIER  (break " + str.tostring(breakFixed) + ")", "n", "exp/net", "PF", "worst")
+    f_row(10, "chand x2.0", 7,  false)
+    f_row(11, "chand x2.5", 8,  false)
+    f_row(12, "chand x3.0", 9,  true)
+    f_row(13, "chand x3.5", 10, false)
+    f_row(14, "chand x4.0", 11, false)
+    f_row(15, "chand x5.0", 12, false)
