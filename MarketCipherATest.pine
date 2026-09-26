@@ -1,0 +1,240 @@
+// © Modernized Open-Source Cipher A Clone — with a measurement engine bolted on
+//@version=5
+indicator("Market Cipher A - MEASURED", overlay=true, max_labels_count=500)
+
+// ==========================================
+// 1. EMA RIBBONS
+// ==========================================
+ema1_len = input.int(5, title="EMA 1")
+ema2_len = input.int(11, title="EMA 2")
+ema3_len = input.int(15, title="EMA 3")
+ema4_len = input.int(18, title="EMA 4")
+ema5_len = input.int(21, title="EMA 5")
+ema6_len = input.int(24, title="EMA 6")
+ema7_len = input.int(28, title="EMA 7")
+ema8_len = input.int(34, title="EMA 8")
+
+ema1 = ta.ema(close, ema1_len)
+ema2 = ta.ema(close, ema2_len)
+ema3 = ta.ema(close, ema3_len)
+ema4 = ta.ema(close, ema4_len)
+ema5 = ta.ema(close, ema5_len)
+ema6 = ta.ema(close, ema6_len)
+ema7 = ta.ema(close, ema7_len)
+ema8 = ta.ema(close, ema8_len)
+
+plot(ema1, color=color.new(#265aa6, 50), linewidth=2, title="EMA 1")
+plot(ema2, color=color.new(#265aa6, 50), linewidth=2, title="EMA 2")
+plot(ema3, color=color.new(#1976d2, 50), linewidth=2, title="EMA 3")
+plot(ema4, color=color.new(#1976d2, 50), linewidth=2, title="EMA 4")
+plot(ema5, color=color.new(#7fb3ff, 50), linewidth=2, title="EMA 5")
+plot(ema6, color=color.new(#7fb3ff, 50), linewidth=2, title="EMA 6")
+plot(ema7, color=color.new(#bbdefb, 50), linewidth=2, title="EMA 7")
+plot(ema8, color=color.new(#bbdefb, 50), linewidth=2, title="EMA 8")
+
+// ==========================================
+// 2. BASIC SIGNALS (Triangles & Crosses)
+// ==========================================
+// Blue Triangle (Bullish EMA Cross)
+blueTriangle = ta.crossover(ema2, ema8)
+plotshape(blueTriangle, style=shape.triangleup, color=color.blue, location=location.belowbar, size=size.small, title="Blue Triangle")
+
+// Red Cross (Bearish EMA Cross)
+redCross = ta.crossunder(ema1, ema2)
+plotshape(redCross, style=shape.xcross, color=color.red, location=location.abovebar, size=size.tiny, title="Red Cross")
+
+// ==========================================
+// 3. ADVANCED SIGNALS (Yellow X & Blood Diamond)
+// ==========================================
+// Yellow X (Often indicates a potential top/reversal warning)
+vwap_val = ta.vwap(close)
+sma_fast = ta.sma(close, 10)
+sma_slow = ta.sma(close, 20)
+yellowX = ta.crossunder(sma_fast, sma_slow) and close < vwap_val
+plotshape(yellowX, style=shape.xcross, color=color.yellow, location=location.abovebar, size=size.small, title="Yellow X")
+
+// Blood Diamond (Strong Bearish Confirmation)
+rsi_val = ta.rsi(close, 14)
+bloodDiamond = redCross and rsi_val < 50 and ta.change(rsi_val) < 0
+plotshape(bloodDiamond, style=shape.diamond, color=color.red, location=location.abovebar, size=size.small, title="Blood Diamond")
+
+// Green Dot (Bullish Momentum Shift)
+greenDot = ta.crossover(sma_fast, sma_slow) and close > vwap_val
+plotshape(greenDot, style=shape.circle, color=color.green, location=location.belowbar, size=size.small, title="Green Dot")
+
+// ==========================================
+// 4. ALERTS
+// ==========================================
+alertcondition(blueTriangle, title="Blue Triangle Alert", message="Cipher A: Blue Triangle (Bullish) on {{ticker}}")
+alertcondition(redCross, title="Red Cross Alert", message="Cipher A: Red Cross (Bearish) on {{ticker}}")
+alertcondition(yellowX, title="Yellow X Alert", message="Cipher A: Yellow X (Warning) on {{ticker}}")
+alertcondition(bloodDiamond, title="Blood Diamond Alert", message="Cipher A: Blood Diamond (Strong Bearish) on {{ticker}}")
+alertcondition(greenDot, title="Green Dot Alert", message="Cipher A: Green Dot (Bullish) on {{ticker}}")
+
+// ==========================================
+// 5. MEASUREMENT ENGINE — does any of this beat a coin flip?
+// ==========================================
+// The same test used on the nine other signal families in this project. Every
+// signal is paper-traded at the CLOSE of its confirmed bar with a fixed
+// bracket: target = 2 ATR (a 2R win), stop = 1 ATR (a 1R loss), give-up after
+// 100 bars. A trade counts ONLY when it resolves at a barrier (target or stop);
+// time-outs are dropped, which keeps the null clean.
+//
+// With a 2:1 target:stop, a coin flip that just wanders resolves as a WIN with
+// probability 1/(1+2) = 33.3%. So 33.3% is the bar to beat, not 50%.
+//
+// DRIFT TRAP: on an asset that rises over time, longs hit the +2R target more
+// often for free and shorts less often — that is drift, not skill. We measure
+// longs and shorts SEPARATELY and average the two hit rates, which cancels the
+// drift. The averaged number is the drift-free hit rate.
+//
+// Even a true edge must clear NOISE. The Minimum Detectable Live-edge (MDL) is
+// 2.8 standard errors of that drift-free rate (Haldane–Anscombe corrected). We
+// only call it an edge when the measured edge exceeds the MDL AND enough trades
+// have resolved. Below that, the honest verdict is COIN FLIP.
+//
+// Bullish signals (Blue Triangle, Green Dot) are tested as LONGS; bearish
+// signals (Red Cross, Blood Diamond, Yellow X) as SHORTS. Everything is on
+// confirmed bars, so nothing repaints.
+
+grpM = "Measurement"
+atrLenM   = input.int(14,  "ATR length (bracket unit)", minval=2, maxval=200, group=grpM)
+tgtMult   = input.float(2.0, "Target (ATR)  = win", minval=0.5, maxval=10.0, step=0.5, group=grpM)
+stopMult  = input.float(1.0, "Stop (ATR)  = loss", minval=0.5, maxval=10.0, step=0.5, group=grpM)
+horizonM  = input.int(100, "Give-up horizon (bars)", minval=10, maxval=1000, group=grpM)
+minResolvedM = input.int(30, "Min resolved trades for a verdict", minval=10, maxval=1000, group=grpM)
+costR     = input.float(0.05, "Round-trip cost (R)", minval=0.0, maxval=1.0, step=0.005, group=grpM)
+showPanel = input.bool(true, "Show measurement panel", group=grpM)
+panelPos  = input.string("Top Right", "Panel position", options=["Top Right","Top Left","Middle Right","Bottom Right","Bottom Left"], group=grpM)
+
+f_panelPos(p) =>
+    switch p
+        "Top Left"     => position.top_left
+        "Middle Right" => position.middle_right
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+atrM = ta.atr(atrLenM)
+nullHit = 100.0 / (1.0 + tgtMult / stopMult)   // 33.3% at 2:1
+
+longSig  = blueTriangle or greenDot
+shortSig = redCross or bloodDiamond or yellowX
+
+// open paper trades (parallel arrays; arrays are mutable so this is legal in Pine)
+var int[]   oDir   = array.new_int(0)
+var float[] oTgt   = array.new_float(0)
+var float[] oStop  = array.new_float(0)
+var int[]   oStart = array.new_int(0)
+
+var int winL  = 0
+var int lossL = 0
+var int winS  = 0
+var int lossS = 0
+var int unres = 0
+
+if barstate.isconfirmed
+    // resolve open trades first — iterate backwards so removals don't shift
+    // unseen indices. GUARD the empty case: size-1 = -1 would make the loop
+    // count UP from -1 and read index -1.
+    if array.size(oDir) > 0
+        for i = array.size(oDir) - 1 to 0
+            int   dir = array.get(oDir, i)
+            float tgt = array.get(oTgt, i)
+            float stp = array.get(oStop, i)
+            int   st  = array.get(oStart, i)
+            bool  done = false
+            if dir == 1
+                if high >= tgt
+                    winL += 1
+                    done := true
+                else if low <= stp
+                    lossL += 1
+                    done := true
+            else
+                if low <= tgt
+                    winS += 1
+                    done := true
+                else if high >= stp
+                    lossS += 1
+                    done := true
+            if not done and (bar_index - st) >= horizonM
+                unres += 1
+                done := true
+            if done
+                array.remove(oDir, i)
+                array.remove(oTgt, i)
+                array.remove(oStop, i)
+                array.remove(oStart, i)
+
+    // open new trades at this bar's close
+    if longSig and not na(atrM) and atrM > 0
+        array.push(oDir, 1)
+        array.push(oTgt, close + tgtMult * atrM)
+        array.push(oStop, close - stopMult * atrM)
+        array.push(oStart, bar_index)
+    if shortSig and not na(atrM) and atrM > 0
+        array.push(oDir, -1)
+        array.push(oTgt, close - tgtMult * atrM)
+        array.push(oStop, close + stopMult * atrM)
+        array.push(oStart, bar_index)
+
+// ── statistics ────────────────────────────────────────────────────────────────
+nL = winL + lossL
+nS = winS + lossS
+resolved = nL + nS
+hitL = nL > 0 ? winL / float(nL) * 100.0 : na
+hitS = nS > 0 ? winS / float(nS) * 100.0 : na
+
+// drift-free hit = mean of the two strata (falls back to the available side)
+pDF = not na(hitL) and not na(hitS) ? (hitL + hitS) / 2.0 : na(hitL) ? hitS : hitL
+edge = na(pDF) ? na : pDF - nullHit
+
+// Haldane–Anscombe corrected standard error of the drift-free rate
+pLc = nL > 0 ? (winL + 0.5) / (nL + 1.0) : na
+pSc = nS > 0 ? (winS + 0.5) / (nS + 1.0) : na
+varL = nL > 0 ? pLc * (1.0 - pLc) / nL : na
+varS = nS > 0 ? pSc * (1.0 - pSc) / nS : na
+seDF = not na(varL) and not na(varS) ? 0.5 * math.sqrt(varL + varS) : na(varL) ? math.sqrt(varS) : math.sqrt(varL)
+mdl = na(seDF) ? na : 2.8 * seDF * 100.0
+
+// money view: a win is +2R, a loss is -1R, so expectancy = 3p - 1 (p as fraction)
+expR = na(pDF) ? na : 3.0 * (pDF / 100.0) - 1.0
+expNet = na(expR) ? na : expR - costR
+
+verdict = "NEED MORE DATA"
+color vCol = color.gray
+if resolved >= minResolvedM and not na(edge) and not na(mdl)
+    if edge > mdl and edge > 0
+        verdict := "EDGE  +" + str.tostring(edge, "#.#") + "pp"
+        vCol := color.green
+    else
+        verdict := "COIN FLIP"
+        vCol := color.new(color.red, 20)
+
+// ── panel ─────────────────────────────────────────────────────────────────────
+var table mp = table.new(f_panelPos(panelPos), 2, 13, bgcolor=color.new(color.black, 12), border_color=color.new(color.gray, 60), border_width=1, frame_color=color.new(color.gray, 40), frame_width=1)
+
+f_pp(v) => na(v) ? "—" : str.tostring(v, "#.#") + "%"
+f_rr(v) => na(v) ? "—" : (v >= 0 ? "+" : "") + str.tostring(v, "#.##") + "R"
+
+f_row(row, k, v, c) =>
+    table.cell(mp, 0, row, k, text_color=color.new(color.white, 20), text_size=size.small, text_halign=text.align_left)
+    table.cell(mp, 1, row, v, text_color=c, text_size=size.small, text_halign=text.align_right)
+    row
+
+if showPanel and barstate.islast
+    table.cell(mp, 0, 0, "MARKET CIPHER A", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(mp, 1, 0, "2R / 1R  " + str.tostring(horizonM) + "b", text_color=color.new(color.white, 45), text_size=size.small, text_halign=text.align_right)
+    f_row(1,  "Resolved  L / S", str.tostring(nL) + " / " + str.tostring(nS), color.new(color.white, 10))
+    f_row(2,  "Timed out (dropped)", str.tostring(unres), color.new(color.white, 45))
+    f_row(3,  "Long hit rate", f_pp(hitL), color.new(color.white, 10))
+    f_row(4,  "Short hit rate", f_pp(hitS), color.new(color.white, 10))
+    f_row(5,  "Coin-flip null", f_pp(nullHit), color.new(color.white, 45))
+    f_row(6,  "Drift-free hit", f_pp(pDF), color.new(color.white, 0))
+    f_row(7,  "Edge vs null", na(edge) ? "—" : (edge >= 0 ? "+" : "") + str.tostring(edge, "#.#") + "pp", na(edge) ? color.gray : edge > 0 ? color.green : color.red)
+    f_row(8,  "  must beat (MDL)", na(mdl) ? "—" : "±" + str.tostring(mdl, "#.#") + "pp", color.new(color.white, 45))
+    f_row(9,  "Expectancy / trade", f_rr(expR), na(expR) ? color.gray : expR > 0 ? color.green : color.red)
+    f_row(10, "  after cost", f_rr(expNet), na(expNet) ? color.gray : expNet > 0 ? color.green : color.red)
+    f_row(11, "Still open", str.tostring(array.size(oDir)), color.new(color.white, 45))
+    f_row(12, "VERDICT", verdict, vCol)
