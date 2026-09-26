@@ -212,7 +212,7 @@ if sOn and barstate.islast
     f_r(11, "Net R  (equity)", f_rr(sumR), sumR >= 0 ? color.green : color.red, sc)
     f_r(12, "Max drawdown", "-" + str.tostring(maxDD, "#.#") + "R", color.new(color.white, 30), sc)
     f_r(13, "Best / worst trade", f_rr(bestR) + " / " + f_rr(worstR), color.new(color.white, 30), sc)
-    f_r(14, "VERDICT", verdict, vCol)
+    f_r(14, "VERDICT", verdict, vCol, sc)
 
 alertcondition(posDir == 1 and posDir[1] != 1, "Trend Rider long", "Trend Rider: long entry")
 alertcondition(posDir == -1 and posDir[1] != -1, "Trend Rider short", "Trend Rider: short entry")
