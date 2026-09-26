@@ -120,6 +120,7 @@ died the same way.
 | `TradeJournal.pine` | Turns the measurement panel on the user's own discretionary entries. Log each real trade as a slot (Long/Short + entry time); it opens a synthetic 2R trade at that bar and scores your entries against the same 1/(1+R) null as every signal test. The last unmeasured input, and the only one honesty rather than code has to guarantee. |
 | `SupportResistanceTest.pine` | The oldest idea in trading: buy the bounce off support, sell the rejection at resistance, where a level is a confirmed swing pivot. Long when price holds a prior swing low, short when it rejects a prior swing high. Each level arms one bounce then is spent. Same measurement panel. Result pending |
 | `DivergenceTest.pine` | The WaveTrend divergence signal from the Liquidity Tracker, reproduced verbatim. Bullish = price lower low while the oscillator makes a higher low (long); bearish = price higher high, oscillator lower high (short). Money-flow confirmation optional. Same measurement panel. Result pending |
+| `TrendRider.pine` | Not another entry signal. Time-series momentum: enter with the trend on a Donchian breakout, cut losers at 1R, let winners run behind a chandelier trailing stop. Judged by expectancy, profit factor and payoff (win/loss) rather than hit rate, because a trend system is meant to have a low hit rate and a large average win. The one approach in this repo with a real out-of-sample track record; its edge is in the exit and the skew, not the entry |
 
 ### The experiments, in the order they were run
 

@@ -1,0 +1,215 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/ MPL-2.0
+//@version=6
+indicator("Trend Rider - time-series momentum", "TREND-RIDER", overlay = true, max_lines_count = 100, max_labels_count = 100)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHY THIS, AND WHY IT IS NOT LIKE THE OTHER NINE TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+// Nine entry signals in this project all landed on a coin flip, because none of
+// them can predict the next candle. Trend following does not try to. It is the
+// one approach with a multi-decade, out-of-sample record (managed futures), and
+// its edge lives in the EXIT and the SKEW, not the entry:
+//
+//   - Enter only WITH the established trend (price above a long moving average
+//     for longs, below it for shorts) on a breakout of the recent range.
+//   - Cut a loser fast at a fixed initial risk = 1R.
+//   - Let a winner RUN behind a trailing (chandelier) stop until the trend
+//     turns. No fixed target. The rare 5-10R winner is the whole game.
+//
+// That produces a LOW hit rate (often 35-45%) with a large average win against a
+// small average loss. Judged by hit rate it looks broken; judged by expectancy
+// and profit factor it can be sound. So the scoreboard below is expectancy,
+// profit factor and average-win-vs-average-loss - NOT hit rate against a coin
+// flip, which is the wrong ruler for this.
+//
+// One honest inversion to name out loud: for a REVERSAL signal, drift (the
+// market going up over the window) is a confound to strip out. For TREND
+// FOLLOWING, capturing that drift IS the strategy. Same number, opposite role.
+//
+// HONEST LIMITS, up front:
+//   - The real edge of this method is a PORTFOLIO effect across dozens of
+//     markets held for weeks. On ONE instrument over a free-account history it
+//     may not reach significance, and a single bad chop can dominate a small
+//     sample. This measures one instrument; treat a green verdict here as
+//     necessary, not sufficient.
+//   - Everything is evaluated on CONFIRMED bars and entered/exited at the close,
+//     so nothing repaints and it is honest for live use.
+
+// ── Inputs ──────────────────────────────────────────────────────────────────
+string G_T = "Trend model"
+int   trendLenInput = input.int(100, "Trend filter (EMA length)", minval = 10, maxval = 500, tooltip = "Longs only while price is above this EMA; shorts only below it. The regime filter that keeps you on the right side.", group = G_T)
+int   breakLenInput = input.int(20,  "Breakout length (bars)", minval = 5, maxval = 200, tooltip = "Enter long when price closes above the highest high of this many prior bars (Donchian breakout), short on the mirror. Classic managed-futures entry.", group = G_T)
+int   atrLenInput   = input.int(22,  "ATR length", minval = 2, maxval = 200, group = G_T)
+float chMultInput   = input.float(3.0, "Chandelier stop (ATR x)", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "The trailing stop distance. The initial stop at entry defines 1R; from then it ratchets in the trade's favour and never loosens. Wider = fewer whipsaws, larger giveback.", group = G_T)
+bool  useTrendExitInput = input.bool(true, "Also exit when price crosses back through the EMA", group = G_T)
+bool  allowLongInput  = input.bool(true, "Take longs",  inline = "ls", group = G_T)
+bool  allowShortInput = input.bool(true, "Take shorts", inline = "ls", group = G_T)
+
+float ema = ta.ema(close, trendLenInput)
+float atr = ta.atr(atrLenInput)
+float hiN = ta.highest(high, breakLenInput)[1]
+float loN = ta.lowest(low,  breakLenInput)[1]
+bool  trendUp = close > ema
+bool  trendDn = close < ema
+bool  conf = barstate.isconfirmed
+
+// ── Position + trade ledger ─────────────────────────────────────────────────
+var int    posDir   = 0        // 0 flat, 1 long, -1 short
+var float  posEntry = na
+var float  posStop  = na
+var float  posRisk  = na       // 1R in price
+var int    posBar   = na
+
+var int   nTrades = 0
+var int   nWin    = 0
+var int   nLong   = 0
+var int   nShort  = 0
+var float sumWinR  = 0.0       // sum of +R over winners
+var float sumLossR = 0.0       // sum of |R| over losers
+var float sumR     = 0.0       // net R
+var float sumRLong = 0.0
+var float sumRShort= 0.0
+var float bestR    = 0.0
+var float worstR   = 0.0
+var float cumR     = 0.0       // equity curve in R
+var float peakR    = 0.0
+var float maxDD    = 0.0       // max drawdown in R
+var int   barsInWin  = 0
+var int   barsInLoss = 0
+
+f_close(float exitPx) =>
+    float r = posDir == 1 ? (exitPx - posEntry) / posRisk : (posEntry - exitPx) / posRisk
+    nTrades += 1
+    sumR += r
+    if posDir == 1
+        sumRLong += r
+        nLong += 1
+    else
+        sumRShort += r
+        nShort += 1
+    if r > 0
+        nWin += 1
+        sumWinR += r
+        barsInWin += bar_index - posBar
+    else
+        sumLossR += math.abs(r)
+        barsInLoss += bar_index - posBar
+    bestR  := math.max(bestR, r)
+    worstR := math.min(worstR, r)
+    cumR += r
+    peakR := math.max(peakR, cumR)
+    maxDD := math.max(maxDD, peakR - cumR)
+    label.new(bar_index, exitPx, (r >= 0 ? "+" : "") + str.tostring(r, "#.#") + "R",
+         style = posDir == 1 ? label.style_label_down : label.style_label_up,
+         color = color.new(r >= 0 ? color.teal : color.maroon, 30), textcolor = color.white, size = size.tiny)
+    posDir := 0
+
+if conf
+    // manage an open position first
+    if posDir == 1
+        float trail = ta.highest(high, breakLenInput) - atr * chMultInput
+        posStop := math.max(posStop, trail)
+        bool stopHit  = close < posStop
+        bool trendOut = useTrendExitInput and trendDn
+        if stopHit or trendOut
+            f_close(close)
+    else if posDir == -1
+        float trail = ta.lowest(low, breakLenInput) + atr * chMultInput
+        posStop := math.min(posStop, trail)
+        bool stopHit  = close > posStop
+        bool trendOut = useTrendExitInput and trendUp
+        if stopHit or trendOut
+            f_close(close)
+
+    // look for a new entry only when flat
+    if posDir == 0 and not na(atr) and atr > 0
+        bool longSig  = allowLongInput  and trendUp and not na(hiN) and close > hiN
+        bool shortSig = allowShortInput and trendDn and not na(loN) and close < loN
+        if longSig
+            posDir := 1
+            posEntry := close
+            posStop  := close - atr * chMultInput
+            posRisk  := atr * chMultInput
+            posBar   := bar_index
+            label.new(bar_index, low, "▲", style = label.style_label_up, color = color.new(color.teal, 20), textcolor = color.white, size = size.tiny)
+        else if shortSig
+            posDir := -1
+            posEntry := close
+            posStop  := close + atr * chMultInput
+            posRisk  := atr * chMultInput
+            posBar   := bar_index
+            label.new(bar_index, high, "▼", style = label.style_label_down, color = color.new(color.maroon, 20), textcolor = color.white, size = size.tiny)
+
+plot(ema, "Trend EMA", color = color.new(trendUp ? color.teal : color.maroon, 0), linewidth = 2)
+plot(posDir != 0 ? posStop : na, "Trailing stop", color = color.new(color.orange, 0), style = plot.style_linebr, linewidth = 1)
+
+// ── Scoreboard ──────────────────────────────────────────────────────────────
+string G_S = "Scoreboard"
+bool   sOn  = input.bool(true, "Show scoreboard", group = G_S)
+float  costRInput = input.float(0.05, "Round-trip cost (R)", minval = 0.0, maxval = 1.0, step = 0.005, tooltip = "Spread + commission + slippage as a fraction of 1R, subtracted from expectancy.", group = G_S)
+int    minTradesInput = input.int(30, "Minimum trades for a verdict", minval = 5, maxval = 500, group = G_S)
+string sPos = input.string("Top Right", "Position", options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = G_S)
+
+f_pos(string p) =>
+    switch p
+        "Top Left"     => position.top_left
+        "Middle Right" => position.middle_right
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+float hitRate  = nTrades > 0 ? nWin / float(nTrades) * 100 : na
+float avgWin   = nWin > 0 ? sumWinR / nWin : na
+float avgLoss  = (nTrades - nWin) > 0 ? sumLossR / (nTrades - nWin) : na
+float payoff   = not na(avgWin) and not na(avgLoss) and avgLoss > 0 ? avgWin / avgLoss : na
+float expR     = nTrades > 0 ? sumR / nTrades : na
+float expNet   = na(expR) ? na : expR - costRInput
+float pf       = sumLossR > 0 ? sumWinR / sumLossR : na
+float expLong  = nLong  > 0 ? sumRLong  / nLong  : na
+float expShort = nShort > 0 ? sumRShort / nShort : na
+// break-even hit rate given this payoff: p*W - (1-p)*L = 0 -> p = L/(W+L)
+float beHit    = not na(avgWin) and not na(avgLoss) ? avgLoss / (avgWin + avgLoss) * 100 : na
+
+string verdict = "NEED MORE DATA"
+color  vCol = color.gray
+if nTrades >= minTradesInput and not na(expNet) and not na(pf)
+    if expNet > 0 and pf > 1.0
+        verdict := "POSITIVE  " + str.tostring(expNet, "#.##") + "R/trade"
+        vCol := color.green
+    else if expNet > 0
+        verdict := "EDGE BELOW COST"
+        vCol := color.orange
+    else
+        verdict := "NEGATIVE"
+        vCol := color.red
+
+f_r(int row, string k, string v, color c, table t) =>
+    table.cell(t, 0, row, k, text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, row, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+    row
+
+var table sc = table.new(f_pos(sPos), 2, 15, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+
+f_pp(float v) => na(v) ? "—" : str.tostring(v, "#.#") + "%"
+f_rr(float v) => na(v) ? "—" : (v >= 0 ? "+" : "") + str.tostring(v, "#.##") + "R"
+
+if sOn and barstate.islast
+    table.cell(sc, 0, 0, "TREND RIDER", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(sc, 1, 0, str.tostring(breakLenInput) + "/" + str.tostring(trendLenInput) + "  x" + str.tostring(chMultInput, "#.#"), text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    f_r(1,  "Trades  L / S", str.tostring(nLong) + " / " + str.tostring(nShort), color.new(color.white, 10), sc)
+    f_r(2,  "In position now", posDir == 1 ? "LONG" : posDir == -1 ? "SHORT" : "flat", posDir != 0 ? color.new(color.white, 0) : color.new(color.white, 45), sc)
+    f_r(3,  "Hit rate", f_pp(hitRate), color.new(color.white, 10), sc)
+    f_r(4,  "  break-even hit needs", f_pp(beHit), color.new(color.white, 45), sc)
+    f_r(5,  "Avg win", f_rr(avgWin), color.new(color.teal, 0), sc)
+    f_r(6,  "Avg loss", na(avgLoss) ? "—" : "-" + str.tostring(avgLoss, "#.##") + "R", color.new(color.red, 0), sc)
+    f_r(7,  "Payoff  win / loss", na(payoff) ? "—" : str.tostring(payoff, "#.##") + " x", payoff > 1 ? color.green : color.gray, sc)
+    f_r(8,  "Profit factor", na(pf) ? "—" : str.tostring(pf, "#.##"), na(pf) ? color.gray : pf > 1 ? color.green : color.red, sc)
+    f_r(9,  "Expectancy / trade", f_rr(expR), na(expR) ? color.gray : expR > 0 ? color.green : color.red, sc)
+    f_r(10, "  after cost", f_rr(expNet), na(expNet) ? color.gray : expNet > 0 ? color.green : color.red, sc)
+    f_r(11, "Net R  (equity)", f_rr(sumR), sumR >= 0 ? color.green : color.red, sc)
+    f_r(12, "Max drawdown", "-" + str.tostring(maxDD, "#.#") + "R", color.new(color.white, 30), sc)
+    f_r(13, "Best / worst trade", f_rr(bestR) + " / " + f_rr(worstR), color.new(color.white, 30), sc)
+    f_r(14, "VERDICT", verdict, vCol)
+
+alertcondition(posDir == 1 and posDir[1] != 1, "Trend Rider long", "Trend Rider: long entry")
+alertcondition(posDir == -1 and posDir[1] != -1, "Trend Rider short", "Trend Rider: short entry")
