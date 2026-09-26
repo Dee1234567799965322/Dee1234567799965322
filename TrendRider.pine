@@ -77,49 +77,52 @@ var float maxDD    = 0.0       // max drawdown in R
 var int   barsInWin  = 0
 var int   barsInLoss = 0
 
-f_close(float exitPx) =>
-    float r = posDir == 1 ? (exitPx - posEntry) / posRisk : (posEntry - exitPx) / posRisk
-    nTrades += 1
-    sumR += r
-    if posDir == 1
-        sumRLong += r
-        nLong += 1
-    else
-        sumRShort += r
-        nShort += 1
-    if r > 0
-        nWin += 1
-        sumWinR += r
-        barsInWin += bar_index - posBar
-    else
-        sumLossR += math.abs(r)
-        barsInLoss += bar_index - posBar
-    bestR  := math.max(bestR, r)
-    worstR := math.min(worstR, r)
-    cumR += r
-    peakR := math.max(peakR, cumR)
-    maxDD := math.max(maxDD, peakR - cumR)
-    label.new(bar_index, exitPx, (r >= 0 ? "+" : "") + str.tostring(r, "#.#") + "R",
-         style = posDir == 1 ? label.style_label_down : label.style_label_up,
-         color = color.new(r >= 0 ? color.teal : color.maroon, 30), textcolor = color.white, size = size.tiny)
-    posDir := 0
 
 if conf
-    // manage an open position first
+    // manage an open position first. A close is FLAGGED here and the ledger is
+    // updated below, in the main body - a Pine function may not assign to the
+    // global counters, so the accounting cannot live inside a helper.
+    bool doClose = false
+    float exitPx = na
     if posDir == 1
         float trail = ta.highest(high, breakLenInput) - atr * chMultInput
         posStop := math.max(posStop, trail)
-        bool stopHit  = close < posStop
-        bool trendOut = useTrendExitInput and trendDn
-        if stopHit or trendOut
-            f_close(close)
+        if close < posStop or (useTrendExitInput and trendDn)
+            doClose := true
+            exitPx  := close
     else if posDir == -1
         float trail = ta.lowest(low, breakLenInput) + atr * chMultInput
         posStop := math.min(posStop, trail)
-        bool stopHit  = close > posStop
-        bool trendOut = useTrendExitInput and trendUp
-        if stopHit or trendOut
-            f_close(close)
+        if close > posStop or (useTrendExitInput and trendUp)
+            doClose := true
+            exitPx  := close
+
+    if doClose
+        float r = posDir == 1 ? (exitPx - posEntry) / posRisk : (posEntry - exitPx) / posRisk
+        nTrades += 1
+        sumR += r
+        if posDir == 1
+            sumRLong += r
+            nLong += 1
+        else
+            sumRShort += r
+            nShort += 1
+        if r > 0
+            nWin += 1
+            sumWinR += r
+            barsInWin += bar_index - posBar
+        else
+            sumLossR += math.abs(r)
+            barsInLoss += bar_index - posBar
+        bestR  := math.max(bestR, r)
+        worstR := math.min(worstR, r)
+        cumR += r
+        peakR := math.max(peakR, cumR)
+        maxDD := math.max(maxDD, peakR - cumR)
+        label.new(bar_index, exitPx, (r >= 0 ? "+" : "") + str.tostring(r, "#.#") + "R",
+             style = posDir == 1 ? label.style_label_down : label.style_label_up,
+             color = color.new(r >= 0 ? color.teal : color.maroon, 30), textcolor = color.white, size = size.tiny)
+        posDir := 0
 
     // look for a new entry only when flat
     if posDir == 0 and not na(atr) and atr > 0
