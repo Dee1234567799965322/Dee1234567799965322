@@ -41,7 +41,7 @@ int   trendLen   = input.int(200, "Trend regime EMA", minval = 20, maxval = 500,
 int   atrLen     = input.int(22,  "ATR length", minval = 2, maxval = 200, group = G)
 float chMult     = input.float(4.0, "Chandelier trail (ATR x)", minval = 1.0, maxval = 12.0, step = 0.5, tooltip = "The trailing exit distance. Wider = fewer shake-outs, larger give-back. There is NO fixed stop; this trail is the only exit besides losing the trend.", group = G)
 float volTarget  = input.float(2.0, "Volatility target (% move/bar)", minval = 0.2, maxval = 10.0, step = 0.1, tooltip = "Each bar the position is levered so that a typical bar moves equity by about this much. Calm markets get more size, wild markets less - constant risk. THIS is the tail control.", group = G)
-float maxLev     = input.float(3.0, "Max leverage", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Hard cap on position size, so a quiet grind cannot lever you into a cliff.", group = G)
+float maxLev     = input.float(1.0, "Max leverage", minval = 1.0, maxval = 10.0, step = 0.5, tooltip = "Default 1.0 = NEVER leveraged. Vol-targeting only ever REDUCES size in wild markets, never borrows. Leverage above 1x compounds into fantasy numbers over long history and ignores that a big single-bar loss margin-calls you - so it is off by default. Raise it only if you understand you are then modelling a path that real liquidation would have ended.", group = G)
 float costPct    = input.float(0.04, "Cost per side (%)", minval = 0.0, maxval = 1.0, step = 0.01, tooltip = "Spread + fee + slippage charged on every entry and exit. Buy-and-hold pays it once.", group = G)
 
 float atr     = ta.atr(atrLen)
