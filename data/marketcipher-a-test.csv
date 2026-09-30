@@ -1,0 +1,8 @@
+# Market Cipher A (clone) - drift-free hit-rate test. 2R target / 1R stop / 100-bar horizon.
+# Null (coin flip) = 33.3%. "edge_pp" must exceed "mdl_pp" to count. All measured over loaded history.
+symbol,timeframe,resolved_L,resolved_S,long_hit,short_hit,drift_free_hit,edge_pp,mdl_pp,exp_net_R,verdict
+BTCUSDT.P,30m,462,806,33.5,33.9,33.7,0.4,3.9,-0.04,coin_flip
+BTCUSDT.P,15m,197,333,33.5,33.0,33.3,-0.1,5.9,-0.05,coin_flip
+BTCUSDT.P,1h,227,389,34.8,37.5,36.2,2.8,5.6,0.04,coin_flip
+BTCUSDT.P,4h,189,310,30.7,35.2,32.9,-0.4,6.0,-0.06,coin_flip
+ETHUSDT.P,15m,198,366,39.9,28.1,34.0,0.7,5.9,-0.03,coin_flip
