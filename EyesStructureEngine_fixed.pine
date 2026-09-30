@@ -1,0 +1,231 @@
+//@version=6
+indicator("Eyes Smart Structure Engine — fixed", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// FIXED / UNIFIED version. The original was TWO systems in one window that
+// contradicted each other: a structure+impulse BUY/SELL engine, and a separate
+// 12/26 EMA-cross system with its own labels and dashboard. Here they are made
+// into ONE coherent tool:
+//   - The EMA cloud is now a TREND FILTER, not a rival signal. It only decides
+//     which direction you are allowed to trade.
+//   - The structure+impulse logic is the ENTRY, taken only WITH the trend.
+//   - One set of labels, one dashboard, and a measurement panel that says
+//     honestly whether the combined signal beats a coin flip.
+// Making two coin flips agree does not create an edge - it just stops them
+// fighting. The panel will tell you the truth; read the VERDICT row.
+// ============================================================================
+
+// ---- Inputs: entry ----
+string G_S = "Structure entry"
+int   pivotLen      = input.int(4, "Pivot length", minval=1, group=G_S)
+int   atrLen        = input.int(7, "ATR length", minval=1, group=G_S)
+float impulseFactor = input.float(1.0, "Impulse strength (x ATR)", minval=0.1, group=G_S)
+bool  confirmClose  = input.bool(true, "Signal only on a closed candle", group=G_S)
+
+// ---- Inputs: trend filter ----
+string G_T = "Trend filter"
+int  maFastLen = input.int(12, "Fast EMA", minval=1, group=G_T)
+int  maSlowLen = input.int(26, "Slow EMA", minval=1, group=G_T)
+bool useTrend  = input.bool(true, "Only trade WITH the EMA trend", group=G_T, tooltip="BUY only when fast EMA is above slow (uptrend), SELL only in a downtrend. Trading with the trend is the one thing this project measured as real.")
+
+// ---- Inputs: style ----
+string G_C = "Colors"
+color buyColor  = input.color(color.rgb(61,241,6), "BUY", inline="c1", group=G_C)
+color sellColor = input.color(color.rgb(242,5,5), "SELL", inline="c1", group=G_C)
+color txtColor  = input.color(color.white, "Label text", group=G_C)
+color bullColor = input.color(#00c0a3, "Cloud up", inline="c2", group=G_C)
+color bearColor = input.color(#ff5252, "Cloud down", inline="c2", group=G_C)
+
+// ---- Inputs: dashboard + measurement ----
+string G_D = "Dashboard"
+bool showDash = input.bool(true, "Show dashboard", group=G_D)
+string G_M = "Measurement"
+bool  showPanel = input.bool(true, "Show measurement panel", group=G_M)
+float tgtMult   = input.float(2.0, "Target (ATR) = win", minval=0.5, step=0.5, group=G_M)
+float stopMult  = input.float(1.0, "Stop (ATR) = loss", minval=0.5, step=0.5, group=G_M)
+int   horizonM  = input.int(100, "Give-up horizon (bars)", minval=10, group=G_M)
+int   minResolvedM = input.int(30, "Min resolved for verdict", minval=10, group=G_M)
+float costR     = input.float(0.05, "Round-trip cost (R)", minval=0.0, step=0.005, group=G_M)
+
+// ---- Core ----
+float atr     = ta.atr(atrLen)
+float emaFast = ta.ema(close, maFastLen)
+float emaSlow = ta.ema(close, maSlowLen)
+bool  isBull  = emaFast > emaSlow
+
+// ---- Structure ----
+float ph = ta.pivothigh(high, pivotLen, pivotLen)
+float pl = ta.pivotlow(low,  pivotLen, pivotLen)
+
+var float lastHigh = na
+var float prevHigh = na
+var float lastLow  = na
+var float prevLow  = na
+var int   lastSignal = 0
+
+if not na(ph)
+    prevHigh := lastHigh
+    lastHigh := ph
+if not na(pl)
+    prevLow := lastLow
+    lastLow := pl
+
+// ---- Impulse candle ----
+float body = math.abs(close - open)
+float rng  = high - low
+bool bullImpulse = close > open and body > rng * 0.5 and body > atr * impulseFactor
+bool bearImpulse = close < open and body > rng * 0.5 and body > atr * impulseFactor
+
+// ---- Structure types ----
+bool isHH = not na(prevHigh) and lastHigh > prevHigh
+bool isLH = not na(prevHigh) and lastHigh < prevHigh
+bool isLL = not na(prevLow)  and lastLow  < prevLow
+bool isHL = not na(prevLow)  and lastLow  > prevLow
+
+// ---- Combined signal: structure + impulse, filtered by the trend ----
+bool buyRaw  = (isLL or isHL) and bullImpulse and (not useTrend or isBull)      and lastSignal != 1
+bool sellRaw = (isHH or isLH) and bearImpulse and (not useTrend or not isBull)  and lastSignal != -1
+bool buySignal  = confirmClose ? (buyRaw  and barstate.isconfirmed) : buyRaw
+bool sellSignal = confirmClose ? (sellRaw and barstate.isconfirmed) : sellRaw
+
+if buySignal
+    lastSignal := 1
+if sellSignal
+    lastSignal := -1
+
+// ---- Trade state for the dashboard ----
+var float entryPrice = na
+var int   dir        = 0
+if buySignal
+    entryPrice := close
+    dir := 1
+if sellSignal
+    entryPrice := close
+    dir := -1
+float pnl = not na(entryPrice) and dir != 0 ? (close - entryPrice) * dir : na
+
+// ---- Cloud (the filter, drawn) ----
+p1 = plot(emaFast, "Fast EMA", color = isBull ? bullColor : bearColor, linewidth = 2)
+p2 = plot(emaSlow, "Slow EMA", color = isBull ? bullColor : bearColor, linewidth = 1)
+fill(p1, p2, isBull ? color.new(bullColor, 70) : color.new(bearColor, 70), "Cloud")
+
+// ---- One set of labels ----
+if buySignal
+    label.new(bar_index, low, "BUY", style=label.style_label_up, color=buyColor, textcolor=txtColor, size=size.small)
+if sellSignal
+    label.new(bar_index, high, "SELL", style=label.style_label_down, color=sellColor, textcolor=txtColor, size=size.small)
+
+alertcondition(buySignal,  "BUY Signal",  "BUY on {{ticker}} at {{close}}")
+alertcondition(sellSignal, "SELL Signal", "SELL on {{ticker}} at {{close}}")
+
+// ============================================================================
+// MEASUREMENT — does the combined signal beat a coin flip?
+// Every signal is paper-traded at the close with a 2R target / 1R stop / 100-bar
+// bracket. Longs and shorts measured separately and averaged to strip drift.
+// A 2:1 target means a no-skill signal wins 1/(1+2) = 33.3% of the time.
+// ============================================================================
+float atrM = atr
+float nullHit = 100.0 / (1.0 + tgtMult / stopMult)
+
+var int[]   oDir   = array.new_int(0)
+var float[] oTgt   = array.new_float(0)
+var float[] oStop  = array.new_float(0)
+var int[]   oStart = array.new_int(0)
+var int winL = 0
+var int lossL = 0
+var int winS = 0
+var int lossS = 0
+
+if barstate.isconfirmed
+    if array.size(oDir) > 0
+        for i = array.size(oDir) - 1 to 0
+            int   d  = array.get(oDir, i)
+            float tg = array.get(oTgt, i)
+            float st = array.get(oStop, i)
+            int   sb = array.get(oStart, i)
+            bool  done = false
+            if d == 1
+                if high >= tg
+                    winL += 1
+                    done := true
+                else if low <= st
+                    lossL += 1
+                    done := true
+            else
+                if low <= tg
+                    winS += 1
+                    done := true
+                else if high >= st
+                    lossS += 1
+                    done := true
+            if not done and (bar_index - sb) >= horizonM
+                done := true
+            if done
+                array.remove(oDir, i)
+                array.remove(oTgt, i)
+                array.remove(oStop, i)
+                array.remove(oStart, i)
+    if buySignal and not na(atrM) and atrM > 0
+        array.push(oDir, 1)
+        array.push(oTgt, close + tgtMult * atrM)
+        array.push(oStop, close - stopMult * atrM)
+        array.push(oStart, bar_index)
+    if sellSignal and not na(atrM) and atrM > 0
+        array.push(oDir, -1)
+        array.push(oTgt, close - tgtMult * atrM)
+        array.push(oStop, close + stopMult * atrM)
+        array.push(oStart, bar_index)
+
+int nL = winL + lossL
+int nS = winS + lossS
+int resolved = nL + nS
+float hitL = nL > 0 ? winL / float(nL) * 100.0 : na
+float hitS = nS > 0 ? winS / float(nS) * 100.0 : na
+float pDF = not na(hitL) and not na(hitS) ? (hitL + hitS) / 2.0 : na(hitL) ? hitS : hitL
+float edge = na(pDF) ? na : pDF - nullHit
+float pLc = nL > 0 ? (winL + 0.5) / (nL + 1.0) : na
+float pSc = nS > 0 ? (winS + 0.5) / (nS + 1.0) : na
+float varL = nL > 0 ? pLc * (1.0 - pLc) / nL : na
+float varS = nS > 0 ? pSc * (1.0 - pSc) / nS : na
+float seDF = not na(varL) and not na(varS) ? 0.5 * math.sqrt(varL + varS) : na(varL) ? math.sqrt(varS) : math.sqrt(varL)
+float mdl = na(seDF) ? na : 2.8 * seDF * 100.0
+float expR = na(pDF) ? na : 3.0 * (pDF / 100.0) - 1.0
+float expNet = na(expR) ? na : expR - costR
+
+string verdict = "NEED MORE DATA"
+color  vCol = color.gray
+if resolved >= minResolvedM and not na(edge) and not na(mdl)
+    if edge > mdl and edge > 0
+        verdict := "EDGE +" + str.tostring(edge, "#.#") + "pp"
+        vCol := color.green
+    else
+        verdict := "COIN FLIP"
+        vCol := color.new(color.red, 20)
+
+// ---- Dashboard + panel ----
+var table dash = table.new(position.top_right, 2, 4, border_width=1, border_color=color.gray, bgcolor=color.new(color.black,10))
+var table mp   = table.new(position.bottom_right, 2, 8, border_width=1, border_color=color.new(color.gray,60), bgcolor=color.new(color.black,12), frame_color=color.new(color.gray,40), frame_width=1)
+f_pp(float v) => na(v) ? "—" : str.tostring(v, "#.#") + "%"
+f_rr(float v) => na(v) ? "—" : (v >= 0 ? "+" : "") + str.tostring(v, "#.##") + "R"
+f_row(table t, int r, string k, string v, color c) =>
+    table.cell(t, 0, r, k, text_color=color.new(color.white,20), text_size=size.small, text_halign=text.align_left)
+    table.cell(t, 1, r, v, text_color=c, text_size=size.small, text_halign=text.align_right)
+    r
+
+if showDash and barstate.islast
+    table.cell(dash, 0, 0, "Trend", text_color=color.black, bgcolor=color.new(color.yellow,0), text_size=size.small)
+    table.cell(dash, 1, 0, isBull ? "UP" : "DOWN", text_color=color.white, bgcolor=isBull?bullColor:bearColor, text_size=size.small)
+    f_row(dash, 1, "Symbol", syminfo.ticker, color.new(color.white,0))
+    f_row(dash, 2, "Last signal", dir==1?"BUY":dir==-1?"SELL":"—", dir==1?bullColor:dir==-1?bearColor:color.gray)
+    f_row(dash, 3, "Open P&L", na(pnl)?"—":str.tostring(pnl, format.mintick), na(pnl)?color.gray:pnl>=0?bullColor:bearColor)
+
+if showPanel and barstate.islast
+    table.cell(mp, 0, 0, "SIGNAL TEST", text_color=color.white, text_size=size.small, text_halign=text.align_left)
+    table.cell(mp, 1, 0, "2R/1R " + str.tostring(horizonM) + "b", text_color=color.new(color.white,45), text_size=size.small, text_halign=text.align_right)
+    f_row(mp, 1, "Resolved L / S", str.tostring(nL) + " / " + str.tostring(nS), color.new(color.white,10))
+    f_row(mp, 2, "Long / Short hit", f_pp(hitL) + " / " + f_pp(hitS), color.new(color.white,10))
+    f_row(mp, 3, "Coin-flip null", f_pp(nullHit), color.new(color.white,45))
+    f_row(mp, 4, "Drift-free hit", f_pp(pDF), color.new(color.white,0))
+    f_row(mp, 5, "Edge / must beat", (na(edge)?"—":(edge>=0?"+":"")+str.tostring(edge,"#.#")+"pp") + " / " + (na(mdl)?"—":"±"+str.tostring(mdl,"#.#")), na(edge)?color.gray:edge>mdl and edge>0?color.green:color.red)
+    f_row(mp, 6, "Expectancy net", f_rr(expNet), na(expNet)?color.gray:expNet>0?color.green:color.red)
+    f_row(mp, 7, "VERDICT", verdict, vCol)
