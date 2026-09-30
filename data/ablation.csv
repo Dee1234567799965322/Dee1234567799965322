@@ -1,0 +1,16 @@
+# Auction Cipher - gate ablation and the six-instrument test
+# All rows: 1h charts, 2R cap, 200-bar horizon, next-bar-open fills, r18 build.
+# edge_pp is the drift-controlled edge (average of the two direction strata,
+# against gambler's ruin); mdl_pp is 2.8 x its standard error, as the panel prints it.
+test,instrument,sensitivity,cooldown,win,loss,flat,resolved,be_pct,edge_pp,mdl_pp,long_pct,long_n,short_pct,short_n,drift_pp
+gate_ablation,XAUUSD,strict_all_4,20,120,207,193,327,34.6,1.8,7.5,33.3,147,39.4,180,-3.1
+gate_ablation,XAUUSD,wave_only,20,95,220,209,315,34.6,-3.9,7.4,33.8,130,27.6,185,3.1
+cooldown_sweep,XAUUSD,wave_only,5,131,293,287,424,34.6,-3.0,6.5,35.5,172,27.8,252,3.8
+cooldown_sweep,XAUUSD,wave_only,20,95,220,209,315,34.6,-3.9,7.4,33.8,130,27.6,185,3.1
+cooldown_sweep,XAUUSD,wave_only,60,46,101,98,147,34.9,-2.3,10.9,41.3,63,23.8,84,8.7
+six_instrument,XAUUSD,wave_only,5,131,293,287,424,34.6,-3.0,6.5,35.5,172,27.8,252,3.8
+six_instrument,BTCUSDT.P,wave_only,5,63,168,188,231,34.8,-7.4,8.2,25.4,122,29.4,109,-2.0
+six_instrument,ETHUSDT.P,wave_only,5,68,172,163,240,34.6,-6.4,9.9,29.9,134,26.4,106,1.7
+six_instrument,NAS100USD,wave_only,5,136,320,728,456,34.5,-4.8,6.1,29.1,179,30.3,277,-0.6
+six_instrument,SPX,wave_only,5,79,186,60,265,29.2,1.9,8.5,34.8,89,27.3,176,3.8
+six_instrument,XAGUSD,wave_only,5,162,287,740,449,34.9,1.0,6.4,35.0,183,36.8,266,-0.9

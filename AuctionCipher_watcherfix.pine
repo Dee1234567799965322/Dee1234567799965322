@@ -43,7 +43,7 @@
 //   delta divergence is a trade. That hierarchy is the whole point.
 // ============================================================================
 
-indicator("Auction Cipher", shorttitle="AUCTION CIPHER", overlay=false,
+indicator("Auction Cipher [watcher-fix TEST]", shorttitle="AC watcher-fix", overlay=false,
      max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=500)
 
 // Official TradingView library - provides requestVolumeDelta(), which is a more
@@ -5177,11 +5177,31 @@ f_drawStats() =>
     // 76 is the mirror baseline measured on other instruments at 30m, not on
     // this chart. Balance break's null is a coin flip, so it reads against 50.
     // n is the POOR count; the baseline row carries the mirror's.
-    f_lift(4, "Poor extreme vs mirror", int(pv.get(1)), int(pv.get(0)),
-         int(pv.get(3)), int(pv.get(2)), na)
+    // CORRECTION 19 (watcher-fix copy). The registration-time denominator in
+    // pv.get(0)/pv.get(2) includes watches that have not resolved yet, which is
+    // the small downward bias documented at f_watch. Rather than move the
+    // counter to completion - the change that blanked these rows once and was
+    // never understood - the fix stays entirely at read time: count the watches
+    // still live in wSd and subtract them, leaving the denominator over
+    // resolved watches only. The counting path that produced every prior number
+    // is left exactly as it was, so this cannot blank the way the move did; the
+    // worst case is n1=0 early on, which f_lift already renders as a dash.
+    int pend0 = 0
+    int pend2 = 0
+    if wSd.size() > 0
+        for pi = 0 to wSd.size() - 1
+            int pa = math.abs(wSd.get(pi))
+            if pa == 1
+                pend0 += 1
+            else if pa == 3
+                pend2 += 1
+    int poorDen = int(pv.get(0)) - pend0
+    int mirrDen = int(pv.get(2)) - pend2
+    f_lift(4, "Poor extreme vs mirror", int(pv.get(1)), poorDen,
+         int(pv.get(3)), mirrDen, na)
     f_pair2(5, "Mirror baseline (measured here)",
-         pv.get(2) > 0 ? str.tostring(pv.get(3) / pv.get(2) * 100, "#.#") + "%  n " +
-         str.tostring(int(pv.get(2))) + "   vs 76% imported" : "-", C_NE)
+         mirrDen > 0 ? str.tostring(pv.get(3) / mirrDen * 100, "#.#") + "%  n " +
+         str.tostring(mirrDen) + "   vs 76% imported" : "-", C_NE)
     // Rows 15 and 16 used to print the raw win-edge's MDL and a verdict built
     // on it. Both are superseded by the drift-controlled pair below, which
     // answers the same question without the trend in it, and keeping the

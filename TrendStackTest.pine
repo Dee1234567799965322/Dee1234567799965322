@@ -1,0 +1,189 @@
+//@version=6
+// Trend Stack Indicator v2 (Bulls, Bears and Backtests) - the IMPLIED signal, MEASURED
+//
+// The source is an honest INFORMATION tool: it fires no buy/sell shapes and no
+// entry alerts, and says so. But its comments describe one signal it never
+// actually fires (lines 185-190 of the original):
+//
+//   "the pullback is over and the trend is resuming - the wave is clearly in one
+//    direction and still growing, and the bars have just crossed back through
+//    zero the same way"
+//
+// gated by the long-term cloud (line 86: without it, signals fire against an
+// obvious larger trend) and the medium-EMA slope. That is a falsifiable
+// with-trend pullback-resume ENTRY. This file reconstructs the exact indicator
+// maths, fires that implied signal, and measures it with the same panel used on
+// every other signal family in this project:
+//
+//   paper-trade at the close, 2 ATR target (2R win) / 1 ATR stop (1R loss),
+//   100-bar horizon, drift stripped by stratifying long vs short, judged against
+//   the arithmetic 33.3% null with a Haldane-Anscombe MDL noise gate.
+//
+// Nothing repaints (confirmed bars, close entries). This does NOT test the tool
+// as a dashboard - it only tests the one predictive claim buried in it.
+
+indicator("Trend Stack - implied signal MEASURED", overlay = true, max_labels_count = 300)
+
+// ── Reconstructed maths (identical to the source defaults) ────────────────────
+float atr = ta.atr(14)
+
+int   ltFastLen = input.int(100, "Cloud fast EMA", minval = 20, inline = "lt", group = "Trend Stack")
+int   ltSlowLen = input.int(200, "Cloud slow EMA", minval = 50, inline = "lt", group = "Trend Stack")
+int   fastLen   = input.int(50,  "Short wave (HMA) length", minval = 4, group = "Trend Stack")
+int   fastSig   = input.int(5,   "Short wave signal EMA", minval = 2, group = "Trend Stack")
+int   waveLen   = input.int(50,  "Medium wave length", minval = 10, group = "Trend Stack")
+int   smoothW   = input.int(3,   "Wave smoothing", minval = 1, group = "Trend Stack")
+int   medEmaLen = input.int(50,  "Medium EMA", minval = 5, inline = "md", group = "Trend Stack")
+int   medSlopeLen = input.int(10, "slope window", minval = 2, inline = "md", group = "Trend Stack")
+float medMinSlope = input.float(0.10, "Min medium slope (ATR)", minval = 0.0, step = 0.05, group = "Trend Stack")
+
+bool  useCloudGate = input.bool(true, "Gate: require long-term cloud agrees", group = "Signal gates")
+bool  useMedGate   = input.bool(true, "Gate: require medium EMA slope agrees", group = "Signal gates")
+
+float ltFast = ta.ema(close, ltFastLen)
+float ltSlow = ta.ema(close, ltSlowLen)
+bool  ltUp   = ltFast > ltSlow
+bool  ltDn   = ltFast < ltSlow
+
+float fwLine = ta.hma(close, fastLen)
+float fwSig  = ta.ema(fwLine, fastSig)
+
+float waveRaw = ta.linreg(close - ta.sma(close, waveLen), waveLen, 0)
+float wave    = ta.ema(waveRaw, smoothW) / (atr > 0 ? atr : 1)
+bool  waveGrow = math.abs(wave) > math.abs(wave[1])
+
+float medEma   = ta.ema(close, medEmaLen)
+float medSlope = atr > 0 ? (medEma - medEma[medSlopeLen]) / atr : 0.0
+bool  medUpNow = medSlope >= medMinSlope
+bool  medDnNow = medSlope <= -medMinSlope
+
+// bars crossing back up through zero == the short wave turning up == HMA crossing its signal
+bool crossUp = ta.crossover(fwLine, fwSig)
+bool crossDn = ta.crossunder(fwLine, fwSig)
+
+// ── The implied signal ────────────────────────────────────────────────────────
+bool longSig  = crossUp and wave > 0 and waveGrow and (not useCloudGate or ltUp) and (not useMedGate or medUpNow)
+bool shortSig = crossDn and wave < 0 and waveGrow and (not useCloudGate or ltDn) and (not useMedGate or medDnNow)
+
+plotshape(longSig,  "Long",  shape.triangleup,   location.belowbar, color.new(color.teal, 0),   size = size.tiny)
+plotshape(shortSig, "Short", shape.triangledown, location.abovebar, color.new(color.maroon, 0), size = size.tiny)
+
+// ── Measurement engine (same as the other tests) ──────────────────────────────
+string grpM = "Measurement"
+int   atrLenM   = input.int(14,  "ATR (bracket unit)", minval = 2, group = grpM)
+float tgtMult   = input.float(2.0, "Target (ATR) = win", minval = 0.5, step = 0.5, group = grpM)
+float stopMult  = input.float(1.0, "Stop (ATR) = loss", minval = 0.5, step = 0.5, group = grpM)
+int   horizonM  = input.int(100, "Give-up horizon (bars)", minval = 10, group = grpM)
+int   minResolvedM = input.int(30, "Min resolved for a verdict", minval = 10, group = grpM)
+float costR     = input.float(0.05, "Round-trip cost (R)", minval = 0.0, step = 0.005, group = grpM)
+string panelPos = input.string("Top Right", "Panel", options = ["Top Right","Top Left","Middle Right","Bottom Right","Bottom Left"], group = grpM)
+
+f_pos(string p) =>
+    switch p
+        "Top Left"     => position.top_left
+        "Middle Right" => position.middle_right
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        => position.top_right
+
+float atrM = ta.atr(atrLenM)
+float nullHit = 100.0 / (1.0 + tgtMult / stopMult)
+
+var int[]   oDir   = array.new_int(0)
+var float[] oTgt   = array.new_float(0)
+var float[] oStop  = array.new_float(0)
+var int[]   oStart = array.new_int(0)
+var int winL = 0
+var int lossL = 0
+var int winS = 0
+var int lossS = 0
+var int unres = 0
+
+if barstate.isconfirmed
+    if array.size(oDir) > 0
+        for i = array.size(oDir) - 1 to 0
+            int   dir = array.get(oDir, i)
+            float tgt = array.get(oTgt, i)
+            float stp = array.get(oStop, i)
+            int   st  = array.get(oStart, i)
+            bool  done = false
+            if dir == 1
+                if high >= tgt
+                    winL += 1
+                    done := true
+                else if low <= stp
+                    lossL += 1
+                    done := true
+            else
+                if low <= tgt
+                    winS += 1
+                    done := true
+                else if high >= stp
+                    lossS += 1
+                    done := true
+            if not done and (bar_index - st) >= horizonM
+                unres += 1
+                done := true
+            if done
+                array.remove(oDir, i)
+                array.remove(oTgt, i)
+                array.remove(oStop, i)
+                array.remove(oStart, i)
+    if longSig and not na(atrM) and atrM > 0
+        array.push(oDir, 1)
+        array.push(oTgt, close + tgtMult * atrM)
+        array.push(oStop, close - stopMult * atrM)
+        array.push(oStart, bar_index)
+    if shortSig and not na(atrM) and atrM > 0
+        array.push(oDir, -1)
+        array.push(oTgt, close - tgtMult * atrM)
+        array.push(oStop, close + stopMult * atrM)
+        array.push(oStart, bar_index)
+
+int nL = winL + lossL
+int nS = winS + lossS
+int resolved = nL + nS
+float hitL = nL > 0 ? winL / float(nL) * 100.0 : na
+float hitS = nS > 0 ? winS / float(nS) * 100.0 : na
+float pDF = not na(hitL) and not na(hitS) ? (hitL + hitS) / 2.0 : na(hitL) ? hitS : hitL
+float edge = na(pDF) ? na : pDF - nullHit
+float pLc = nL > 0 ? (winL + 0.5) / (nL + 1.0) : na
+float pSc = nS > 0 ? (winS + 0.5) / (nS + 1.0) : na
+float varL = nL > 0 ? pLc * (1.0 - pLc) / nL : na
+float varS = nS > 0 ? pSc * (1.0 - pSc) / nS : na
+float seDF = not na(varL) and not na(varS) ? 0.5 * math.sqrt(varL + varS) : na(varL) ? math.sqrt(varS) : math.sqrt(varL)
+float mdl = na(seDF) ? na : 2.8 * seDF * 100.0
+float expR = na(pDF) ? na : 3.0 * (pDF / 100.0) - 1.0
+float expNet = na(expR) ? na : expR - costR
+
+string verdict = "NEED MORE DATA"
+color vCol = color.gray
+if resolved >= minResolvedM and not na(edge) and not na(mdl)
+    if edge > mdl and edge > 0
+        verdict := "EDGE  +" + str.tostring(edge, "#.#") + "pp"
+        vCol := color.green
+    else
+        verdict := "COIN FLIP"
+        vCol := color.new(color.red, 20)
+
+var table mp = table.new(f_pos(panelPos), 2, 11, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+f_pp(float v) => na(v) ? "—" : str.tostring(v, "#.#") + "%"
+f_rr(float v) => na(v) ? "—" : (v >= 0 ? "+" : "") + str.tostring(v, "#.##") + "R"
+f_row(int r, string k, string v, color c) =>
+    table.cell(mp, 0, r, k, text_color = color.new(color.white, 20), text_size = size.small, text_halign = text.align_left)
+    table.cell(mp, 1, r, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+    r
+
+if barstate.islast
+    table.cell(mp, 0, 0, "TREND STACK signal", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(mp, 1, 0, "2R / 1R  " + str.tostring(horizonM) + "b", text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    f_row(1, "Resolved  L / S", str.tostring(nL) + " / " + str.tostring(nS), color.new(color.white, 10))
+    f_row(2, "Long hit rate", f_pp(hitL), color.new(color.white, 10))
+    f_row(3, "Short hit rate", f_pp(hitS), color.new(color.white, 10))
+    f_row(4, "Coin-flip null", f_pp(nullHit), color.new(color.white, 45))
+    f_row(5, "Drift-free hit", f_pp(pDF), color.new(color.white, 0))
+    f_row(6, "Edge vs null", na(edge) ? "—" : (edge >= 0 ? "+" : "") + str.tostring(edge, "#.#") + "pp", na(edge) ? color.gray : edge > 0 ? color.green : color.red)
+    f_row(7, "  must beat (MDL)", na(mdl) ? "—" : "±" + str.tostring(mdl, "#.#") + "pp", color.new(color.white, 45))
+    f_row(8, "Expectancy / trade", f_rr(expR), na(expR) ? color.gray : expR > 0 ? color.green : color.red)
+    f_row(9, "  after cost", f_rr(expNet), na(expNet) ? color.gray : expNet > 0 ? color.green : color.red)
+    f_row(10, "VERDICT", verdict, vCol)

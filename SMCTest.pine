@@ -1,0 +1,265 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/ MPL-2.0
+//@version=6
+indicator("SMC IDM-Sweep Test", "SMC-TEST", overlay = true, max_lines_count = 100, max_labels_count = 100, max_bars_back = 5000)
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHAT THIS TESTS  -  the World Class SMC primary entry ("Trend Trading: Sweep IDM")
+// ═══════════════════════════════════════════════════════════════════════════
+// This is the entry the SMC books actually teach, which the earlier ICT test
+// did NOT encode. ICTTest was a reversal (sweep a swing, then break the other
+// way). This is trend continuation:
+//
+//   1. BREAK OF STRUCTURE - price closes beyond the last confirmed swing in the
+//      trend direction. Trend is now set. A bullish BOS closes above the last
+//      swing high; a bearish BOS closes below the last swing low.
+//   2. INDUCEMENT (IDM) - the extreme of the last pullback before that BOS. In
+//      an uptrend it is the most recent swing low; in a downtrend the most
+//      recent swing high. This is the liquidity resting under/over the pullback.
+//   3. IFC SWEEP - price retraces to the IDM and grabs it with an Institutional
+//      Funding Candle: a bar whose wick pierces the IDM and whose body closes
+//      back on the trend side. Stops are taken; the move is "funded".
+//   4. ENTRY in the trend direction at the close of that IFC bar. Stop beyond
+//      the sweep extreme; the panel also measures a fixed ATR stop so the result
+//      sits on the same axis as every other test in this project.
+//   5. IMBALANCE FILTER (optional) - the SMC books require the impulse that set
+//      the structure to leave a fair-value gap. With the filter on, a setup is
+//      only taken when a 3-bar imbalance exists in the impulse leg.
+//
+// Swings are confirmed pivots (equal left/right legs), so a swing is only known
+// pivotLen bars after it prints - no lookahead. A BOS fires once per distinct
+// swing level, not on every bar that holds beyond it.
+//
+// SMC is a multi-timeframe discretionary method; this encodes its single-
+// timeframe mechanical core faithfully. What cannot be automated (a human's
+// "trade what you see" pullback judgment) is exactly what a fair test must
+// remove, because it is unfalsifiable.
+
+string G_SMC = "SMC setup"
+int   pivotLenInput   = input.int(5, "Swing pivot length", minval = 2, maxval = 50, tooltip = "Bars each side of a pivot. A swing is confirmed this many bars after it prints.", group = G_SMC)
+int   idmWindowInput  = input.int(30, "Bars from BOS to IDM sweep", minval = 1, maxval = 200, tooltip = "The inducement must be swept within this many bars of the break of structure, or the setup expires.", group = G_SMC)
+bool  requireImbInput = input.bool(false, "Require imbalance (FVG) in the impulse", tooltip = "SMC-strict: only take the setup when the leg that broke structure left a 3-bar fair-value gap.", group = G_SMC)
+bool  showLevelsInput = input.bool(true, "Draw signals", group = G_SMC)
+
+// --- Confirmed swings ---
+float pivotHigh = ta.pivothigh(pivotLenInput, pivotLenInput)
+float pivotLow  = ta.pivotlow(pivotLenInput, pivotLenInput)
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+if not na(pivotHigh)
+    lastSwingHigh := pivotHigh
+if not na(pivotLow)
+    lastSwingLow := pivotLow
+
+// --- Break of structure, once per distinct swing level ---
+var float bosHighLevel = na   // swing high most recently broken up
+var float bosLowLevel  = na   // swing low most recently broken down
+var int   trendDir     = 0
+var float idmLevel     = na
+var bool  armLong      = false
+var bool  armShort     = false
+var int   armBar       = na
+
+// A three-bar imbalance present on the current bar (gap between bar[2] and bar[0]).
+bool bullImb = low > high[2]
+bool bearImb = high < low[2]
+
+bool smcLong  = false
+bool smcShort = false
+
+// Bullish BOS: close above the last confirmed swing high, not already registered.
+if not na(lastSwingHigh) and close > lastSwingHigh and (na(bosHighLevel) or lastSwingHigh != bosHighLevel)
+    bosHighLevel := lastSwingHigh
+    trendDir := 1
+    idmLevel := lastSwingLow          // inducement = last pullback low
+    armLong := true
+    armShort := false
+    armBar := bar_index
+// Bearish BOS: close below the last confirmed swing low, not already registered.
+if not na(lastSwingLow) and close < lastSwingLow and (na(bosLowLevel) or lastSwingLow != bosLowLevel)
+    bosLowLevel := lastSwingLow
+    trendDir := -1
+    idmLevel := lastSwingHigh         // inducement = last pullback high
+    armShort := true
+    armLong := false
+    armBar := bar_index
+
+// Expire an unfilled setup.
+if (armLong or armShort) and bar_index - armBar > idmWindowInput
+    armLong := false
+    armShort := false
+
+// IFC sweep of the inducement, entry in the trend direction.
+var bool imbSeen = false
+if armLong and bullImb
+    imbSeen := true
+if armShort and bearImb
+    imbSeen := true
+
+if armLong and not na(idmLevel) and low < idmLevel and close > idmLevel
+    if not requireImbInput or imbSeen
+        smcLong := true
+    armLong := false
+    imbSeen := false
+if armShort and not na(idmLevel) and high > idmLevel and close < idmLevel
+    if not requireImbInput or imbSeen
+        smcShort := true
+    armShort := false
+    imbSeen := false
+
+plotshape(showLevelsInput and smcLong,  "SMC long",  style = shape.triangleup,   location = location.belowbar, color = color.new(#089981, 0), text = "IDM", textcolor = color.white, size = size.small)
+plotshape(showLevelsInput and smcShort, "SMC short", style = shape.triangledown, location = location.abovebar, color = color.new(#f23645, 0), text = "IDM", textcolor = color.white, size = size.small)
+
+alertcondition(smcLong,  "SMC bullish IDM sweep", "Uptrend BOS, then inducement swept from below - long.")
+alertcondition(smcShort, "SMC bearish IDM sweep", "Downtrend BOS, then inducement swept from above - short.")
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MEASUREMENT PANEL  (build m2)   -- identical apparatus to VARS and ICTTest
+// ═══════════════════════════════════════════════════════════════════════════
+bool ictBull = smcLong
+bool ictBear = smcShort
+
+string STAT_GROUP  = "Measurement"
+bool   statOnInput      = input.bool(true, "Show measurement panel", group = STAT_GROUP)
+float  statTargetRInput = input.float(2.0, "Target (R)", minval = 0.5, maxval = 10.0, step = 0.5, group = STAT_GROUP)
+float  statStopAtrInput = input.float(1.0, "Stop = ATR x", minval = 0.1, maxval = 10.0, step = 0.1, group = STAT_GROUP)
+int    statAtrLenInput  = input.int(14, "ATR length", minval = 2, maxval = 200, group = STAT_GROUP)
+int    statHorizonInput = input.int(100, "Horizon (bars)", minval = 5, maxval = 2000, group = STAT_GROUP)
+float  statCostRInput   = input.float(0.05, "Round-trip cost (R)", minval = 0.0, maxval = 1.0, step = 0.005, group = STAT_GROUP)
+int    statMinNInput    = input.int(30, "Minimum resolved per direction", minval = 5, maxval = 500, group = STAT_GROUP)
+bool   statOneAtATimeInput = input.bool(false, "One trade at a time", group = STAT_GROUP)
+string statPosInput     = input.string("Top Right", "Panel position", options = ["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group = STAT_GROUP)
+
+f_statPos(string p) =>
+    switch p
+        "Top Left"      => position.top_left
+        "Middle Right"  => position.middle_right
+        "Bottom Right"  => position.bottom_right
+        "Bottom Left"   => position.bottom_left
+        => position.top_right
+
+f_statPct(float v) =>
+    na(v) ? "—" : str.tostring(v, "#.#") + "%"
+
+f_statPp(float v) =>
+    na(v) ? "—" : (v > 0 ? "+" : "") + str.tostring(v, "#.#") + "pp"
+
+var array<float> statEntry  = array.new<float>()
+var array<float> statStop   = array.new<float>()
+var array<float> statTarget = array.new<float>()
+var array<int>   statDir    = array.new<int>()
+var array<int>   statOpened = array.new<int>()
+
+var int statSigLong  = 0
+var int statSigShort = 0
+var int statWinLong  = 0
+var int statLosLong  = 0
+var int statTimLong  = 0
+var int statWinShort = 0
+var int statLosShort = 0
+var int statTimShort = 0
+
+float statAtr = ta.atr(statAtrLenInput)
+bool  statLive = statOnInput and barstate.isconfirmed
+
+if statLive and array.size(statEntry) > 0
+    for tradeIndex = array.size(statEntry) - 1 to 0
+        int   tradeDir = array.get(statDir, tradeIndex)
+        float tradeTarget = array.get(statTarget, tradeIndex)
+        float tradeStop = array.get(statStop, tradeIndex)
+        bool  stopHit = tradeDir > 0 ? low <= tradeStop : high >= tradeStop
+        bool  targetHit = tradeDir > 0 ? high >= tradeTarget : low <= tradeTarget
+        bool  expired = bar_index - array.get(statOpened, tradeIndex) >= statHorizonInput
+        bool  resolved = stopHit or targetHit or expired
+        if stopHit
+            if tradeDir > 0
+                statLosLong += 1
+            else
+                statLosShort += 1
+        else if targetHit
+            if tradeDir > 0
+                statWinLong += 1
+            else
+                statWinShort += 1
+        else if expired
+            if tradeDir > 0
+                statTimLong += 1
+            else
+                statTimShort += 1
+        if resolved
+            array.remove(statEntry, tradeIndex)
+            array.remove(statStop, tradeIndex)
+            array.remove(statTarget, tradeIndex)
+            array.remove(statDir, tradeIndex)
+            array.remove(statOpened, tradeIndex)
+
+float statStopDistance = na(statAtr) ? na : statStopAtrInput * statAtr
+bool  statCanOpen = statLive and not na(statStopDistance) and statStopDistance > 0
+if statCanOpen and ictBull and (not statOneAtATimeInput or array.size(statEntry) == 0)
+    array.push(statEntry, close)
+    array.push(statStop, close - statStopDistance)
+    array.push(statTarget, close + statTargetRInput * statStopDistance)
+    array.push(statDir, 1)
+    array.push(statOpened, bar_index)
+    statSigLong += 1
+if statCanOpen and ictBear and (not statOneAtATimeInput or array.size(statEntry) == 0)
+    array.push(statEntry, close)
+    array.push(statStop, close + statStopDistance)
+    array.push(statTarget, close - statTargetRInput * statStopDistance)
+    array.push(statDir, -1)
+    array.push(statOpened, bar_index)
+    statSigShort += 1
+
+int   statNLong  = statWinLong + statLosLong
+int   statNShort = statWinShort + statLosShort
+float statPLong  = statNLong > 0 ? statWinLong / float(statNLong) : na
+float statPShort = statNShort > 0 ? statWinShort / float(statNShort) : na
+bool  statBothSides = not na(statPLong) and not na(statPShort)
+float statDriftFree = statBothSides ? (statPLong + statPShort) / 2 * 100 : na
+float statDrift     = statBothSides ? (statPLong - statPShort) / 2 * 100 : na
+float statVLong     = statNLong  > 0 ? (statWinLong  + 0.5) / (statNLong  + 1) : na   // correction 19
+float statVShort    = statNShort > 0 ? (statWinShort + 0.5) / (statNShort + 1) : na
+float statSe        = statBothSides ? math.sqrt(statVLong * (1 - statVLong) / statNLong + statVShort * (1 - statVShort) / statNShort) / 2 * 100 : na
+float statNull      = 100.0 / (1.0 + statTargetRInput)
+float statEdge      = na(statDriftFree) ? na : statDriftFree - statNull
+float statMdl       = na(statSe) or statSe <= 0 ? na : 2.8 * statSe
+float statExpR      = na(statDriftFree) ? na : statDriftFree / 100 * statTargetRInput - (1 - statDriftFree / 100) - statCostRInput
+float statNeeded    = (1.0 + statCostRInput) / (1.0 + statTargetRInput) * 100
+
+string statVerdict = "NEED MORE DATA"
+color  statVerdictColor = color.gray
+if statBothSides and statNLong >= statMinNInput and statNShort >= statMinNInput
+    if na(statMdl) or math.abs(statEdge) < statMdl
+        statVerdict := "NO EDGE DETECTABLE"
+        statVerdictColor := color.gray
+    else if statEdge < 0
+        statVerdict := "NEGATIVE"
+        statVerdictColor := color.red
+    else if statExpR > 0
+        statVerdict := "EDGE, net " + str.tostring(statExpR, "#.##") + "R"
+        statVerdictColor := color.green
+    else
+        statVerdict := "EDGE BELOW COST"
+        statVerdictColor := color.orange
+
+var table statTable = table.new(f_statPos(statPosInput), 2, 13, bgcolor = color.new(color.black, 15), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+
+f_statRow(int rowIndex, string label, string value, color valueColor) =>
+    table.cell(statTable, 0, rowIndex, label, text_color = color.new(color.white, 25), text_size = size.small, text_halign = text.align_left)
+    table.cell(statTable, 1, rowIndex, value, text_color = valueColor, text_size = size.small, text_halign = text.align_right)
+    rowIndex
+
+if statOnInput and barstate.islast
+    table.cell(statTable, 0, 0, "SMC MEASUREMENT", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(statTable, 1, 0, "m2  " + str.tostring(statTargetRInput, "#.#") + "R / " + str.tostring(statHorizonInput) + "b", text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    f_statRow(1,  "Signals  long / short",  str.tostring(statSigLong) + " / " + str.tostring(statSigShort), color.new(color.white, 10))
+    f_statRow(2,  "Resolved  long / short", str.tostring(statNLong) + " / " + str.tostring(statNShort), color.new(color.white, 10))
+    f_statRow(3,  "Timed out  long / short", str.tostring(statTimLong) + " / " + str.tostring(statTimShort), color.new(color.white, 45))
+    f_statRow(4,  "Still open", str.tostring(array.size(statEntry)), color.new(color.white, 45))
+    f_statRow(5,  "Hit rate  long", f_statPct(statPLong * 100), color.new(color.white, 10))
+    f_statRow(6,  "Hit rate  short", f_statPct(statPShort * 100), color.new(color.white, 10))
+    f_statRow(7,  "Drift-free hit rate", f_statPct(statDriftFree), color.new(color.white, 0))
+    f_statRow(8,  "Drift removed", f_statPp(statDrift), color.new(color.white, 45))
+    f_statRow(9,  "Chance baseline  1/(1+R)", f_statPct(statNull) + "  (need " + str.tostring(statNeeded, "#.#") + "% after cost)", color.new(color.white, 45))
+    f_statRow(10, "Edge vs chance", f_statPp(statEdge), na(statEdge) ? color.gray : statEdge > 0 ? color.green : color.red)
+    f_statRow(11, "Detection floor  MDL", na(statMdl) ? "—" : "±" + str.tostring(statMdl, "#.#") + "pp", color.new(color.white, 45))
+    f_statRow(12, "VERDICT", statVerdict, statVerdictColor)
