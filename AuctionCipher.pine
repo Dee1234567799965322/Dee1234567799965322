@@ -43,7 +43,7 @@
 //   delta divergence is a trade. That hierarchy is the whole point.
 // ============================================================================
 
-indicator("Auction Cipher", shorttitle="AUCTION CIPHER", overlay=false,
+indicator("Auction Cipher", shorttitle="AC", overlay=false,
      max_boxes_count=500, max_lines_count=500, max_labels_count=500, max_bars_back=500)
 
 // Official TradingView library - provides requestVolumeDelta(), which is a more
@@ -1856,12 +1856,19 @@ var array<float> wDS = array.new<float>()
 var array<float> wDM = array.new<float>()
 var array<float> wDL = array.new<float>()
 
-f_roll(wVS, volume,   bubShortW)
-f_roll(wVM, volume,   bubMidW)
-f_roll(wVL, volume,   bubLongW)
-f_roll(wDS, absDelta, bubShortW)
-f_roll(wDM, absDelta, bubMidW)
-f_roll(wDL, absDelta, bubLongW)
+// AUDIT FIX 1: only fold a bar into the rolling windows once it has CLOSED.
+// On the realtime bar these run every tick, so an unguarded push re-added the
+// live volume on every update and shifted real history out of the window,
+// corrupting the bubble percentiles. Confirmed-bar-only keeps the window clean;
+// the developing bar reads against the last settled percentiles, which is what
+// you want anyway.
+if barstate.isconfirmed
+    f_roll(wVS, volume,   bubShortW)
+    f_roll(wVM, volume,   bubMidW)
+    f_roll(wVL, volume,   bubLongW)
+    f_roll(wDS, absDelta, bubShortW)
+    f_roll(wDM, absDelta, bubMidW)
+    f_roll(wDL, absDelta, bubLongW)
 
 float vSmS = f_pctl(wVS, bubSmallP)
 float vSmM = f_pctl(wVM, bubSmallP)
@@ -2539,14 +2546,17 @@ f_drawLabels() =>
         f_queue(f_gx(gexPut2),  "put wall 2", cGexSup)
         f_queue(f_gx(gexFlip),  "GAMMA FLIP", cGexFlip)
         f_queue(f_gx(gexHvl),   "HVL", cGexFlip)
-        if showNpoc and npocs.size() > 0
-            for i = 0 to npocs.size() - 1
-                float np = npocs.get(i).price
-                if math.abs(np - close) / close * 100 <= npocMaxDist
-                    f_queue(np, "nPOC  untested", cNpoc)
-        if showLvn and devOk and lvnLines.size() > 0
-            for i = 0 to lvnLines.size() - 1
-                f_queue(line.get_y1(lvnLines.get(i)), "LVN  thin, price moves fast", cLvn)
+    // AUDIT FIX 2: nPOC and LVN are auction features, not gamma features. Their
+    // label queueing was nested inside `if gexOn`, so the labels vanished unless
+    // Gamma Levels happened to be on. Dedented to stand on their own.
+    if showNpoc and npocs.size() > 0
+        for i = 0 to npocs.size() - 1
+            float np = npocs.get(i).price
+            if math.abs(np - close) / close * 100 <= npocMaxDist
+                f_queue(np, "nPOC  untested", cNpoc)
+    if showLvn and devOk and lvnLines.size() > 0
+        for i = 0 to lvnLines.size() - 1
+            f_queue(line.get_y1(lvnLines.get(i)), "LVN  thin, price moves fast", cLvn)
     if vwapOn and not na(vwapVal)
         f_queue(vwapVal, "VWAP", cVwap)
     if htfOn and not na(htfPoc)
@@ -4812,30 +4822,41 @@ if chartBuy and not na(rkTgtL) and barClosed
         pendStop := rkStopL
         pendTgt  := rkTgtL
     else
-        opEntry.push(rkEntry)
+        // AUDIT FIX 4: apply slippage on the signal-bar-close fill too, so the
+        // Slippage input behaves the same in both fill modes (it was only added
+        // in the next-bar-open path). Entry is worsened by fillSlip and risk / R
+        // are recomputed from it, exactly as f_fillPending does.
+        float feL   = rkEntry + fillSlip
+        float feRkL = feL - rkStopL
+        float feRLn = feRkL > 0 ? (rkTgtL - feL) / feRkL : rkRL
+        opEntry.push(feL)
         opStop.push(rkStopL)
         opTgt.push(rkTgtL)
         opDir.push(1)
         opBar.push(bar_index)
-        opRisk.push(rkRiskL)
-        opRPlan.push(rkRL)
+        opRisk.push(feRkL)
+        opRPlan.push(feRLn)
         if riskOn
-            f_drawTrade(true, rkEntry, rkStopL, rkTgtL, rkRL)
+            f_drawTrade(true, feL, rkStopL, rkTgtL, feRLn)
 if chartSell and not na(rkTgtS) and barClosed
     if fillNextOpen
         pendShort := true
         pendStop  := rkStopS
         pendTgt   := rkTgtS
     else
-        opEntry.push(rkEntry)
+        // AUDIT FIX 4 (short side): slippage on the close fill, mirror of above.
+        float feS   = rkEntry - fillSlip
+        float feRkS = rkStopS - feS
+        float feRSn = feRkS > 0 ? (feS - rkTgtS) / feRkS : rkRS
+        opEntry.push(feS)
         opStop.push(rkStopS)
         opTgt.push(rkTgtS)
         opDir.push(-1)
         opBar.push(bar_index)
-        opRisk.push(rkRiskS)
-        opRPlan.push(rkRS)
+        opRisk.push(feRkS)
+        opRPlan.push(feRSn)
         if riskOn
-            f_drawTrade(false, rkEntry, rkStopS, rkTgtS, rkRS)
+            f_drawTrade(false, feS, rkStopS, rkTgtS, feRSn)
 
 
 sigOpen := opEntry.size()
@@ -5177,11 +5198,31 @@ f_drawStats() =>
     // 76 is the mirror baseline measured on other instruments at 30m, not on
     // this chart. Balance break's null is a coin flip, so it reads against 50.
     // n is the POOR count; the baseline row carries the mirror's.
-    f_lift(4, "Poor extreme vs mirror", int(pv.get(1)), int(pv.get(0)),
-         int(pv.get(3)), int(pv.get(2)), na)
+    // CORRECTION 19 (watcher-fix copy). The registration-time denominator in
+    // pv.get(0)/pv.get(2) includes watches that have not resolved yet, which is
+    // the small downward bias documented at f_watch. Rather than move the
+    // counter to completion - the change that blanked these rows once and was
+    // never understood - the fix stays entirely at read time: count the watches
+    // still live in wSd and subtract them, leaving the denominator over
+    // resolved watches only. The counting path that produced every prior number
+    // is left exactly as it was, so this cannot blank the way the move did; the
+    // worst case is n1=0 early on, which f_lift already renders as a dash.
+    int pend0 = 0
+    int pend2 = 0
+    if wSd.size() > 0
+        for pi = 0 to wSd.size() - 1
+            int pa = math.abs(wSd.get(pi))
+            if pa == 1
+                pend0 += 1
+            else if pa == 3
+                pend2 += 1
+    int poorDen = int(pv.get(0)) - pend0
+    int mirrDen = int(pv.get(2)) - pend2
+    f_lift(4, "Poor extreme vs mirror", int(pv.get(1)), poorDen,
+         int(pv.get(3)), mirrDen, na)
     f_pair2(5, "Mirror baseline (measured here)",
-         pv.get(2) > 0 ? str.tostring(pv.get(3) / pv.get(2) * 100, "#.#") + "%  n " +
-         str.tostring(int(pv.get(2))) + "   vs 76% imported" : "-", C_NE)
+         mirrDen > 0 ? str.tostring(pv.get(3) / mirrDen * 100, "#.#") + "%  n " +
+         str.tostring(mirrDen) + "   vs 76% imported" : "-", C_NE)
     // Rows 15 and 16 used to print the raw win-edge's MDL and a verdict built
     // on it. Both are superseded by the drift-controlled pair below, which
     // answers the same question without the trend in it, and keeping the
@@ -5538,7 +5579,7 @@ plotshape(dnaEffortB or dnaEffortS ? (dnaEffortB ? low : high) : na, "Effort",
 // ============================================================================
 // force_overlay lifts the dashboard onto the PRICE chart instead of leaving it
 // stacked beside the oscillator in the lower pane.
-var table dash = table.new(f_tablePos(tblPos), 4, 19, bgcolor=cTblBg,
+var table dash = table.new(f_tablePos(tblPos), 4, 20, bgcolor=cTblBg,   // AUDIT FIX 3: +1 row for Gamma
      border_color=color.new(#000000, 75), border_width=1,
      frame_color=color.new(#000000, 50), frame_width=1, force_overlay=true)
 
@@ -5708,9 +5749,9 @@ f_drawDash() =>
     f_pair(15, 2, "prior " + (htfOn ? htfMode : "HTF") + " POC", na(htfPoc) ? "-" : str.tostring(htfPoc, format.mintick), cHtfPoc)
     if gexOn
         int gr = f_gexReg()
-        f_pair(16, 0, "Gamma", gr == 1 ? "POSITIVE - fade edges" : gr == -1 ? "NEGATIVE - do NOT fade" : "no flip set",
-             gr == 1 ? C_UP : gr == -1 ? C_DN : C_NE)
-        f_pair(16, 2, "Flip / walls",
+        f_pair(19, 0, "Gamma", gr == 1 ? "POSITIVE - fade edges" : gr == -1 ? "NEGATIVE - do NOT fade" : "no flip set",
+             gr == 1 ? C_UP : gr == -1 ? C_DN : C_NE)     // AUDIT FIX 3: moved off row 16 (was overwritten by Buy/Sell gates)
+        f_pair(19, 2, "Flip / walls",
              (na(f_gx(gexFlip)) ? "-" : str.tostring(f_gx(gexFlip), format.mintick)) + "  " +
              (na(f_gx(gexPut)) ? "-" : str.tostring(f_gx(gexPut), format.mintick)) + " / " +
              (na(f_gx(gexCall)) ? "-" : str.tostring(f_gx(gexCall), format.mintick)), cGexFlip)

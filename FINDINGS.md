@@ -186,16 +186,17 @@ measurement.
 ## The deliverable that survived: Auction Cipher
 
 The chart tool itself — [`AuctionCipher.pine`](AuctionCipher.pine) — is real work
-and is kept. Over the month it was audited and hardened:
+and is kept. Over the month it was audited and hardened, and all fixes are now
+consolidated into that single canonical file:
 
-- [`AuctionCipher_watcherfix.pine`](AuctionCipher_watcherfix.pine) — correction
-  19: read-time pending-watch subtraction so the dashboard rows populate live
-  instead of blanking.
-- [`AuctionCipher_fixed.pine`](AuctionCipher_fixed.pine) — four confirmed bugs
-  from an external audit: barstate-guarded bubble roll, nPOC/LVN label
-  dedent, dashboard row count, and slippage in the close-fill path.
+- **Correction 19** — read-time pending-watch subtraction so the dashboard rows
+  populate live instead of blanking.
+- **Four confirmed bugs from an external audit** — barstate-guarded bubble roll,
+  nPOC/LVN label dedent, dashboard row count, and slippage in the close-fill path.
 
-It is a visualization, not a signal generator, and it is treated as one.
+(The intermediate `_watcherfix` and `_fixed` builds have been folded into
+`AuctionCipher.pine` and retired.) It is a visualization, not a signal generator,
+and it is treated as one.
 
 ## File index
 
