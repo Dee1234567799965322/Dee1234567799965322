@@ -3,7 +3,10 @@
 *The one-line version: across eleven popular signal systems and ~35,000 measured
 trades, not one predicted the next move better than a coin flip. The only thing
 that ever measured as non-random was trend following — and even that is marginal
-after cost and only clean on instruments that don't gap.*
+after cost and only clean on instruments that don't gap. The one constructive
+build ([`TrendParticipation.pine`](TrendParticipation.pine)) doesn't predict at
+all: it cuts drawdown 3–4× vs buy-and-hold, which is a calmer ride, not more
+money.*
 
 This is the empirical companion to the [`README`](README.md). The README tells
 the story of the **harness** ([`EdgeLab.pine`](EdgeLab.pine)) and the fifteen
@@ -135,6 +138,39 @@ cost, concentrated in trending majors, and account-ending at the tails unless yo
 run it only on continuously-traded instruments, on high timeframes, cheaply, and
 sized for gap risk rather than the notional stop.
 
+## The constructive answer — Trend Participation
+
+[`TrendParticipation.pine`](TrendParticipation.pine) is what the whole month
+points at once you stop looking for a predictor. It contains **no entry signal**.
+It participates in drift while the slow trend is up, sizes every position by
+volatility so risk stays constant (never leveraged by default), trails out wide
+to keep the fat tail, and — crucially — **judges itself against buy-and-hold, not
+a coin flip**, on return per unit of drawdown. On a drifting asset, holding is the
+real benchmark.
+
+Measured on daily history ([`data/trend-participation-test.csv`](data/trend-participation-test.csv)):
+
+| Asset | Strat return | Hold return | Strat max DD | Hold max DD | Return/DD | vs hold |
+|---|---:|---:|---:|---:|---|---|
+| **SOLUSDT.P** | +212% | +514% | **−25%** | −96% | 8.55 vs 5.34 | wins both |
+| **ETHUSDT.P** | +283% | +1027% | **−23%** | −79% | 12.08 vs 12.95 | ties |
+| **BTCUSDT.P** | +306% | +1141% | **−24%** | −77% | 12.69 vs 14.88 | ties |
+
+The one real, repeatable effect: it holds max drawdown to **~−24% on every
+asset** while buy-and-hold suffered **−77% to −96%** — a 3–4× reduction, and
+(confirmed at max leverage 1) **not** a leverage artifact. The cost is that it
+keeps only a quarter to a third of the raw return, so on BTC/ETH its risk-adjusted
+return merely *ties* holding; only SOL, whose hold drawdown was catastrophic,
+wins outright.
+
+The honest reading: **this is not alpha and not more money. It is a way to take a
+much calmer ride to roughly the same place** — a −24% drawdown a human can
+actually sit through instead of an −80% one they panic-sell. That behavioural
+survivability, on assets that trend and don't gap, sized small and diversified, is
+the only defensible reason to trade that a month of measurement produced.
+Caveats stand: ~35–48 trades over a bull-heavy era, untested in a true multi-year
+bear. The only test left is forward.
+
 ## What it means
 
 **The edge is not in the signals.** Not in any of the eleven. A month of
@@ -166,6 +202,7 @@ It is a visualization, not a signal generator, and it is treated as one.
 **Harness & finding**
 - `EdgeLab.pine` — the measurement harness (15 corrections, `LIFT*` column)
 - `TrendRider.pine` / `TrendRiderSweep.pine` — trend following + robustness sweep
+- `TrendParticipation.pine` — the constructive build: drift capture + drawdown control, judged vs buy-and-hold
 - `FINDINGS.md` (this file) / `README.md` — the write-ups
 
 **The eleven coin flips**
