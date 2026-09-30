@@ -1,6 +1,6 @@
 # Findings — one month of measuring trading indicators
 
-*The one-line version: across ten popular signal systems and ~35,000 measured
+*The one-line version: across eleven popular signal systems and ~35,000 measured
 trades, not one predicted the next move better than a coin flip. The only thing
 that ever measured as non-random was trend following — and even that is marginal
 after cost and only clean on instruments that don't gap.*
@@ -44,7 +44,7 @@ that had looked real:
 5. **One asset across five timeframes is one asset, not five** independent
    samples. Overlapping windows are pooled, not counted as replications.
 
-## The scoreboard — ten coin flips
+## The scoreboard — eleven coin flips
 
 Every row below is measured with that ruler. `edge` is drift-free hit minus the
 33.3% null; it must exceed `MDL` to count as real. **None does.**
@@ -58,6 +58,7 @@ Every row below is measured with that ruler. `edge` is drift-free hit minus the
 | **WaveTrend divergence** | 1,195 | 34.9% | +1.6pp | ±3.9 | coin flip |
 | **Support/Resistance bounce** | 493 | 35.3% | +2.0pp | ±6.0 | coin flip |
 | **Market Cipher A** (ribbon crosses + shapes) | 15,237 | 34.2% | +0.9pp | 0/24 charts clear | coin flip |
+| **Trend Stack** (implied pullback-resume) | see note | ~40% at N≥30 | +5–8pp | ±24 | coin flip |
 | Auction Cipher — 10 internal hypotheses | (see EdgeLab) | — | — | — | all killed by the 15 corrections |
 
 The pattern is the tell: **every drift-free hit rate sits within ~2pp of 33.3%,
@@ -72,6 +73,32 @@ A recurring trap, made concrete on **Market Cipher A, ETH 15m**: long hit 39.9%
 null). The 12-point gap was ETH drifting up over the window — anything long
 looked good, anything short looked bad. Read only the long side and you'd have
 "proof." Stratify and it vanishes. This is why people believe.
+
+## The clearest lesson — the small-sample mirage
+
+The eleventh signal, **Trend Stack**, produced the single best demonstration in
+the project of *why* the ruler needs every one of its parts. On **gold 4h**, its
+implied pullback-resume entry showed a **67.9% drift-free hit rate and +0.99R per
+trade** — a number people mortgage the house on. It was **19 trades**, with an MDL
+of **±33pp**: the confidence interval ran from ~35% to ~100%, so the panel
+withheld the verdict (`NEED MORE DATA`) rather than paint it green.
+
+Drop to a timeframe where the same signal clears 30 trades — **gold 1h and BTC
+1h/30m** — and the 68% **collapsed to ~40%**, the verdict flipping to COIN FLIP
+([`data/trendstack-test.csv`](data/trendstack-test.csv)). The spectacular
+high-timeframe number was small-sample luck evaporating as the sample grew, the
+same convergence-to-33.3% caught in the act.
+
+The lesson generalises past this one indicator: **every** signal will hand you a
+window where it looks like a miracle. Without a fixed null, drift stratification,
+and a sample-size gate that refuses to bless a number it cannot yet distinguish
+from luck, you do not measure edges — you collect mirages. That gate is the most
+important line on the panel.
+
+A note of credit: Trend Stack itself is one of the *better* tools reviewed —
+honest that it is a dashboard, correct percentile bands (not fake 2-SD), and it
+fires no buy/sell arrows. Only the entry buried in its comments, which it wisely
+never actually fires, is the coin flip. The author was right not to ship it.
 
 ## The one exception — trend following
 
@@ -110,8 +137,8 @@ sized for gap risk rather than the notional stop.
 
 ## What it means
 
-**The edge is not in the signals.** Not in any of the ten. A month of measurement
-could not find one entry trigger that beats chance. What *did* measure as real
+**The edge is not in the signals.** Not in any of the eleven. A month of
+measurement could not find one entry trigger that beats chance. What *did* measure as real
 was structural — the exit rule and the payoff skew of trend following — and it
 lives on the side of trading everyone finds boring: risk management, not entries.
 
@@ -141,12 +168,13 @@ It is a visualization, not a signal generator, and it is treated as one.
 - `TrendRider.pine` / `TrendRiderSweep.pine` — trend following + robustness sweep
 - `FINDINGS.md` (this file) / `README.md` — the write-ups
 
-**The ten coin flips**
+**The eleven coin flips**
 - `ValueAreaReversion.pine`, `ICTTest.pine`, `SMCTest.pine`,
   `WaveTrendTest.pine`, `DivergenceTest.pine`, `SupportResistanceTest.pine`,
-  `MarketCipherATest.pine`, plus the internal-hypothesis engines
-  (`MagnetTest`, `TrapEngine`, `PositioningEngine`, `RegimeTest`, `SessionTest`,
-  `ExcursionTest`, `SetupExcursion`, `InducementTest`, `SpeedLadder`)
+  `MarketCipherATest.pine`, `TrendStackTest.pine`, plus the internal-hypothesis
+  engines (`MagnetTest`, `TrapEngine`, `PositioningEngine`, `RegimeTest`,
+  `SessionTest`, `ExcursionTest`, `SetupExcursion`, `InducementTest`,
+  `SpeedLadder`)
 
 **Chart tools & utilities**
 - `AuctionCipher*.pine`, `AuctionFootprint*.pine`, `TradeJournal.pine`
