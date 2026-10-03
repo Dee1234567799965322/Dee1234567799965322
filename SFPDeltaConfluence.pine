@@ -153,7 +153,7 @@ if mRes >= mMin and not na(mEdge) and not na(mMdl)
         mVer := "COIN FLIP"
         mVc := color.new(color.red, 20)
 
-var table mt = table.new(position.bottom_right, 2, 9, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+var table mt = table.new(position.bottom_right, 2, 10, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
 mrow(int r, string k, string v, color c) =>
     table.cell(mt, 0, r, k, text_color = color.new(color.white, 20), text_size = size.small, text_halign = text.align_left)
     table.cell(mt, 1, r, v, text_color = c, text_size = size.small, text_halign = text.align_right)
@@ -170,4 +170,5 @@ if mShow and barstate.islast
     mrow(5, "Edge / must beat", (na(mEdge) ? "—" : (mEdge >= 0 ? "+" : "") + str.tostring(mEdge, "#.#") + "pp") + " / " + (na(mMdl) ? "—" : "±" + str.tostring(mMdl, "#.#")), na(mEdge) ? color.gray : mEdge > mMdl and mEdge > 0 ? color.green : color.red)
     mrow(6, "Expectancy net", na(mExpN) ? "—" : (mExpN >= 0 ? "+" : "") + str.tostring(mExpN, "#.##") + "R", na(mExpN) ? color.gray : mExpN > 0 ? color.green : color.red)
     mrow(7, "Delta now", na(dNorm) ? "—" : (dNorm >= 0 ? "+" : "") + str.tostring(dNorm * 100, "#") + "%", na(dNorm) ? color.gray : dNorm >= 0 ? #089981 : #f23645)
-    mrow(8, "VERDICT", mVer, mVc)
+    mrow(8, "Delta gate", useDelta ? "ON (SFP+Δ)" : "OFF (pure SFP)", useDelta ? color.new(#089981, 0) : color.new(color.orange, 0))
+    mrow(9, "VERDICT", mVer, mVc)
