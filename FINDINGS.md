@@ -266,14 +266,16 @@ regime gates a Python port cannot reproduce), its own on-chart scoreboard reads:
 
 | Timeframe | Resolved | Hit % (break-even) | Expectancy | Drift-free edge | AC's own verdict |
 |---|---:|---:|---:|---:|---|
-| **30m** | 168 | 27% (34.9%) | **−0.09R** | **−8.1pp** ± 9.6 | "UNDERPOWERED — cannot resolve" |
+| **15m** | 83  | 31% (34.6%) | **−0.01R** | **−3.2pp** ± 14.3 | "too few resolved trades" |
+| **30m** | 168 | 27% (34.9%) | **−0.09R** | **−8.1pp** ± 9.6  | "UNDERPOWERED — cannot resolve" |
 | **1h**  | 98  | 28% (35.4%) | **−0.16R** | **−8.2pp** ± 12.5 | "too few resolved trades" |
 | **4h**  | 38  | 40% (34.9%) | +0.15R | +4.9pp ± 14.7 | "too few resolved trades" |
 
-The two charts with a real sample (30m, 1h) **both land at drift-free −8pp** — not
-zero, slightly *negative*, which is what fading extremes into a trending market
-costs after fees. The 4h's small positive is a 38-trade outlier inside a ±14.7
-band. The four-layer gate filters 86–93% of signals down to 40–100 trades, so by
+**Three of the four timeframes land negative** (15m −3.2pp, 30m −8.1pp, 1h −8.2pp),
+and all three have their hit rate *below* their own break-even. The two largest
+samples (30m, 1h) both sit at drift-free −8pp — not zero, slightly *negative*,
+which is what fading extremes into a trending market costs after fees. The 4h's
+lone small positive is a 38-trade outlier inside a ±14.7 band. The four-layer gate filters 86–93% of signals down to 40–100 trades, so by
 its author's own note it can never gather a sample large enough to prove an edge —
 and the point estimate it does have is negative. **The best tool in the review,
 measured by its own honest engine, is a hair worse than a coin flip as a signal.**
