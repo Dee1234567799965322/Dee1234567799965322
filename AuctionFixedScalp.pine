@@ -1,78 +1,63 @@
 //@version=6
-// Auction Fixed-$ Scalp — MEASURED IN DOLLARS
+// Auction Runner — MEASURED IN DOLLARS (small loss, let winners run)
 // ───────────────────────────────────────────────────────────────────────────
-// Your style, Auction Cipher's engine, judged in your currency.
+// THE PIVOT: a fixed small win + a fixed small loss is SYMMETRIC, and symmetric
+// against a coin-flip entry just pays the fees (proved both ways: wide stop =
+// lucky coin flip, tight cap = unanimous bleed). The only escape is ASYMMETRY:
+//   - keep the loss SMALL and capped (your insight — it was right)
+//   - but let the WINNER RUN behind a trailing stop instead of grabbing $150
+// Small loss + rare big win + ~50% direction = positive, with NO entry edge.
+// That is trend participation: the payoff does the work, not the prediction.
 //
-// THE IDEA (straight from Auction Cipher's own thesis):
-//   The quality trade is a WaveTrend turn AT a value-area edge — price pokes
-//   past VAH/VAL, gets rejected, and snaps back toward value. The stop goes
-//   JUST BEYOND that edge ("the right place"): if price leaves value and stays
-//   out, the idea is broken and you are out for a small, defined loss. Otherwise
-//   you ride the snap-back for a fixed $100-200.
-//
-// WHY A STRUCTURAL STOP ANSWERS YOUR COMPLAINT:
-//   Ordinary tight stops sit inside the noise, so you get wicked out and THEN
-//   price runs to target. Placing the stop beyond the value edge keeps it out of
-//   the noise — you only lose if value genuinely breaks.
-//
-// THE HONEST TEST (what RR hid): even cheap fees and a smart stop can't create
-// edge from nothing. A wide stop means each stop-out erases several small wins,
-// so the whole thing lives or dies on ONE thing: does the value edge actually
-// hold more often than chance? The dollar panel answers it — NET P&L over
-// hundreds of trades, with the worst trade and the drawdown in plain dollars.
-//
-// The value area here is the REAL volume profile — the same POC / 70%-value
-// computation Auction Cipher uses, ported from its code — built in, so there is
-// nothing to connect. The VAH/VAL/POC match what Auction Cipher draws.
-indicator("Auction Fixed-$ Scalp — MEASURED", "AUC-FIX$", overlay = true, max_labels_count = 500)
+// Same engine as before: Auction Cipher's real volume-profile value area, a
+// WaveTrend turn at the edge, and a liquidity-sweep / SFP gate. Only the EXIT
+// changed — from a fixed target to a runner. Read the PAYOFF row: avg win must
+// beat avg loss by enough that a ~35-45% win rate still nets green.
+indicator("Auction Runner — MEASURED", "AUC-RUN", overlay = true, max_labels_count = 500)
 
-// ── Your trade (dollars, not RR) ───────────────────────────────────────────────
+// ── Your trade (dollars) ───────────────────────────────────────────────────────
 gT = "Your trade (dollars)"
-float targetUsd = input.float(150, "Profit target per trade ($)", step = 10, group = gT)
-float qty       = input.float(1.0, "Lots (BTC per trade)", step = 0.1, group = gT, tooltip = "1 BTC: a $1 price move = $1. 0.5 BTC: a $1 move = $0.50.")
-float feeUsd    = input.float(8.0, "Round-trip fee ($ per trade)", step = 1.0, group = gT, tooltip = "Your real cost: ~$8 at 1 BTC, ~$4 at 0.5 BTC.")
+float targetUsd = input.float(0, "Profit target ($, 0 = let winners run)", step = 10, group = gT, tooltip = "0 = pure runner (trail only). Set a value to also cap the win there — but capping the win is what made it a coin flip, so 0 is the point of this version.")
+float qty       = input.float(1.0, "Lots (BTC per trade)", step = 0.1, group = gT, tooltip = "1 BTC: a $1 price move = $1.")
+float feeUsd    = input.float(8.0, "Round-trip fee ($ per trade)", step = 1.0, group = gT)
 float acct      = input.float(10000, "Account size ($)", step = 1000, group = gT)
-int   maxBars   = input.int(200, "Give up after N bars (time exit)", minval = 10, group = gT)
+int   maxBars   = input.int(300, "Give up after N bars (time exit)", minval = 10, group = gT)
 
-// ── The stop — 'the right place' ───────────────────────────────────────────────
-gS = "Stop placement"
-string stopMode = input.string("Structural (VA edge)", "Stop mode", options = ["Structural (VA edge)", "Fixed $"], group = gS, tooltip = "Structural: just beyond the value-area edge, out of the noise. Fixed $: a flat dollar stop.")
-float bufferAtr = input.float(0.5, "Buffer beyond edge (ATR)", step = 0.1, group = gS, tooltip = "How far past VAH/VAL the stop sits, so a normal wick does not trip it.")
+// ── Initial stop — 'the right place' ───────────────────────────────────────────
+gS = "Initial stop"
+string stopMode = input.string("Structural (VA edge)", "Stop mode", options = ["Structural (VA edge)", "Fixed $"], group = gS, tooltip = "Where the FIRST stop sits before the trailing stop takes over.")
+float bufferAtr = input.float(0.5, "Buffer beyond edge (ATR)", step = 0.1, group = gS)
 float stopUsd   = input.float(400, "Fixed stop ($, if Fixed mode)", step = 25, group = gS)
 
-// ── Loss management — THE EDGE IS HERE (make the loss small & slow) ─────────────
-// The month proved the entry is a coin flip, so profit cannot come from winning
-// more often. It can only come from LOSING SMALL. These three levers cap and cut
-// the loss so the average loss stays BELOW the +$ target. Watch the "Avg win /
-// Avg loss" row — the strategy is green only when avg loss < avg win.
-gLM = "Loss management (the edge)"
-float maxLossUsd = input.float(100, "Hard max loss per trade ($)", step = 10, group = gLM, tooltip = "Clamp every stop so no single loss exceeds this. Keep it BELOW your target — that is the whole point. 0 = no cap (dangerous).")
-bool  cutOnBreak = input.bool(true, "Cut early if value re-breaks (close beyond edge)", group = gLM, tooltip = "If a long closes back BELOW VAL (or a short back above VAH), the fade has failed — exit now for a small loss instead of waiting for the full stop. This is how the loss stays small.")
-float beAfterUsd = input.float(75, "Move stop to breakeven after +$", step = 5, group = gLM, tooltip = "Once the trade is this far in profit, move the stop to entry so a winner cannot turn into a loser. 0 = off.")
+// ── Loss management — keep the loss small (your edge) ──────────────────────────
+gLM = "Loss management"
+float maxLossUsd = input.float(100, "Hard max loss per trade ($)", step = 10, group = gLM, tooltip = "Clamp the initial stop so no loss exceeds this. This is the SMALL half of the asymmetry.")
+bool  cutOnBreak = input.bool(true, "Cut early if value re-breaks (close beyond edge)", group = gLM, tooltip = "If the fade fails fast (long closes back below VAL / short above VAH), take the small loss now.")
+
+// ── Trailing runner — let the winner run (the other half) ──────────────────────
+gTR = "Trailing runner (let it run)"
+float trailAtr   = input.float(2.5, "Trail distance (ATR)", step = 0.1, group = gTR, tooltip = "How far the trailing stop sits behind the extreme. Wider = gives the runner more room and bigger winners; tighter = locks sooner.")
+float trailStart = input.float(75, "Start trailing after +$", step = 5, group = gTR, tooltip = "Give the trade room first: the capped stop protects it until it is this far in profit, then the trail takes over and rides the move.")
 
 // ── Auction value — REAL volume profile (Auction Cipher's engine) ──────────────
 gA = "Auction value (Auction Cipher engine)"
-int   profLook = input.int(200, "Profile lookback (bars)", minval = 30, maxval = 480, group = gA, tooltip = "Rolling window the volume profile is built from, exactly like Auction Cipher's rolling mode. Lower it if TradingView says the study takes too long.")
-int   profRows = input.int(50, "Profile rows (bins)", minval = 10, maxval = 150, group = gA, tooltip = "Resolution of the profile. Auction Cipher's default is 250; 50 gives the same levels far faster.")
-float vaPctIn  = input.float(70.0, "Value area %", minval = 50, maxval = 95, group = gA, tooltip = "The % of volume inside the value area. 70% is the standard (and Auction Cipher's default).") / 100.0
-bool  requireWT= input.bool(true, "Require WaveTrend turn at edge", group = gA, tooltip = "Auction Cipher's quality filter: momentum turning back toward value as price is rejected at the edge.")
+int   profLook = input.int(200, "Profile lookback (bars)", minval = 30, maxval = 480, group = gA, tooltip = "Rolling window the volume profile is built from. Lower it if the study is slow.")
+int   profRows = input.int(50, "Profile rows (bins)", minval = 10, maxval = 150, group = gA)
+float vaPctIn  = input.float(70.0, "Value area %", minval = 50, maxval = 95, group = gA) / 100.0
+bool  requireWT= input.bool(true, "Require WaveTrend turn at edge", group = gA)
 bool  useLong  = input.bool(true, "Longs (fade VAL)", group = gA)
 bool  useShort = input.bool(true, "Shorts (fade VAH)", group = gA)
 bool  mShow    = input.bool(true, "Show dollar panel", group = gA)
 
 // ── Extra rule: liquidity sweep / Swing Failure Pattern ────────────────────────
 gL = "Liquidity sweep / SFP filter"
-bool  useSweep    = input.bool(true, "Require sweep / SFP to enter", group = gL, tooltip = "Only take the value-edge trade if price ALSO swept a swing low (longs) or swing high (shorts) and reclaimed it — a liquidity grab / Swing Failure Pattern.")
-int   sweepLen    = input.int(5, "Swing strength (pivot bars)", minval = 1, group = gL, tooltip = "Bigger = only major swing lows/highs count as the liquidity pool that must be swept.")
-int   sweepWindow = input.int(3, "Sweep stays valid for N bars", minval = 0, group = gL, tooltip = "The sweep can land on the entry bar (0) or up to N bars before the value-edge reclaim.")
+bool  useSweep    = input.bool(true, "Require sweep / SFP to enter", group = gL)
+int   sweepLen    = input.int(5, "Swing strength (pivot bars)", minval = 1, group = gL)
+int   sweepWindow = input.int(3, "Sweep stays valid for N bars", minval = 0, group = gL)
 
 // ── Real volume profile — POC + 70% value area (ported from Auction Cipher) ────
 float atr = ta.atr(14)
 
-// Bins volume by price across the lookback, finds the POC (busiest price), then
-// grows out from it to the larger adjacent bin until 70% of volume is enclosed.
-// Returns [poc, value-area-high, value-area-low, ok]. This is Auction Cipher's
-// own f_profile, trimmed to the level math (no buy/sell split needed here).
 f_profile(array<float> hs, array<float> ls, array<float> vs, int rows, float pct) =>
     float poc = na
     float vah = na
@@ -120,7 +105,6 @@ f_profile(array<float> hs, array<float> ls, array<float> vs, int rows, float pct
                 ok := true
     [poc, vah, val, ok]
 
-// Rolling window of the last profLook confirmed bars feeds the profile.
 var array<float> winH = array.new<float>(0)
 var array<float> winL = array.new<float>(0)
 var array<float> winV = array.new<float>(0)
@@ -144,9 +128,6 @@ bool  wtUp = wt1 >= wt2
 bool  wtDn = wt1 <= wt2
 
 // ── Liquidity sweep / SFP confluence ───────────────────────────────────────────
-// A bullish sweep = price takes out a swing LOW then closes back above it (a
-// liquidity grab / Swing Failure Pattern). Mirror for bearish. Longs need a
-// recent bullish sweep, shorts a bearish one.
 float phS = ta.pivothigh(sweepLen, 1)
 float plS = ta.pivotlow(sweepLen, 1)
 var float swHi = na
@@ -177,17 +158,16 @@ var float tgtPx    = na
 var float stopPx   = na
 var int   entryBar = na
 var float mae      = 0.0
-var bool  beLocked = false
+var float maxFav   = na
+var bool  trailOn  = false
 
 // ── Dollar ledger ──────────────────────────────────────────────────────────────
-var int   nTP = 0
-var int   nStop = 0
-var int   nCut = 0
-var int   nTime = 0
+var int   nTot_ = 0
 var int   nWinNet = 0
 var float grossWin = 0.0
 var float grossLoss = 0.0
 var float netCum = 0.0
+var float bestTrade = 0.0
 var float worstTrade = 0.0
 var float worstMAE = 0.0
 var float feesPaid = 0.0
@@ -203,38 +183,33 @@ if barstate.isconfirmed
         float adv = pos == 1 ? entryPx - low : high - entryPx
         if adv > mae
             mae := adv
-        // breakeven lock: once far enough in profit, a winner can't become a loser
-        float fav = pos == 1 ? high - entryPx : entryPx - low
-        if beAfterUsd > 0 and not beLocked and fav * qty >= beAfterUsd
-            beLocked := true
-            stopPx := pos == 1 ? math.max(stopPx, entryPx) : math.min(stopPx, entryPx)
+        // trailing runner: give room, then ride
+        float ext = pos == 1 ? high : low
+        maxFav := na(maxFav) ? ext : (pos == 1 ? math.max(maxFav, ext) : math.min(maxFav, ext))
+        float favUsd = (pos == 1 ? maxFav - entryPx : entryPx - maxFav) * qty
+        if not trailOn and favUsd >= trailStart
+            trailOn := true
+        if trailOn and not na(atr)
+            float ts = pos == 1 ? maxFav - trailAtr * atr : maxFav + trailAtr * atr
+            stopPx := pos == 1 ? math.max(stopPx, ts) : math.min(stopPx, ts)
         bool  done = false
-        bool  isTP = false
-        bool  isStop = false
-        bool  isCut = false
         float exitPx = na
         if pos == 1
             if low <= stopPx
                 exitPx := stopPx
-                isStop := true
                 done := true
-            else if high >= tgtPx
+            else if not na(tgtPx) and high >= tgtPx
                 exitPx := tgtPx
-                isTP := true
                 done := true
         else
             if high >= stopPx
                 exitPx := stopPx
-                isStop := true
                 done := true
-            else if low <= tgtPx
+            else if not na(tgtPx) and low <= tgtPx
                 exitPx := tgtPx
-                isTP := true
                 done := true
-        // early cut: value re-broke, the fade failed — take the small loss now
         if not done and cutOnBreak and ((pos == 1 and close < VAL) or (pos == -1 and close > VAH))
             exitPx := close
-            isCut := true
             done := true
         if not done and (bar_index - entryBar) >= maxBars
             exitPx := close
@@ -244,19 +219,14 @@ if barstate.isconfirmed
             float net = pnl - feeUsd
             feesPaid += feeUsd
             netCum += net
-            if isTP
-                nTP += 1
-            else if isCut
-                nCut += 1
-            else if isStop
-                nStop += 1
-            else
-                nTime += 1
+            nTot_ += 1
             if net >= 0
                 nWinNet += 1
                 grossWin += net
             else
                 grossLoss += -net
+            if net > bestTrade
+                bestTrade := net
             if net < worstTrade
                 worstTrade := net
             if mae * qty > worstMAE
@@ -275,24 +245,26 @@ if barstate.isconfirmed
             entryPx := close
             entryBar := bar_index
             mae := 0.0
+            maxFav := close
+            trailOn := false
             float sp = stopMode == "Structural (VA edge)" ? VAL - bufferAtr * atr : close - stopUsd / qty
             if maxLossUsd > 0
                 sp := math.max(sp, close - maxLossUsd / qty)
             stopPx := sp
-            tgtPx := close + targetUsd / qty
-            beLocked := false
+            tgtPx := targetUsd > 0 ? close + targetUsd / qty : na
         else if shortSig
             pos := -1
             openedShort := true
             entryPx := close
             entryBar := bar_index
             mae := 0.0
+            maxFav := close
+            trailOn := false
             float sp = stopMode == "Structural (VA edge)" ? VAH + bufferAtr * atr : close + stopUsd / qty
             if maxLossUsd > 0
                 sp := math.min(sp, close + maxLossUsd / qty)
             stopPx := sp
-            tgtPx := close - targetUsd / qty
-            beLocked := false
+            tgtPx := targetUsd > 0 ? close - targetUsd / qty : na
 
 plotshape(openedLong,  "BUY",  shape.labelup,   location.belowbar, #089981, text = "BUY",  textcolor = color.white, size = size.small)
 plotshape(openedShort, "SELL", shape.labeldown, location.abovebar, #f23645, text = "SELL", textcolor = color.white, size = size.small)
@@ -303,11 +275,12 @@ plot(mShow ? VAL : na, "VAL", color = color.new(#26c6da, 40))
 plot(mShow ? POC : na, "POC", color = color.new(#ffb300, 50))
 
 // ── Totals ─────────────────────────────────────────────────────────────────────
-int   nTot    = nTP + nStop + nCut + nTime
-float tpRate  = nTot > 0 ? nTP / float(nTot) * 100.0 : na
-float avgWin  = nWinNet > 0 ? grossWin / nWinNet : na
+int   nTot    = nTot_
 int   nLossNet= nTot - nWinNet
+float winRate = nTot > 0 ? nWinNet / float(nTot) * 100.0 : na
+float avgWin  = nWinNet > 0 ? grossWin / nWinNet : na
 float avgLoss = nLossNet > 0 ? grossLoss / nLossNet : na
+float payoff  = not na(avgWin) and not na(avgLoss) and avgLoss > 0 ? avgWin / avgLoss : na
 float expTr   = nTot > 0 ? netCum / nTot : na
 float retPct  = acct > 0 ? netCum / acct * 100.0 : na
 bool  wiped   = maxDD >= acct and nTot > 0
@@ -335,16 +308,16 @@ row(int r, string k, string v, color c) =>
     r
 
 if mShow and barstate.islast
-    table.cell(t, 0, 0, "AUCTION FIX-$ SCALP", text_color = color.white, text_size = size.small, text_halign = text.align_left)
-    table.cell(t, 1, 0, "$" + str.tostring(targetUsd, "#") + "/" + (stopMode == "Fixed $" ? "fix" : "VA") + (useSweep ? "/SFP" : ""), text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
-    row(1, "Trades (win/stop/cut)", str.tostring(nTP) + "/" + str.tostring(nStop) + "/" + str.tostring(nCut), color.new(color.white, 10))
-    row(2, "Target-hit rate", na(tpRate) ? "—" : str.tostring(tpRate, "#.#") + "%", na(tpRate) ? color.gray : tpRate >= 70 ? color.green : color.new(color.white, 10))
+    table.cell(t, 0, 0, "AUCTION RUNNER", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, 0, "trail " + str.tostring(trailAtr, "#.#") + "x" + (useSweep ? " SFP" : ""), text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    row(1, "Trades", str.tostring(nTot), color.new(color.white, 10))
+    row(2, "Win rate (net+)", na(winRate) ? "—" : str.tostring(winRate, "#.#") + "%", color.new(color.white, 10))
     row(3, "Avg win / Avg loss", (na(avgWin) ? "—" : f_usd(avgWin)) + " / " + (na(avgLoss) ? "—" : f_usd(-avgLoss)), color.new(color.white, 10))
-    row(4, "NET P&L", nTot > 0 ? f_usd(netCum) : "—", netCum >= 0 ? color.green : color.red)
-    row(5, "Expectancy / trade", na(expTr) ? "—" : f_usd(expTr), na(expTr) ? color.gray : expTr > 0 ? color.green : color.red)
-    row(6, "Worst single trade", nTot > 0 ? f_usd(worstTrade) : "—", worstTrade < 0 ? color.red : color.new(color.white, 10))
-    row(7, "Deepest underwater", nTot > 0 ? "-$" + str.tostring(worstMAE, format.volume) : "—", color.new(color.orange, 0))
-    row(8, "Max drawdown", nTot > 0 ? "-$" + str.tostring(maxDD, format.volume) : "—", maxDD > acct * 0.5 ? color.red : color.new(color.white, 10))
-    row(9, "Fees paid", nTot > 0 ? "-$" + str.tostring(feesPaid, format.volume) : "—", color.new(color.white, 30))
+    row(4, "Payoff (win:loss)", na(payoff) ? "—" : str.tostring(payoff, "#.##") + "x", na(payoff) ? color.gray : payoff >= 2 ? color.green : payoff >= 1 ? color.new(color.white, 0) : color.red)
+    row(5, "NET P&L", nTot > 0 ? f_usd(netCum) : "—", netCum >= 0 ? color.green : color.red)
+    row(6, "Expectancy / trade", na(expTr) ? "—" : f_usd(expTr), na(expTr) ? color.gray : expTr > 0 ? color.green : color.red)
+    row(7, "Best trade (runner)", nTot > 0 ? f_usd(bestTrade) : "—", color.new(#26c6da, 0))
+    row(8, "Worst single trade", nTot > 0 ? f_usd(worstTrade) : "—", worstTrade < 0 ? color.red : color.new(color.white, 10))
+    row(9, "Max drawdown", nTot > 0 ? "-$" + str.tostring(maxDD, format.volume) : "—", maxDD > acct * 0.5 ? color.red : color.new(color.white, 10))
     row(10, "Return on account", na(retPct) ? "—" : (retPct >= 0 ? "+" : "") + str.tostring(retPct, "#.#") + "%", na(retPct) ? color.gray : retPct >= 0 ? color.green : color.red)
     row(11, "VERDICT", ver, vc)
