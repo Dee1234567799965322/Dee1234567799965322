@@ -8,7 +8,13 @@ only thing that ever measured as non-random was trend following, and even that i
 marginal after cost and only clean on instruments that don't gap. The one
 constructive build ([`TrendParticipation.pine`](TrendParticipation.pine)) doesn't
 predict at all: it cuts drawdown 3–4× vs buy-and-hold, which is a calmer ride, not
-more money.*
+more money. The search was then re-run in plain dollars — fixed small targets,
+capped losses, a trailing runner, an elaborate four-confluence reversal — and
+back-tested in Python over a full year of real BTC; every honest version came out
+net-negative, including one that first printed a +\$43,758 holy-grail backtest that
+turned out to be a stop-placement bug. The final word came from Auction Cipher's
+own measurement engine, which grades its full signal as a hair WORSE than a coin
+flip (drift-free −8pp on its two real samples). The edge was never in the entry.*
 
 This is the empirical companion to the [`README`](README.md). The README tells
 the story of the **harness** ([`EdgeLab.pine`](EdgeLab.pine)) and the fifteen
@@ -215,12 +221,74 @@ the only defensible reason to trade that a month of measurement produced.
 Caveats stand: ~35–48 trades over a bull-heavy era, untested in a true multi-year
 bear. The only test left is forward.
 
+## The scalp chapter — measuring edge in dollars, not R
+
+The final stretch asked the question from the trader's side rather than the
+statistician's: *forget R, forget win rate — can a fixed small move (\$100–200 on
+1 BTC) be traded profitably if the loss is kept small?* It was measured in plain
+dollars ([`AuctionFixedScalp.pine`](AuctionFixedScalp.pine)), on Auction Cipher's
+real volume-profile value area, across nine BTC timeframes, and it produced three
+lessons that each killed a version of the idea:
+
+1. **A fixed target + a fixed stop is symmetric, and symmetric loses.** Wide stop →
+   a coin flip with an account-ending tail (30m: −67% in one flat fortnight). Tight
+   \$100 cap → the loss shrank but so did the win, and the thing bled to death on
+   fees and scratches (0% target-hit on several timeframes). *You cannot shrink the
+   loss without shrinking the win when the entry has no edge — they are the same
+   move in opposite directions.*
+2. **Asymmetry is the only escape, and it is real but not enough.** Keeping the
+   small capped loss and letting the winner run ([the trailing-runner build])
+   produced a genuine payoff of 2–16× (losses capped at −\$108, winners to +\$5k).
+   But the win rate collapsed to 5–15%, so over a **full year of real Coinbase
+   data** (not a two-week TradingView window) it was net-negative on every
+   adequately-sampled timeframe: 1h −\$1,935 over 51 trades, 6h ≈ break-even on 17.
+   The structure is right; the entry still cannot catch enough winners.
+3. **The fantasy backtest — the most valuable event in the month.** An elaborate
+   four-confluence reversal (money-flow + HTF value area + divergence + SFP) first
+   printed **+\$43,758, a 94.7% win rate, and a \$82 maximum drawdown** over a year.
+   A 94.7% win with near-zero drawdown on a trailing system is physically
+   impossible, so it was torn apart rather than believed — and it was a
+   stop-placement **bug**: the structural stop, built from the prior day's value
+   edge, could land on the *wrong side of entry* and book instant fake profits.
+   Fixed, the same strategy went **net-negative in every window.** This is exactly
+   how retail accounts die: a bug or an overfit prints a holy-grail backtest, it is
+   trusted, and reality collects. The discipline to distrust a too-good number is
+   the entire asset. ([`backtest/reversal_confluence.py`](backtest/reversal_confluence.py))
+
+## The source has the last word — Auction Cipher grades itself
+
+The deepest test needed no reimplementation. **Auction Cipher contains its own
+honest measurement engine** — a trade ledger with realistic *next-bar-open* fills,
+a drift-free edge with an MDL noise band, and a verdict it withholds when the
+sample is too thin. It is, independently, the same methodology this whole project
+is built on. Run on its own full four-layer signal (the delta, absorption and
+regime gates a Python port cannot reproduce), its own on-chart scoreboard reads:
+
+| Timeframe | Resolved | Hit % (break-even) | Expectancy | Drift-free edge | AC's own verdict |
+|---|---:|---:|---:|---:|---|
+| **30m** | 168 | 27% (34.9%) | **−0.09R** | **−8.1pp** ± 9.6 | "UNDERPOWERED — cannot resolve" |
+| **1h**  | 98  | 28% (35.4%) | **−0.16R** | **−8.2pp** ± 12.5 | "too few resolved trades" |
+| **4h**  | 38  | 40% (34.9%) | +0.15R | +4.9pp ± 14.7 | "too few resolved trades" |
+
+The two charts with a real sample (30m, 1h) **both land at drift-free −8pp** — not
+zero, slightly *negative*, which is what fading extremes into a trending market
+costs after fees. The 4h's small positive is a 38-trade outlier inside a ±14.7
+band. The four-layer gate filters 86–93% of signals down to 40–100 trades, so by
+its author's own note it can never gather a sample large enough to prove an edge —
+and the point estimate it does have is negative. **The best tool in the review,
+measured by its own honest engine, is a hair worse than a coin flip as a signal.**
+It remains an excellent *map* of where auctions happen; it is not a *trigger*.
+
 ## What it means
 
-**The edge is not in the signals.** Not in any of the eleven. A month of
-measurement could not find one entry trigger that beats chance. What *did* measure as real
+**The edge is not in the signals.** Not in a single one — not the dozen families,
+not the dollar-denominated scalps, not the four-confluence reversal, not Auction
+Cipher's own four-layer gate measured by its own engine. A month of measurement
+could not find one entry trigger that beats chance. What *did* measure as real
 was structural — the exit rule and the payoff skew of trend following — and it
 lives on the side of trading everyone finds boring: risk management, not entries.
+The last chapter sharpened it: even perfect loss control cannot rescue a
+no-edge entry, because shrinking the loss shrinks the win in lockstep.
 
 This matches the fifteen corrections in the README, every one of which killed a
 result by fixing *how a number was compared*, never by changing trading logic.
@@ -258,6 +326,10 @@ and it is treated as one.
   engines (`MagnetTest`, `TrapEngine`, `PositioningEngine`, `RegimeTest`,
   `SessionTest`, `ExcursionTest`, `SetupExcursion`, `InducementTest`,
   `SpeedLadder`)
+
+**The dollar-scalp chapter**
+- `AuctionFixedScalp.pine` — fixed-$ scalp → loss-management → trailing runner → trend filter, measured in dollars on Auction Cipher's real value area
+- `backtest/` — Python backtests over a full year of real Coinbase BTC: `backtest.py` (runner), `reversal_confluence.py` (the caught +$43k fantasy bug), `ac_signal_runner.py` (AC-core signal + runner, realistic fill), plus `btc_1h/6h/1d/15m.csv` data
 
 **Chart tools & utilities**
 - `AuctionCipher*.pine`, `AuctionFootprint*.pine`, `TradeJournal.pine`
