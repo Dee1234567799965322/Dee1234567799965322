@@ -53,6 +53,12 @@ bool  useLong  = input.bool(true, "Longs (fade VAL)", group = gA)
 bool  useShort = input.bool(true, "Shorts (fade VAH)", group = gA)
 bool  mShow    = input.bool(true, "Show dollar panel", group = gA)
 
+// ── Extra rule: liquidity sweep / Swing Failure Pattern ────────────────────────
+gL = "Liquidity sweep / SFP filter"
+bool  useSweep    = input.bool(true, "Require sweep / SFP to enter", group = gL, tooltip = "Only take the value-edge trade if price ALSO swept a swing low (longs) or swing high (shorts) and reclaimed it — a liquidity grab / Swing Failure Pattern.")
+int   sweepLen    = input.int(5, "Swing strength (pivot bars)", minval = 1, group = gL, tooltip = "Bigger = only major swing lows/highs count as the liquidity pool that must be swept.")
+int   sweepWindow = input.int(3, "Sweep stays valid for N bars", minval = 0, group = gL, tooltip = "The sweep can land on the entry bar (0) or up to N bars before the value-edge reclaim.")
+
 // ── Value area: connected levels, or rolling-VWAP proxy ────────────────────────
 float atr   = ta.atr(14)
 float tpv   = ta.sma(hlc3 * volume, vaLook)
@@ -72,11 +78,32 @@ float wt2 = ta.sma(wt1, 3)
 bool  wtUp = wt1 >= wt2
 bool  wtDn = wt1 <= wt2
 
-// ── Entry: value-area-edge rejection ───────────────────────────────────────────
+// ── Liquidity sweep / SFP confluence ───────────────────────────────────────────
+// A bullish sweep = price takes out a swing LOW then closes back above it (a
+// liquidity grab / Swing Failure Pattern). Mirror for bearish. Longs need a
+// recent bullish sweep, shorts a bearish one.
+float phS = ta.pivothigh(sweepLen, 1)
+float plS = ta.pivotlow(sweepLen, 1)
+var float swHi = na
+var float swLo = na
+if not na(phS)
+    swHi := phS
+if not na(plS)
+    swLo := plS
+bool bullSweep = not na(swLo) and low  < swLo and close > swLo
+bool bearSweep = not na(swHi) and high > swHi and close < swHi
+var int agoBull = 1000000
+var int agoBear = 1000000
+agoBull := bullSweep ? 0 : agoBull + 1
+agoBear := bearSweep ? 0 : agoBear + 1
+bool bullSweepOk = not useSweep or agoBull <= sweepWindow
+bool bearSweepOk = not useSweep or agoBear <= sweepWindow
+
+// ── Entry: value-area-edge rejection + (optional) sweep/SFP ────────────────────
 bool longRaw  = not na(VAL) and low  < VAL and close > VAL
 bool shortRaw = not na(VAH) and high > VAH and close < VAH
-bool longSig  = useLong  and longRaw  and (not requireWT or wtUp)
-bool shortSig = useShort and shortRaw and (not requireWT or wtDn) and not longSig
+bool longSig  = useLong  and longRaw  and (not requireWT or wtUp) and bullSweepOk
+bool shortSig = useShort and shortRaw and (not requireWT or wtDn) and bearSweepOk and not longSig
 
 // ── One position at a time ─────────────────────────────────────────────────────
 var int   pos      = 0
@@ -182,6 +209,8 @@ if barstate.isconfirmed
 
 plotshape(longSig  and pos == 0, "BUY",  shape.labelup,   location.belowbar, #089981, text = "BUY",  textcolor = color.white, size = size.small)
 plotshape(shortSig and pos == 0, "SELL", shape.labeldown, location.abovebar, #f23645, text = "SELL", textcolor = color.white, size = size.small)
+plotshape(useSweep and bullSweep and pos == 0, "sweep lo", shape.xcross, location.belowbar, color.new(#089981, 55), size = size.tiny)
+plotshape(useSweep and bearSweep and pos == 0, "sweep hi", shape.xcross, location.abovebar, color.new(#f23645, 55), size = size.tiny)
 plot(mShow ? VAH : na, "VAH", color = color.new(#26c6da, 40))
 plot(mShow ? VAL : na, "VAL", color = color.new(#26c6da, 40))
 plot(mShow ? POC : na, "POC", color = color.new(#ffb300, 50))
@@ -220,7 +249,7 @@ row(int r, string k, string v, color c) =>
 
 if mShow and barstate.islast
     table.cell(t, 0, 0, "AUCTION FIX-$ SCALP", text_color = color.white, text_size = size.small, text_halign = text.align_left)
-    table.cell(t, 1, 0, "$" + str.tostring(targetUsd, "#") + " / " + (stopMode == "Fixed $" ? "fix" : "VA") + " stop", text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    table.cell(t, 1, 0, "$" + str.tostring(targetUsd, "#") + "/" + (stopMode == "Fixed $" ? "fix" : "VA") + (useSweep ? "/SFP" : ""), text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
     row(1, "Trades (TP/stop/time)", str.tostring(nTP) + "/" + str.tostring(nStop) + "/" + str.tostring(nTime), color.new(color.white, 10))
     row(2, "Target-hit rate", na(tpRate) ? "—" : str.tostring(tpRate, "#.#") + "%", na(tpRate) ? color.gray : tpRate >= 70 ? color.green : color.new(color.white, 10))
     row(3, "Avg win / Avg loss", (na(avgWin) ? "—" : f_usd(avgWin)) + " / " + (na(avgLoss) ? "—" : f_usd(-avgLoss)), color.new(color.white, 10))
