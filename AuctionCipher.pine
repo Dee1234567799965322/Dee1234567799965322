@@ -3477,6 +3477,35 @@ bool rkOkL = not na(rkRL) and rkRL >= rMinEps
 bool rkOkS = not na(rkRS) and rkRS >= rMinEps
 
 // ============================================================================
+// 19h1b. LIVE RISK - position size for the signal pop-up / alert
+// ----------------------------------------------------------------------------
+// The fix for "I keep getting stopped out" is not a TIGHTER stop - a tighter
+// stop sits inside normal noise and guarantees it. The fix is a WIDER stop,
+// placed past the noise where the trade is genuinely wrong, paired with a SIZE
+// small enough that the wider stop still only costs a fixed, small amount.
+// Widen the stop and the size falls; the dollar risk never changes.
+//
+// No panel, no chart lines - this stays a calculation and shows up only inside
+// the existing signal pop-up and alert below, which is where it is needed.
+// Reuses this script's own structural stop (rkStopL/rkStopS) so the numbers
+// line up with the Risk Layer above, just pushed further out.
+string G_RM     = "22 - LIVE RISK (position size)"
+bool  rmOn       = input.bool(true, "Show size in signal pop-up / alert", group=G_RM)
+float rmAcct     = input.float(10000, "Account size ($)", minval=1, group=G_RM)
+float rmRiskPct  = input.float(0.5, "Risk per trade (% of account)", minval=0.01, maxval=10, step=0.1, group=G_RM,
+     tooltip="The one number that keeps you alive. 0.5% means ONE loss costs 0.5% of the account, whatever the stop distance - because size is derived from this, a wider stop just means a smaller size, never a bigger loss.")
+float rmExtraBuf = input.float(0.5, "Widen stop past structure (x ATR)", minval=0, maxval=5, step=0.1, group=G_RM,
+     tooltip="Pushes the stop further beyond the Risk Layer's structural stop so normal noise cannot reach it. Combined with the sizing above, a wider stop costs the same dollars - just a smaller position.")
+
+float rmRiskUsd = rmAcct * rmRiskPct / 100.0
+float rmStopL   = rkStopL - atr14 * rmExtraBuf
+float rmStopS   = rkStopS + atr14 * rmExtraBuf
+float rmDistL   = rkEntry - rmStopL
+float rmDistS   = rmStopS - rkEntry
+float rmSizeL   = rmDistL > 0 ? rmRiskUsd / rmDistL : na
+float rmSizeS   = rmDistS > 0 ? rmRiskUsd / rmDistS : na
+
+// ============================================================================
 // 19h2. THE TRADE LEDGER
 // ----------------------------------------------------------------------------
 // Declared here rather than beside the statistics that consume it, because the
@@ -5296,8 +5325,14 @@ f_drawGuide() =>
     string actLine = ""
     if chartBuy
         actLine := "\n>>> BUY SIGNAL - all four gates open."
+        if rmOn and not na(rmSizeL)
+            actLine += "\nSize " + str.tostring(rmSizeL, "#.####") + "u @ stop " + str.tostring(rmStopL, format.mintick) +
+                 "  (" + str.tostring(rmRiskPct, "#.##") + "% = $" + str.tostring(rmRiskUsd, "#") + " risk)"
     else if chartSell
         actLine := "\n>>> SELL SIGNAL - all four gates open."
+        if rmOn and not na(rmSizeS)
+            actLine += "\nSize " + str.tostring(rmSizeS, "#.####") + "u @ stop " + str.tostring(rmStopS, format.mintick) +
+                 "  (" + str.tostring(rmRiskPct, "#.##") + "% = $" + str.tostring(rmRiskUsd, "#") + " risk)"
 
     guideArr.push(label.new(bar_index + lblOffset + labMaxColUsed * labSpacing + guideGap, high + atr14 * 2, headline + actLine +
          "\nPrice is " + whereTxt + " - day type " + dayType + doTxt + htfLine + extremes + dnaTxt,
@@ -5766,6 +5801,14 @@ if chartSell
     alertMsg += "CHART SELL - context, location, trigger and proof all agree. Entry at the NEXT bar open" +
          (na(rkStopS) ? "" : ", stop " + str.tostring(rkStopS, format.mintick)) +
          (na(rkTgtS) ? "" : ", target " + str.tostring(rkTgtS, format.mintick)) + "." + standDown
+// Live size - wide stop, chosen so the dollar risk stays fixed. Same numbers
+// as the signal pop-up, folded into the alert so they travel to the phone too.
+if rmOn and (chartBuy or chartSell)
+    float rmS  = chartBuy ? rmSizeL : rmSizeS
+    float rmSt = chartBuy ? rmStopL : rmStopS
+    if not na(rmS)
+        alertMsg += "LIVE SIZE " + str.tostring(rmS, "#.###") + "u, wide stop " + str.tostring(rmSt, format.mintick) +
+             " (" + str.tostring(rmRiskPct, "#.##") + "% = $" + str.tostring(rmRiskUsd, "#") + " risk). "
 if chochUp
     alertMsg += "CHoCH up - structure shifted bullish. "
 if chochDn
