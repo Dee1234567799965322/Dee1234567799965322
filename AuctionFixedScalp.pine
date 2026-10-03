@@ -55,6 +55,11 @@ bool  useSweep    = input.bool(true, "Require sweep / SFP to enter", group = gL)
 int   sweepLen    = input.int(5, "Swing strength (pivot bars)", minval = 1, group = gL)
 int   sweepWindow = input.int(3, "Sweep stays valid for N bars", minval = 0, group = gL)
 
+// ── Trend filter — only trade WITH the trend (kills chop-bleed) ────────────────
+gTF = "Trend filter (stop chop-bleed)"
+bool  useTrend = input.bool(true, "Only trade with the trend", group = gTF, tooltip = "Longs only when price is above the trend EMA, shorts only when below. A runner bleeds in chop; this stops it firing when there is no trend to ride, so it only takes 'buy the dip in an uptrend / sell the rip in a downtrend' setups.")
+int   trendLen = input.int(200, "Trend EMA length", minval = 20, group = gTF)
+
 // ── Real volume profile — POC + 70% value area (ported from Auction Cipher) ────
 float atr = ta.atr(14)
 
@@ -127,6 +132,11 @@ float wt2 = ta.sma(wt1, 3)
 bool  wtUp = wt1 >= wt2
 bool  wtDn = wt1 <= wt2
 
+// ── Trend filter ───────────────────────────────────────────────────────────────
+float trendEma = ta.ema(close, trendLen)
+bool  trendUp  = close > trendEma
+bool  trendDn  = close < trendEma
+
 // ── Liquidity sweep / SFP confluence ───────────────────────────────────────────
 float phS = ta.pivothigh(sweepLen, 1)
 float plS = ta.pivotlow(sweepLen, 1)
@@ -148,8 +158,8 @@ bool bearSweepOk = not useSweep or agoBear <= sweepWindow
 // ── Entry: value-area-edge rejection + (optional) sweep/SFP ────────────────────
 bool longRaw  = not na(VAL) and low  < VAL and close > VAL
 bool shortRaw = not na(VAH) and high > VAH and close < VAH
-bool longSig  = useLong  and vaOk and longRaw  and (not requireWT or wtUp) and bullSweepOk
-bool shortSig = useShort and vaOk and shortRaw and (not requireWT or wtDn) and bearSweepOk and not longSig
+bool longSig  = useLong  and vaOk and longRaw  and (not requireWT or wtUp) and bullSweepOk and (not useTrend or trendUp)
+bool shortSig = useShort and vaOk and shortRaw and (not requireWT or wtDn) and bearSweepOk and (not useTrend or trendDn) and not longSig
 
 // ── One position at a time ─────────────────────────────────────────────────────
 var int   pos      = 0
@@ -273,6 +283,7 @@ plotshape(useSweep and bearSweep and not openedShort, "sweep hi", shape.xcross, 
 plot(mShow ? VAH : na, "VAH", color = color.new(#26c6da, 40))
 plot(mShow ? VAL : na, "VAL", color = color.new(#26c6da, 40))
 plot(mShow ? POC : na, "POC", color = color.new(#ffb300, 50))
+plot(mShow and useTrend ? trendEma : na, "Trend EMA", color = color.new(color.gray, 40))
 
 // ── Totals ─────────────────────────────────────────────────────────────────────
 int   nTot    = nTot_
