@@ -3560,37 +3560,6 @@ bool rkOkL = not na(rkRL) and rkRL >= rMinEps
 bool rkOkS = not na(rkRS) and rkRS >= rMinEps
 
 // ============================================================================
-// 19h1b. LIVE RISK MANAGER - position sizing + a wider "don't get wicked out" stop
-// ----------------------------------------------------------------------------
-// ADDED for live trading. It does NOT touch the signals, the ledger, or the
-// statistics above - it is a sizing calculator layered on top, so the measured
-// numbers stay honest. The point it exists to make:
-//
-//   A WIDE stop (placed past the noise) plus a SIZE chosen so that wide stop
-//   still costs a FIXED SMALL amount is how you avoid being stopped out without
-//   taking a big loss. The stop goes where the trade is WRONG; the SIZE - not a
-//   tighter stop - is what keeps the loss small. Widen the stop all you want;
-//   the size shrinks to hold the dollar risk constant.
-// ============================================================================
-string G_RM     = "~~ 22 - LIVE RISK MANAGER ~~"
-bool  rmOn       = input.bool(true,   "Show Live Risk / Size panel", group=G_RM)
-float rmAcct     = input.float(10000, "Account size ($)", minval=1, group=G_RM)
-float rmRiskPct  = input.float(0.5,   "Risk per trade (% of account)", minval=0.01, maxval=10, step=0.1, group=G_RM, tooltip="The one number that keeps you alive. 0.5% means ONE loss costs 0.5% of the account, whatever the stop distance. Because size is derived from this, a wider stop just means a smaller size - never a bigger loss.")
-float rmExtraBuf = input.float(0.5,   "Widen stop past structure (x ATR)", minval=0, maxval=5, step=0.1, group=G_RM, tooltip="Pushes the stop FURTHER beyond Auction Cipher's structural stop so normal noise cannot reach it. This is the cure for 'I keep getting wicked out' - combined with the sizing below, a wider stop costs the same dollars, just fewer shares.")
-bool  rmInAlert  = input.bool(true,   "Add live size to the alert", group=G_RM)
-string rmPos     = input.string("Bottom Left", "Panel position", options=["Bottom Left","Bottom Right","Top Left","Middle Right"], group=G_RM)
-
-float rmRiskUsd = rmAcct * rmRiskPct / 100.0
-float rmStopL   = rkStopL - atr14 * rmExtraBuf
-float rmStopS   = rkStopS + atr14 * rmExtraBuf
-float rmDistL   = rkEntry - rmStopL
-float rmDistS   = rmStopS - rkEntry
-float rmSizeL   = rmDistL > 0 ? rmRiskUsd / rmDistL : na
-float rmSizeS   = rmDistS > 0 ? rmRiskUsd / rmDistS : na
-float rmNotL    = na(rmSizeL) ? na : rmSizeL * rkEntry
-float rmNotS    = na(rmSizeS) ? na : rmSizeS * rkEntry
-
-// ============================================================================
 // 19h2. THE TRADE LEDGER
 // ----------------------------------------------------------------------------
 // Declared here rather than beside the statistics that consume it, because the
@@ -5918,14 +5887,6 @@ if chartSell
     alertMsg += "CHART SELL - context, location, trigger and proof all agree. Entry at the NEXT bar open" +
          (na(rkStopS) ? "" : ", stop " + str.tostring(rkStopS, format.mintick)) +
          (na(rkTgtS) ? "" : ", target " + str.tostring(rkTgtS, format.mintick)) + "." + standDown
-// Live sizing line - the wide stop and the size that keeps the dollar risk fixed.
-if rmInAlert and (chartBuy or chartSell)
-    float rmS  = chartBuy ? rmSizeL : rmSizeS
-    float rmSt = chartBuy ? rmStopL : rmStopS
-    if not na(rmS)
-        alertMsg += "LIVE RISK - wide stop " + str.tostring(rmSt, format.mintick) +
-             ", size " + str.tostring(rmS, "#.###") + " units (" + str.tostring(rmRiskPct, "#.##") +
-             "% = $" + str.tostring(rmRiskUsd, "#") + " risk). "
 if chochUp
     alertMsg += "CHoCH up - structure shifted bullish. "
 if chochDn
@@ -5957,32 +5918,4 @@ plotshape(formBear ? high : na, title="Forming Bear Divergence", location=locati
      style=shape.circle, size=size.tiny, color=color.new(cFdvDn, 25), offset=0, force_overlay=true)
 alertcondition(formBull, title="Forming bullish divergence", message="Forming bullish divergence - PROVISIONAL, not a confirmed signal")
 alertcondition(formBear, title="Forming bearish divergence", message="Forming bearish divergence - PROVISIONAL, not a confirmed signal")
-
-// ============================================================================
-// 22. LIVE RISK / SIZE PANEL
-// ----------------------------------------------------------------------------
-// The sizing calculator, on the chart. It answers the only question that keeps a
-// live account alive: "how big can this position be so that my stop - placed
-// WIDE, past the noise - still only costs my fixed small risk?" Set the stop
-// where the trade is wrong; read the size here; the dollar loss is fixed no
-// matter how wide the stop. Widen "stop past structure" and watch the size fall,
-// not the risk.
-// ============================================================================
-var table rmTab = table.new(f_tablePos(rmPos), 2, 7, bgcolor=color.new(color.black, 15),
-     border_color=color.new(color.gray, 60), border_width=1, frame_color=color.new(color.gray, 40), frame_width=1, force_overlay=true)
-if rmOn and barstate.islast
-    table.cell(rmTab, 0, 0, "LIVE RISK / SIZE", text_color=color.white, text_size=size.small, text_halign=text.align_left)
-    table.cell(rmTab, 1, 0, "$" + str.tostring(rmAcct, "#") + "  |  " + str.tostring(rmRiskPct, "#.##") + "%", text_color=color.new(color.white, 35), text_size=size.small, text_halign=text.align_right)
-    table.cell(rmTab, 0, 1, "Risk / trade", text_color=color.new(color.white, 20), text_size=size.small, text_halign=text.align_left)
-    table.cell(rmTab, 1, 1, "$" + str.tostring(rmRiskUsd, "#"), text_color=color.new(color.white, 0), text_size=size.small, text_halign=text.align_right)
-    table.cell(rmTab, 0, 2, "LONG  stop (wide)", text_color=color.new(#26a69a, 0), text_size=size.small, text_halign=text.align_left)
-    table.cell(rmTab, 1, 2, na(rmStopL) ? "-" : str.tostring(rmStopL, format.mintick), text_color=color.new(#26a69a, 0), text_size=size.small, text_halign=text.align_right)
-    table.cell(rmTab, 0, 3, "  size / lev", text_color=color.new(#26a69a, 20), text_size=size.small, text_halign=text.align_left)
-    table.cell(rmTab, 1, 3, na(rmSizeL) ? "-" : str.tostring(rmSizeL, "#.####") + " u / " + str.tostring(rmNotL / rmAcct, "#.#") + "x", text_color=color.new(#26a69a, 20), text_size=size.small, text_halign=text.align_right)
-    table.cell(rmTab, 0, 4, "SHORT stop (wide)", text_color=color.new(#ef5350, 0), text_size=size.small, text_halign=text.align_left)
-    table.cell(rmTab, 1, 4, na(rmStopS) ? "-" : str.tostring(rmStopS, format.mintick), text_color=color.new(#ef5350, 0), text_size=size.small, text_halign=text.align_right)
-    table.cell(rmTab, 0, 5, "  size / lev", text_color=color.new(#ef5350, 20), text_size=size.small, text_halign=text.align_left)
-    table.cell(rmTab, 1, 5, na(rmSizeS) ? "-" : str.tostring(rmSizeS, "#.####") + " u / " + str.tostring(rmNotS / rmAcct, "#.#") + "x", text_color=color.new(#ef5350, 20), text_size=size.small, text_halign=text.align_right)
-    table.cell(rmTab, 0, 6, "Stop widened", text_color=color.new(color.white, 40), text_size=size.small, text_halign=text.align_left)
-    table.cell(rmTab, 1, 6, "+" + str.tostring(rmExtraBuf, "#.#") + " ATR", text_color=color.new(color.white, 40), text_size=size.small, text_halign=text.align_right)
 
