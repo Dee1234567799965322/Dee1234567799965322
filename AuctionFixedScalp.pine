@@ -39,7 +39,16 @@ gS = "Stop placement"
 string stopMode = input.string("Structural (VA edge)", "Stop mode", options = ["Structural (VA edge)", "Fixed $"], group = gS, tooltip = "Structural: just beyond the value-area edge, out of the noise. Fixed $: a flat dollar stop.")
 float bufferAtr = input.float(0.5, "Buffer beyond edge (ATR)", step = 0.1, group = gS, tooltip = "How far past VAH/VAL the stop sits, so a normal wick does not trip it.")
 float stopUsd   = input.float(400, "Fixed stop ($, if Fixed mode)", step = 25, group = gS)
-float hardCapUsd= input.float(0, "Hard max loss cap ($, 0 = off)", step = 25, group = gS, tooltip = "Safety ceiling: never risk more than this even if the structural stop is further. 0 disables it.")
+
+// ── Loss management — THE EDGE IS HERE (make the loss small & slow) ─────────────
+// The month proved the entry is a coin flip, so profit cannot come from winning
+// more often. It can only come from LOSING SMALL. These three levers cap and cut
+// the loss so the average loss stays BELOW the +$ target. Watch the "Avg win /
+// Avg loss" row — the strategy is green only when avg loss < avg win.
+gLM = "Loss management (the edge)"
+float maxLossUsd = input.float(100, "Hard max loss per trade ($)", step = 10, group = gLM, tooltip = "Clamp every stop so no single loss exceeds this. Keep it BELOW your target — that is the whole point. 0 = no cap (dangerous).")
+bool  cutOnBreak = input.bool(true, "Cut early if value re-breaks (close beyond edge)", group = gLM, tooltip = "If a long closes back BELOW VAL (or a short back above VAH), the fade has failed — exit now for a small loss instead of waiting for the full stop. This is how the loss stays small.")
+float beAfterUsd = input.float(75, "Move stop to breakeven after +$", step = 5, group = gLM, tooltip = "Once the trade is this far in profit, move the stop to entry so a winner cannot turn into a loser. 0 = off.")
 
 // ── Auction value — REAL volume profile (Auction Cipher's engine) ──────────────
 gA = "Auction value (Auction Cipher engine)"
@@ -168,10 +177,12 @@ var float tgtPx    = na
 var float stopPx   = na
 var int   entryBar = na
 var float mae      = 0.0
+var bool  beLocked = false
 
 // ── Dollar ledger ──────────────────────────────────────────────────────────────
 var int   nTP = 0
 var int   nStop = 0
+var int   nCut = 0
 var int   nTime = 0
 var int   nWinNet = 0
 var float grossWin = 0.0
@@ -192,9 +203,15 @@ if barstate.isconfirmed
         float adv = pos == 1 ? entryPx - low : high - entryPx
         if adv > mae
             mae := adv
+        // breakeven lock: once far enough in profit, a winner can't become a loser
+        float fav = pos == 1 ? high - entryPx : entryPx - low
+        if beAfterUsd > 0 and not beLocked and fav * qty >= beAfterUsd
+            beLocked := true
+            stopPx := pos == 1 ? math.max(stopPx, entryPx) : math.min(stopPx, entryPx)
         bool  done = false
         bool  isTP = false
         bool  isStop = false
+        bool  isCut = false
         float exitPx = na
         if pos == 1
             if low <= stopPx
@@ -214,6 +231,11 @@ if barstate.isconfirmed
                 exitPx := tgtPx
                 isTP := true
                 done := true
+        // early cut: value re-broke, the fade failed — take the small loss now
+        if not done and cutOnBreak and ((pos == 1 and close < VAL) or (pos == -1 and close > VAH))
+            exitPx := close
+            isCut := true
+            done := true
         if not done and (bar_index - entryBar) >= maxBars
             exitPx := close
             done := true
@@ -224,6 +246,8 @@ if barstate.isconfirmed
             netCum += net
             if isTP
                 nTP += 1
+            else if isCut
+                nCut += 1
             else if isStop
                 nStop += 1
             else
@@ -252,10 +276,11 @@ if barstate.isconfirmed
             entryBar := bar_index
             mae := 0.0
             float sp = stopMode == "Structural (VA edge)" ? VAL - bufferAtr * atr : close - stopUsd / qty
-            if hardCapUsd > 0
-                sp := math.max(sp, close - hardCapUsd / qty)
+            if maxLossUsd > 0
+                sp := math.max(sp, close - maxLossUsd / qty)
             stopPx := sp
             tgtPx := close + targetUsd / qty
+            beLocked := false
         else if shortSig
             pos := -1
             openedShort := true
@@ -263,10 +288,11 @@ if barstate.isconfirmed
             entryBar := bar_index
             mae := 0.0
             float sp = stopMode == "Structural (VA edge)" ? VAH + bufferAtr * atr : close + stopUsd / qty
-            if hardCapUsd > 0
-                sp := math.min(sp, close + hardCapUsd / qty)
+            if maxLossUsd > 0
+                sp := math.min(sp, close + maxLossUsd / qty)
             stopPx := sp
             tgtPx := close - targetUsd / qty
+            beLocked := false
 
 plotshape(openedLong,  "BUY",  shape.labelup,   location.belowbar, #089981, text = "BUY",  textcolor = color.white, size = size.small)
 plotshape(openedShort, "SELL", shape.labeldown, location.abovebar, #f23645, text = "SELL", textcolor = color.white, size = size.small)
@@ -277,7 +303,7 @@ plot(mShow ? VAL : na, "VAL", color = color.new(#26c6da, 40))
 plot(mShow ? POC : na, "POC", color = color.new(#ffb300, 50))
 
 // ── Totals ─────────────────────────────────────────────────────────────────────
-int   nTot    = nTP + nStop + nTime
+int   nTot    = nTP + nStop + nCut + nTime
 float tpRate  = nTot > 0 ? nTP / float(nTot) * 100.0 : na
 float avgWin  = nWinNet > 0 ? grossWin / nWinNet : na
 int   nLossNet= nTot - nWinNet
@@ -311,7 +337,7 @@ row(int r, string k, string v, color c) =>
 if mShow and barstate.islast
     table.cell(t, 0, 0, "AUCTION FIX-$ SCALP", text_color = color.white, text_size = size.small, text_halign = text.align_left)
     table.cell(t, 1, 0, "$" + str.tostring(targetUsd, "#") + "/" + (stopMode == "Fixed $" ? "fix" : "VA") + (useSweep ? "/SFP" : ""), text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
-    row(1, "Trades (TP/stop/time)", str.tostring(nTP) + "/" + str.tostring(nStop) + "/" + str.tostring(nTime), color.new(color.white, 10))
+    row(1, "Trades (win/stop/cut)", str.tostring(nTP) + "/" + str.tostring(nStop) + "/" + str.tostring(nCut), color.new(color.white, 10))
     row(2, "Target-hit rate", na(tpRate) ? "—" : str.tostring(tpRate, "#.#") + "%", na(tpRate) ? color.gray : tpRate >= 70 ? color.green : color.new(color.white, 10))
     row(3, "Avg win / Avg loss", (na(avgWin) ? "—" : f_usd(avgWin)) + " / " + (na(avgLoss) ? "—" : f_usd(-avgLoss)), color.new(color.white, 10))
     row(4, "NET P&L", nTot > 0 ? f_usd(netCum) : "—", netCum >= 0 ? color.green : color.red)
