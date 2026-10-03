@@ -127,6 +127,9 @@ var float feesPaid = 0.0
 var float peakEq = 0.0
 var float maxDD = 0.0
 
+bool openedLong  = false
+bool openedShort = false
+
 if barstate.isconfirmed
     // manage open trade
     if pos != 0 and not na(entryPx)
@@ -188,6 +191,7 @@ if barstate.isconfirmed
     if pos == 0 and not na(atr) and atr > 0 and qty > 0
         if longSig
             pos := 1
+            openedLong := true
             entryPx := close
             entryBar := bar_index
             mae := 0.0
@@ -198,6 +202,7 @@ if barstate.isconfirmed
             tgtPx := close + targetUsd / qty
         else if shortSig
             pos := -1
+            openedShort := true
             entryPx := close
             entryBar := bar_index
             mae := 0.0
@@ -207,10 +212,10 @@ if barstate.isconfirmed
             stopPx := sp
             tgtPx := close - targetUsd / qty
 
-plotshape(longSig  and pos == 0, "BUY",  shape.labelup,   location.belowbar, #089981, text = "BUY",  textcolor = color.white, size = size.small)
-plotshape(shortSig and pos == 0, "SELL", shape.labeldown, location.abovebar, #f23645, text = "SELL", textcolor = color.white, size = size.small)
-plotshape(useSweep and bullSweep and pos == 0, "sweep lo", shape.xcross, location.belowbar, color.new(#089981, 55), size = size.tiny)
-plotshape(useSweep and bearSweep and pos == 0, "sweep hi", shape.xcross, location.abovebar, color.new(#f23645, 55), size = size.tiny)
+plotshape(openedLong,  "BUY",  shape.labelup,   location.belowbar, #089981, text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(openedShort, "SELL", shape.labeldown, location.abovebar, #f23645, text = "SELL", textcolor = color.white, size = size.small)
+plotshape(useSweep and bullSweep and not openedLong,  "sweep lo", shape.xcross, location.belowbar, color.new(#089981, 55), size = size.tiny)
+plotshape(useSweep and bearSweep and not openedShort, "sweep hi", shape.xcross, location.abovebar, color.new(#f23645, 55), size = size.tiny)
 plot(mShow ? VAH : na, "VAH", color = color.new(#26c6da, 40))
 plot(mShow ? VAL : na, "VAL", color = color.new(#26c6da, 40))
 plot(mShow ? POC : na, "POC", color = color.new(#ffb300, 50))
