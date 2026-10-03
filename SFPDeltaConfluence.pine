@@ -1,0 +1,173 @@
+//@version=6
+// SFP + Volume-Delta Confluence — MEASURED
+// Built from two LuxAlgo ideas: Swing Failure Pattern (a liquidity sweep that
+// closes back inside) + Volume Delta (net buy/sell inside the bar, from LTF).
+//
+// THE THESIS (the "matching point"):
+//   bullish = price sweeps BELOW a swing low then closes back inside (bullish SFP)
+//             AND delta is POSITIVE (buyers absorbed the sweep)  -> BUY
+//   bearish = price sweeps ABOVE a swing high then closes back inside
+//             AND delta is NEGATIVE (sellers absorbed)           -> SELL
+// The SFP says WHERE a trap happened; the delta says WHO won it.
+//
+// HONEST NOTE: SFP is an ICT/SMC liquidity sweep (measured 4x in this project
+// as a coin flip) and delta-confirmation (measured as a coin flip too). Stacking
+// them is the best-motivated combo tried, but the panel below judges it against
+// the arithmetic 33.3% null with an MDL gate. Read the VERDICT, not the arrows.
+indicator("SFP + Delta Confluence — MEASURED", "SFP·Δ TEST", overlay = true, max_labels_count = 500)
+
+// ── Inputs ────────────────────────────────────────────────────────────────────
+gS = "Swing Failure"
+int  len     = input.int(5, "Swing strength", minval = 1, group = gS)
+bool useBull = input.bool(true, "Bullish SFP (long)", group = gS)
+bool useBear = input.bool(true, "Bearish SFP (short)", group = gS)
+
+gD = "Volume Delta confirmation"
+bool   useDelta = input.bool(true, "Require delta to agree", group = gD, tooltip = "Long needs net buying on the sweep bar, short needs net selling. Delta from lower-timeframe volume — a proxy, not true bid/ask. On FX/metals volume is synthetic.")
+string res      = input.timeframe("1", "Delta intrabar timeframe", group = gD)
+float  deltaMin = input.float(0.0, "Min |delta/volume| (0-1)", minval = 0.0, maxval = 1.0, step = 0.05, group = gD)
+
+gM = "Edge Measurement"
+float mTgt = input.float(2.0, "Target (ATR) = win", step = 0.5, group = gM)
+float mStop= input.float(1.0, "Stop (ATR) = loss", step = 0.5, group = gM)
+int   mHor = input.int(100, "Give-up horizon (bars)", minval = 10, group = gM)
+int   mMin = input.int(30, "Min resolved for verdict", minval = 10, group = gM)
+float mCost= input.float(0.05, "Round-trip cost (R)", step = 0.005, group = gM)
+bool  mShow= input.bool(true, "Show edge panel", group = gM)
+
+// ── Swings (LuxAlgo-style: pivot high/low, confirmed 1 bar back) ───────────────
+float ph = ta.pivothigh(len, 1)
+float pl = ta.pivotlow(len, 1)
+var float swHi = na
+var float swLo = na
+if not na(ph)
+    swHi := ph
+if not na(pl)
+    swLo := pl
+
+// ── Volume Delta from lower timeframe (LuxAlgo Volume Delta Candles approach) ──
+[bV, sV] = request.security_lower_tf(syminfo.tickerid, res, [close > open ? volume : 0.0, close < open ? volume : 0.0])
+float bullV = bV.size() > 0 ? bV.sum() : na
+float bearV = sV.size() > 0 ? sV.sum() : na
+float delta = not na(bullV) and not na(bearV) ? bullV - bearV : na
+float dNorm = not na(delta) and volume > 0 ? delta / volume : na
+
+bool deltaBuyOk  = not useDelta or (not na(dNorm) and dNorm >  deltaMin)
+bool deltaSellOk = not useDelta or (not na(dNorm) and dNorm < -deltaMin)
+
+// ── SFP detection (wick pierces swing, body closes back inside) ────────────────
+bool bearSFP = useBear and not na(swHi) and high > swHi and open < swHi and close < swHi
+bool bullSFP = useBull and not na(swLo) and low  < swLo and open > swLo and close > swLo
+
+var int lastSig = 0
+bool sellSig = bearSFP and deltaSellOk and lastSig != -1
+bool buySig  = bullSFP and deltaBuyOk  and lastSig != 1 and not sellSig
+if buySig
+    lastSig := 1
+if sellSig
+    lastSig := -1
+
+plotshape(buySig,  "BUY",  shape.labelup,   location.belowbar, #089981, text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(sellSig, "SELL", shape.labeldown, location.abovebar, #f23645, text = "SELL", textcolor = color.white, size = size.small)
+plotshape(bearSFP and not sellSig, "SFP hi", shape.xcross, location.abovebar, color.new(#f23645, 50), size = size.tiny)
+plotshape(bullSFP and not buySig,  "SFP lo", shape.xcross, location.belowbar, color.new(#089981, 50), size = size.tiny)
+
+alertcondition(buySig,  "SFP Delta Buy",  "Bullish SFP with buy-side delta")
+alertcondition(sellSig, "SFP Delta Sell", "Bearish SFP with sell-side delta")
+
+// ── Edge measurement (same ruler as the other families) ───────────────────────
+float mAtr  = ta.atr(14)
+float mNull = 100.0 / (1.0 + mTgt / mStop)
+var int[]   qDir = array.new_int(0)
+var float[] qTgt = array.new_float(0)
+var float[] qStp = array.new_float(0)
+var int[]   qBar = array.new_int(0)
+var int mWL = 0
+var int mLL = 0
+var int mWS = 0
+var int mLS = 0
+
+if barstate.isconfirmed
+    if array.size(qDir) > 0
+        for i = array.size(qDir) - 1 to 0
+            int   d  = array.get(qDir, i)
+            float tg = array.get(qTgt, i)
+            float st = array.get(qStp, i)
+            int   sb = array.get(qBar, i)
+            bool  done = false
+            if d == 1
+                if high >= tg
+                    mWL += 1
+                    done := true
+                else if low <= st
+                    mLL += 1
+                    done := true
+            else
+                if low <= tg
+                    mWS += 1
+                    done := true
+                else if high >= st
+                    mLS += 1
+                    done := true
+            if not done and (bar_index - sb) >= mHor
+                done := true
+            if done
+                array.remove(qDir, i)
+                array.remove(qTgt, i)
+                array.remove(qStp, i)
+                array.remove(qBar, i)
+    if buySig and not na(mAtr) and mAtr > 0
+        array.push(qDir, 1)
+        array.push(qTgt, close + mTgt * mAtr)
+        array.push(qStp, close - mStop * mAtr)
+        array.push(qBar, bar_index)
+    if sellSig and not na(mAtr) and mAtr > 0
+        array.push(qDir, -1)
+        array.push(qTgt, close - mTgt * mAtr)
+        array.push(qStp, close + mStop * mAtr)
+        array.push(qBar, bar_index)
+
+int mnL = mWL + mLL
+int mnS = mWS + mLS
+int mRes = mnL + mnS
+float mhL = mnL > 0 ? mWL / float(mnL) * 100.0 : na
+float mhS = mnS > 0 ? mWS / float(mnS) * 100.0 : na
+float mDF = not na(mhL) and not na(mhS) ? (mhL + mhS) / 2.0 : na(mhL) ? mhS : mhL
+float mEdge = na(mDF) ? na : mDF - mNull
+float mpL = mnL > 0 ? (mWL + 0.5) / (mnL + 1.0) : na
+float mpS = mnS > 0 ? (mWS + 0.5) / (mnS + 1.0) : na
+float mvL = mnL > 0 ? mpL * (1.0 - mpL) / mnL : na
+float mvS = mnS > 0 ? mpS * (1.0 - mpS) / mnS : na
+float mSe = not na(mvL) and not na(mvS) ? 0.5 * math.sqrt(mvL + mvS) : na(mvL) ? math.sqrt(mvS) : math.sqrt(mvL)
+float mMdl = na(mSe) ? na : 2.8 * mSe * 100.0
+float mExp = na(mDF) ? na : 3.0 * (mDF / 100.0) - 1.0
+float mExpN = na(mExp) ? na : mExp - mCost
+
+string mVer = "NEED MORE DATA"
+color  mVc = color.gray
+if mRes >= mMin and not na(mEdge) and not na(mMdl)
+    if mEdge > mMdl and mEdge > 0
+        mVer := "EDGE +" + str.tostring(mEdge, "#.#") + "pp"
+        mVc := color.green
+    else
+        mVer := "COIN FLIP"
+        mVc := color.new(color.red, 20)
+
+var table mt = table.new(position.bottom_right, 2, 9, bgcolor = color.new(color.black, 12), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+mrow(int r, string k, string v, color c) =>
+    table.cell(mt, 0, r, k, text_color = color.new(color.white, 20), text_size = size.small, text_halign = text.align_left)
+    table.cell(mt, 1, r, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+    r
+mpp(float v) => na(v) ? "—" : str.tostring(v, "#.#") + "%"
+
+if mShow and barstate.islast
+    table.cell(mt, 0, 0, "SFP·Δ EDGE TEST", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(mt, 1, 0, "2R/1R " + str.tostring(mHor) + "b", text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    mrow(1, "Resolved L / S", str.tostring(mnL) + " / " + str.tostring(mnS), color.new(color.white, 10))
+    mrow(2, "Long / Short hit", mpp(mhL) + " / " + mpp(mhS), color.new(color.white, 10))
+    mrow(3, "Coin-flip null", mpp(mNull), color.new(color.white, 45))
+    mrow(4, "Drift-free hit", mpp(mDF), color.new(color.white, 0))
+    mrow(5, "Edge / must beat", (na(mEdge) ? "—" : (mEdge >= 0 ? "+" : "") + str.tostring(mEdge, "#.#") + "pp") + " / " + (na(mMdl) ? "—" : "±" + str.tostring(mMdl, "#.#")), na(mEdge) ? color.gray : mEdge > mMdl and mEdge > 0 ? color.green : color.red)
+    mrow(6, "Expectancy net", na(mExpN) ? "—" : (mExpN >= 0 ? "+" : "") + str.tostring(mExpN, "#.##") + "R", na(mExpN) ? color.gray : mExpN > 0 ? color.green : color.red)
+    mrow(7, "Delta now", na(dNorm) ? "—" : (dNorm >= 0 ? "+" : "") + str.tostring(dNorm * 100, "#") + "%", na(dNorm) ? color.gray : dNorm >= 0 ? #089981 : #f23645)
+    mrow(8, "VERDICT", mVer, mVc)
