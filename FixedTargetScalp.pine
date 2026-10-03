@@ -1,0 +1,202 @@
+//@version=6
+// Fixed-$ Target — MEASURED IN DOLLARS, NOT RR
+// ───────────────────────────────────────────────────────────────────────────
+// Built for how YOU actually trade: high lots, a small fixed BTC move, judged on
+// net dollars and the worst trade — NOT risk:reward. This panel speaks your
+// language: profit target in $, your lot size, your account, and the one number
+// that decides everything — does the account END UP or DOWN after the fees and
+// the rare big loser are both counted.
+//
+// WHY THIS IS THE RIGHT RULER FOR YOU:
+//   - A tiny target with no stop WINS most of the time (BTC wiggles your target
+//     constantly). High win rate is REAL and expected — that is not the question.
+//   - The question is NET $: the fees you pay on every trade, plus the rare move
+//     that runs against a no-stop / high-lot position, vs the pile of small wins.
+//   - Turn the stop OFF (your "never stopped out") and watch "Worst trade" and
+//     "Max drawdown". That is where the truth of no-stop trading shows up.
+//
+// THE FEE TRAP (arithmetic, not opinion): round-trip fee = price x lots x cost%.
+// Your profit = move x lots. So to clear fees the MOVE must beat price x cost%x2
+// (~$85 on BTC at 0.05%/side). A $30 move for a $150 profit on big lots pays MORE
+// in fees than it makes. Higher lots do not help — they raise the fee in lockstep.
+// The "Break-even move" row shows this directly; if it is bigger than your target
+// move, every win is a net loss before a single bad trade.
+indicator("Fixed-$ Target — MEASURED", "FIX$", overlay = true, max_labels_count = 500)
+
+// ── Your trade (dollars, not RR) ───────────────────────────────────────────────
+gT = "Your trade (dollars, not RR)"
+float targetUsd = input.float(150, "Profit target per trade ($)", step = 10, group = gT)
+float qty       = input.float(5.0, "Lots (BTC per trade)", step = 0.1, group = gT, tooltip = "Your 'higher lots'. Profit = move x lots, but fees = price x lots x cost%, so lots do NOT improve the fee math.")
+bool  useStop   = input.bool(false, "Use a catastrophe stop", group = gT, tooltip = "OFF = your 'never stopped out'. Leave it off and READ the Worst trade / Max drawdown rows — that is where no-stop risk hides.")
+float maxLossUsd= input.float(2000, "Max loss per trade ($, if stop on)", step = 100, group = gT)
+int   maxBars   = input.int(200, "Give up after N bars (time exit)", minval = 10, group = gT)
+float costPct   = input.float(0.05, "Fee + slippage per side (%)", step = 0.01, group = gT, tooltip = "BTC perp taker ~0.05% each way. Charged round-trip on notional = price x lots.")
+float acct      = input.float(10000, "Account size ($)", step = 1000, group = gT)
+
+// ── Entry — 'those moments' (mean-reversion stretch) ──────────────────────────
+// The month proved the ENTRY does not add directional edge; it is here so the
+// test is real, and it is the right shape for a small-target style (fade a stretch,
+// take the snap back). Swap it freely — the dollar math below is what decides.
+gE = "Entry — the moment"
+int   meanLen  = input.int(50, "Mean length (EMA)", minval = 5, group = gE)
+float kATR     = input.float(1.5, "Stretch to fade (ATR from mean)", step = 0.1, group = gE)
+bool  useLong  = input.bool(true, "Longs (buy the dip)", group = gE)
+bool  useShort = input.bool(true, "Shorts (sell the rip)", group = gE)
+bool  mShow    = input.bool(true, "Show dollar panel", group = gE)
+
+float ema = ta.ema(close, meanLen)
+float atr = ta.atr(14)
+
+bool longSig  = useLong  and close < ema - kATR * atr and close > open
+bool shortSig = useShort and close > ema + kATR * atr and close < open and not longSig
+
+// ── Derived move sizes ─────────────────────────────────────────────────────────
+float tgtPts  = qty > 0 ? targetUsd  / qty : na     // price move needed to make the target
+float stopPts = qty > 0 ? maxLossUsd / qty : na     // price move that is the max loss
+
+// ── One position at a time (a scalper is flat between trades) ──────────────────
+var int   pos      = 0
+var float entryPx  = na
+var float tgtPx    = na
+var float stopPx   = na
+var int   entryBar = na
+var float mae      = 0.0     // worst adverse PRICE move so far this trade
+
+// ── Dollar ledger ──────────────────────────────────────────────────────────────
+var int   nTP    = 0         // target hit
+var int   nStop  = 0         // stop hit
+var int   nTime  = 0         // timed out
+var int   nWinNet= 0         // trades net-positive after fees
+var float grossWin  = 0.0    // sum of positive net $
+var float grossLoss = 0.0    // sum of |negative net $|
+var float netCum    = 0.0
+var float worstTrade= 0.0    // most negative single-trade net $
+var float worstMAE  = 0.0    // deepest a trade ever went underwater ($)
+var float feesPaid  = 0.0
+var float peakEq    = 0.0
+var float maxDD     = 0.0
+
+if barstate.isconfirmed
+    // ---- manage an open trade ----
+    if pos != 0 and not na(entryPx)
+        float adv = pos == 1 ? entryPx - low : high - entryPx
+        if adv > mae
+            mae := adv
+        bool  done = false
+        bool  isTP = false
+        bool  isStop = false
+        float pnl  = na
+        if pos == 1
+            if useStop and low <= stopPx
+                pnl := -stopPts * qty
+                isStop := true
+                done := true
+            else if high >= tgtPx
+                pnl := tgtPts * qty
+                isTP := true
+                done := true
+        else
+            if useStop and high >= stopPx
+                pnl := -stopPts * qty
+                isStop := true
+                done := true
+            else if low <= tgtPx
+                pnl := tgtPts * qty
+                isTP := true
+                done := true
+        if not done and (bar_index - entryBar) >= maxBars
+            pnl := (pos == 1 ? close - entryPx : entryPx - close) * qty
+            done := true
+        if done
+            float cost = entryPx * qty * costPct / 100.0 * 2.0
+            float net  = pnl - cost
+            feesPaid += cost
+            netCum   += net
+            if isTP
+                nTP += 1
+            else if isStop
+                nStop += 1
+            else
+                nTime += 1
+            if net >= 0
+                nWinNet += 1
+                grossWin += net
+            else
+                grossLoss += -net
+            if net < worstTrade
+                worstTrade := net
+            if mae * qty > worstMAE
+                worstMAE := mae * qty
+            if netCum > peakEq
+                peakEq := netCum
+            float dd = peakEq - netCum
+            if dd > maxDD
+                maxDD := dd
+            pos := 0
+    // ---- open a new trade when flat ----
+    if pos == 0 and not na(atr) and atr > 0 and qty > 0
+        if longSig
+            pos := 1
+            entryPx := close
+            tgtPx := close + tgtPts
+            stopPx := close - stopPts
+            entryBar := bar_index
+            mae := 0.0
+        else if shortSig
+            pos := -1
+            entryPx := close
+            tgtPx := close - tgtPts
+            stopPx := close + stopPts
+            entryBar := bar_index
+            mae := 0.0
+
+plotshape(longSig  and pos == 0, "BUY",  shape.labelup,   location.belowbar, #089981, text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(shortSig and pos == 0, "SELL", shape.labeldown, location.abovebar, #f23645, text = "SELL", textcolor = color.white, size = size.small)
+
+// ── Totals ─────────────────────────────────────────────────────────────────────
+int   nTot    = nTP + nStop + nTime
+float tpRate  = nTot > 0 ? nTP / float(nTot) * 100.0 : na
+float avgWin  = nWinNet > 0 ? grossWin / nWinNet : na
+int   nLossNet= nTot - nWinNet
+float avgLoss = nLossNet > 0 ? grossLoss / nLossNet : na
+float beMove  = close * costPct / 100.0 * 2.0        // price move just to cover fees
+float retPct  = acct > 0 ? netCum / acct * 100.0 : na
+bool  wiped   = maxDD >= acct and nTot > 0
+
+// ── Verdict (in dollars) ───────────────────────────────────────────────────────
+string ver = "NEED TRADES"
+color  vc  = color.gray
+if nTot >= 20
+    if wiped
+        ver := "ACCOUNT WIPED"
+        vc  := color.new(color.red, 0)
+    else if netCum > 0
+        ver := "NET +$" + str.tostring(netCum, format.volume)
+        vc  := color.green
+    else
+        ver := "NET -$" + str.tostring(-netCum, format.volume)
+        vc  := color.new(color.red, 10)
+
+// ── Panel (all dollars) ────────────────────────────────────────────────────────
+f_usd(float v) => (v >= 0 ? "+$" : "-$") + str.tostring(math.abs(v), format.volume)
+
+var table t = table.new(position.bottom_right, 2, 12, bgcolor = color.new(color.black, 10), border_color = color.new(color.gray, 60), border_width = 1, frame_color = color.new(color.gray, 40), frame_width = 1)
+row(int r, string k, string v, color c) =>
+    table.cell(t, 0, r, k, text_color = color.new(color.white, 20), text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, r, v, text_color = c, text_size = size.small, text_halign = text.align_right)
+    r
+
+if mShow and barstate.islast
+    table.cell(t, 0, 0, "FIXED-$ TARGET", text_color = color.white, text_size = size.small, text_halign = text.align_left)
+    table.cell(t, 1, 0, "$" + str.tostring(targetUsd, "#") + " x " + str.tostring(qty, "#.#") + "lot", text_color = color.new(color.white, 45), text_size = size.small, text_halign = text.align_right)
+    row(1, "Trades (TP/stop/time)", str.tostring(nTP) + "/" + str.tostring(nStop) + "/" + str.tostring(nTime), color.new(color.white, 10))
+    row(2, "Target-hit rate", na(tpRate) ? "—" : str.tostring(tpRate, "#.#") + "%", na(tpRate) ? color.gray : tpRate >= 70 ? color.green : color.new(color.white, 10))
+    row(3, "Move need / break-even", (na(tgtPts) ? "—" : "$" + str.tostring(tgtPts, "#")) + " / $" + str.tostring(beMove, "#"), na(tgtPts) ? color.gray : tgtPts > beMove ? color.new(color.white, 10) : color.red)
+    row(4, "NET P&L", f_usd(netCum), netCum >= 0 ? color.green : color.red)
+    row(5, "Avg win / Avg loss", (na(avgWin) ? "—" : f_usd(avgWin)) + " / " + (na(avgLoss) ? "—" : f_usd(-avgLoss)), color.new(color.white, 10))
+    row(6, "Worst single trade", nTot > 0 ? f_usd(worstTrade) : "—", worstTrade < 0 ? color.red : color.new(color.white, 10))
+    row(7, "Deepest underwater", nTot > 0 ? "-$" + str.tostring(worstMAE, format.volume) : "—", color.new(color.orange, 0))
+    row(8, "Max drawdown", nTot > 0 ? "-$" + str.tostring(maxDD, format.volume) : "—", maxDD > acct * 0.5 ? color.red : color.new(color.white, 10))
+    row(9, "Fees paid", nTot > 0 ? "-$" + str.tostring(feesPaid, format.volume) : "—", color.new(color.white, 30))
+    row(10, "Return on account", na(retPct) ? "—" : (retPct >= 0 ? "+" : "") + str.tostring(retPct, "#.#") + "%", na(retPct) ? color.gray : retPct >= 0 ? color.green : color.red)
+    row(11, "VERDICT", ver, vc)
