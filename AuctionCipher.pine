@@ -1761,20 +1761,17 @@ if dnaTape and barstate.islast
 // side (buyers or sellers) the bar's volume actually went to. A bar can
 // close green on net SELLING delta and this is the one place that shows it.
 //
-// GEOMETRY: the original hands plotcandle its two levels as (base,base,
-// value,value) without sorting them, which on one side of the delta makes
-// "high" the smaller number - the same invalid-OHLC shape this file already
-// found and fixed once, in the BigBeluga glow candle. Sorted here so it
-// never happens.
+// COST: a second plotcandle is FOUR plot slots (open/high/low/close each
+// count), same as the DNA ghost glow above already costs. This script was
+// already near TradingView's 64-plot ceiling, so this is a single plot() -
+// one slot - marking the delta-skewed point rather than a filled body. Same
+// information (where in the bar's range the volume actually sided), cheaper.
 // ============================================================================
-bool   dcOn    = input.bool(false, "Show Delta-Weighted Body", group=G_DNAV)
-string dcMode  = input.string("Full Body", "Delta Body Style", options=["Full Body", "Half Body"], group=G_DNAV)
-color  dcUpCol = input.color(color.new(#089981, 30), "Delta Body - Buyers Dominant", group=G_DNAV)
-color  dcDnCol = input.color(color.new(#f23645, 30), "Delta Body - Sellers Dominant", group=G_DNAV)
+bool   dcOn    = input.bool(false, "Show Delta-Weighted Marker", group=G_DNAV)
+string dcMode  = input.string("Full Body", "Delta Marker Style", options=["Full Body", "Half Body"], group=G_DNAV)
+color  dcUpCol = input.color(color.new(#089981, 0), "Delta Marker - Buyers Dominant", group=G_DNAV)
+color  dcDnCol = input.color(color.new(#f23645, 0), "Delta Marker - Sellers Dominant", group=G_DNAV)
 
-// Computed at top level, every bar, like every other plot in this file - the
-// ghost glow above is the precedent. dcOn/barClosed gate the VALUES, not the
-// call, so the plotcandle call itself stays unconditional.
 float dAbs  = math.abs(open - close)
 float dMin  = math.min(open, close)
 float dMax  = math.max(open, close)
@@ -1782,11 +1779,9 @@ float dAvg  = (open + close) / 2.0
 float dNorm = math.max(-1.0, math.min(1.0, deltaRatio))
 float dBase = dcMode == "Half Body" ? dAvg : (dNorm >= 0 ? dMin : dMax)
 float dVal  = dcMode == "Half Body" ? dAvg + dNorm * dAbs / 2.0 : (dNorm >= 0 ? dMin + math.abs(dNorm) * dAbs : dMax - math.abs(dNorm) * dAbs)
-float dTop  = dcOn and barClosed ? math.max(dBase, dVal) : na
-float dBot  = dcOn and barClosed ? math.min(dBase, dVal) : na
 color dCol  = dNorm >= 0 ? dcUpCol : dcDnCol
-plotcandle(dTop, dTop, dBot, dBot, title="Delta Body", color=dCol, wickcolor=na,
-     bordercolor=na, force_overlay=true)
+plot(dcOn and barClosed ? dVal : na, title="Delta-Weighted Marker", style=plot.style_circles,
+     color=dCol, linewidth=2, force_overlay=true)
 
 // ============================================================================
 // 12d. VOLUME BUBBLES - percentile volume clusters
