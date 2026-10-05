@@ -3789,12 +3789,12 @@ float ofSwing = not na(dHiIn) and not na(dLoIn) ? dHiIn - dLoIn : na
 
 // --- absorption candidates from this bar's own rows
 // Moved into a function to keep the main body under Pine's size cap.
-// ofBarPoc declared here, not inside the function, so the assignment below
-// reaches a global - and plain (non-var), so a bar f_ofRows never runs on
-// starts na rather than redrawing last bar's marker on this bar's x position.
+// A function cannot reassign a variable declared outside it - it can only
+// return one for the caller to assign. outPoc is local; ofBarPoc below is
+// the global, set at the call site from the return value, not in here.
 bool  ofShowPoc = input.bool(false, "Show Intrabar Volume POC", group=G_OF)
-float ofBarPoc = na
 f_ofRows() =>
+    float outPoc  = na
     float ofStep = (high - low) / ofRows
     if ofStep > 0
         array<float> ofBuy = array.new<float>(ofRows, 0.0)
@@ -3822,7 +3822,7 @@ f_ofRows() =>
                 if v > pocV
                     pocV := v
                     pocRow := i
-            ofBarPoc := low + (pocRow + 0.5) * ofStep
+            outPoc := low + (pocRow + 0.5) * ofStep
             float avgRow = ofSum / ofRows
             int band = math.max(1, math.min(ofRows, int(math.round(ofRows * ofAbsEdge / 100.0))))
 
@@ -3852,9 +3852,9 @@ f_ofRows() =>
             while ofLvls.size() > ofAbsKeep
                 OfLvl gone = ofLvls.shift()
                 line.delete(gone.ln)
+    outPoc
 
-if ofOn and barClosed and high > low and ltfOk
-    f_ofRows()
+float ofBarPoc = ofOn and barClosed and high > low and ltfOk ? f_ofRows() : na
 
 plot(ofOn and ofShowPoc ? ofBarPoc : na, title="Intrabar Volume POC",
      style=plot.style_circles, color=cOfAbs, linewidth=2)
