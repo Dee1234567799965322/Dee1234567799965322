@@ -1761,27 +1761,37 @@ if dnaTape and barstate.islast
 // side (buyers or sellers) the bar's volume actually went to. A bar can
 // close green on net SELLING delta and this is the one place that shows it.
 //
-// COST: a second plotcandle is FOUR plot slots (open/high/low/close each
-// count), same as the DNA ghost glow above already costs. This script was
-// already near TradingView's 64-plot ceiling, so this is a single plot() -
-// one slot - marking the delta-skewed point rather than a filled body. Same
-// information (where in the bar's range the volume actually sided), cheaper.
+// COST: plot()/plotshape()/plotcandle() share ONE 64-slot budget for the
+// whole script, and this file was already close to it before any of this
+// section existed - a plotcandle body (4 slots) or even a single plot()
+// (1 slot) both risked tipping it over, which is exactly what happened.
+// label.new() draws under a COMPLETELY SEPARATE budget (max_labels_count,
+// already declared at 500, nowhere near full) - the same reason Market
+// Structure's swing tags and DNA's volume circles are labels, not plots.
+// Capped and pushed through the same leak-prevention pattern as those.
 // ============================================================================
 bool   dcOn    = input.bool(false, "Show Delta-Weighted Marker", group=G_DNAV)
 string dcMode  = input.string("Full Body", "Delta Marker Style", options=["Full Body", "Half Body"], group=G_DNAV)
 color  dcUpCol = input.color(color.new(#089981, 0), "Delta Marker - Buyers Dominant", group=G_DNAV)
 color  dcDnCol = input.color(color.new(#f23645, 0), "Delta Marker - Sellers Dominant", group=G_DNAV)
 
-float dAbs  = math.abs(open - close)
-float dMin  = math.min(open, close)
-float dMax  = math.max(open, close)
-float dAvg  = (open + close) / 2.0
-float dNorm = math.max(-1.0, math.min(1.0, deltaRatio))
-float dBase = dcMode == "Half Body" ? dAvg : (dNorm >= 0 ? dMin : dMax)
-float dVal  = dcMode == "Half Body" ? dAvg + dNorm * dAbs / 2.0 : (dNorm >= 0 ? dMin + math.abs(dNorm) * dAbs : dMax - math.abs(dNorm) * dAbs)
-color dCol  = dNorm >= 0 ? dcUpCol : dcDnCol
-plot(dcOn and barClosed ? dVal : na, title="Delta-Weighted Marker", style=plot.style_circles,
-     color=dCol, linewidth=2, force_overlay=true)
+var array<label> dcLblArr = array.new<label>()
+f_pushDcLbl(label l) =>
+    dcLblArr.push(l)
+    while dcLblArr.size() > 300
+        label.delete(dcLblArr.shift())
+
+if dcOn and barClosed
+    float dAbs  = math.abs(open - close)
+    float dMin  = math.min(open, close)
+    float dMax  = math.max(open, close)
+    float dAvg  = (open + close) / 2.0
+    float dNorm = math.max(-1.0, math.min(1.0, deltaRatio))
+    float dVal  = dcMode == "Half Body" ? dAvg + dNorm * dAbs / 2.0 : (dNorm >= 0 ? dMin + math.abs(dNorm) * dAbs : dMax - math.abs(dNorm) * dAbs)
+    color dCol  = dNorm >= 0 ? dcUpCol : dcDnCol
+    f_pushDcLbl(label.new(bar_index, dVal, "—", xloc=xloc.bar_index,
+         style=label.style_label_center, textcolor=dCol, color=color(na),
+         size=size.tiny, force_overlay=true))
 
 // ============================================================================
 // 12d. VOLUME BUBBLES - percentile volume clusters
@@ -3851,8 +3861,18 @@ f_ofRows() =>
 
 float ofBarPoc = ofOn and barClosed and high > low and ltfOk ? f_ofRows() : na
 
-plot(ofOn and ofShowPoc ? ofBarPoc : na, title="Intrabar Volume POC",
-     style=plot.style_circles, color=cOfAbs, linewidth=2)
+// label.new(), not plot() - see the delta-marker comment above for why. Same
+// leak-prevention pattern as the other pushed-and-capped arrays in this file.
+var array<label> ofPocLblArr = array.new<label>()
+f_pushOfPocLbl(label l) =>
+    ofPocLblArr.push(l)
+    while ofPocLblArr.size() > 300
+        label.delete(ofPocLblArr.shift())
+
+if ofOn and ofShowPoc and barClosed and not na(ofBarPoc)
+    f_pushOfPocLbl(label.new(bar_index, ofBarPoc, "•", xloc=xloc.bar_index,
+         style=label.style_label_center, textcolor=cOfAbs, color=color(na),
+         size=size.tiny, force_overlay=true))
 
 // --- confirm what held, delete what broke
 float ofTol = atr14 * 0.15
@@ -4124,6 +4144,13 @@ bool atHighEdge = barsSinceRejHigh <= alignWin and confAtHighRej >= csigConfMin
 // highest high (bull) / lowest low (bear) already reached since that swing -
 // real follow-through, not just the wick. That second stage is what keeps
 // this from firing on every wick, which is the accuracy difference.
+//
+// Drawn with label.new() through f_pushStrLabel - the same push-and-cap
+// array Market Structure's own BOS/CHoCH tags already use above - rather
+// than plotshape(). plotshape shares the script's single 64-slot plot
+// budget; this file was already close to that ceiling, and two more
+// plotshape calls tipped it over. Labels have their own separate budget
+// (max_labels_count, already 500) nowhere near full.
 // ============================================================================
 bool  sfpOn = input.bool(false, "Show Swing Sweep Triangles", group=G_STR)
 var bool  sfpBullActive = false
@@ -4132,8 +4159,6 @@ var float sfpBullOppos  = na
 var bool  sfpBearActive = false
 var float sfpBearOrig   = na
 var float sfpBearOppos  = na
-bool sfpBullConfirm = false
-bool sfpBearConfirm = false
 
 if sfpOn and strOn and barClosed
     if f_rejUp(sLo) and not na(sLoIdx)
@@ -4161,21 +4186,20 @@ if sfpOn and strOn and barClosed
 
     if sfpBullActive
         if close > sfpBullOppos
-            sfpBullConfirm := true
-            sfpBullActive  := false
+            sfpBullActive := false
+            f_pushStrLabel(label.new(bar_index, low, "▲", xloc=xloc.bar_index,
+                 style=label.style_label_up, textcolor=cSwing, color=color(na),
+                 size=size.small, force_overlay=true))
         else if close < sfpBullOrig
             sfpBullActive := false
     if sfpBearActive
         if close < sfpBearOppos
-            sfpBearConfirm := true
-            sfpBearActive  := false
+            sfpBearActive := false
+            f_pushStrLabel(label.new(bar_index, high, "▼", xloc=xloc.bar_index,
+                 style=label.style_label_down, textcolor=cSwing, color=color(na),
+                 size=size.small, force_overlay=true))
         else if close > sfpBearOrig
             sfpBearActive := false
-
-plotshape(sfpBullConfirm ? low : na, "Swing Sweep - Bull", shape.triangleup, location.belowbar,
-     color=cSwing, size=size.tiny)
-plotshape(sfpBearConfirm ? high : na, "Swing Sweep - Bear", shape.triangledown, location.abovebar,
-     color=cSwing, size=size.tiny)
 
 // Declared here, not up with the divergence block, because it reads the
 // LOCATION gate and Pine needs that to exist first.
