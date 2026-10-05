@@ -3489,7 +3489,7 @@ bool rkOkS = not na(rkRS) and rkRS >= rMinEps
 // the existing signal pop-up and alert below, which is where it is needed.
 // Reuses this script's own structural stop (rkStopL/rkStopS) so the numbers
 // line up with the Risk Layer above, just pushed further out.
-string G_RM     = "22 - LIVE RISK (position size)"
+string G_RM     = "25 - LIVE RISK (position size)"
 bool  rmOn       = input.bool(true, "Show size in signal pop-up / alert", group=G_RM)
 float rmAcct     = input.float(10000, "Account size ($)", minval=1, group=G_RM)
 float rmRiskPct  = input.float(0.5, "Risk per trade (% of account)", minval=0.01, maxval=10, step=0.1, group=G_RM,
