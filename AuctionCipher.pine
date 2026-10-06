@@ -4147,27 +4147,33 @@ bool atHighEdge = barsSinceRejHigh <= alignWin and confAtHighRej >= csigConfMin
 // real follow-through, not just the wick. That second stage is what keeps
 // this from firing on every wick, which is the accuracy difference.
 //
-// An "SFP" tag and a swing line mark the candidate the moment it appears;
-// the triangle marks confirmation. line.new()/label.new() budget is
-// separate from plot()'s - see the delta body comment above. TOKEN COST:
-// the compile-size ceiling (100,256 tokens, separate from the plot-count
-// ceiling) got hit once this section carried a second line per side too -
-// trimmed back to one line per side to fit.
+// An "SFP" tag, a swing line, and a dotted line at the confirmation level
+// mark the candidate the moment it appears; the triangle marks
+// confirmation. line.new()/label.new() budget is separate from plot()'s -
+// see the delta body comment above. TOKEN COST: the oppos line is anchored
+// at the SAME bar as the swing line (sLoIdx/sHiIdx) rather than tracking
+// the exact bar its own extreme occurred on - visually close enough, and
+// it is what let this fit back under the compile-size ceiling (100,256
+// tokens, separate from the plot-count ceiling) after the first version
+// of this line went over it.
 // ============================================================================
 bool  sfpOn = input.bool(false, "Show Swing Sweep Triangles", group=G_STR)
 var bool  sfpBullActive = false
 var float sfpBullOrig   = na
 var float sfpBullOppos  = na
 var line  sfpBullSwLn   = na
+var line  sfpBullOpLn   = na
 var label sfpBullTag    = na
 var bool  sfpBearActive = false
 var float sfpBearOrig   = na
 var float sfpBearOppos  = na
 var line  sfpBearSwLn   = na
+var line  sfpBearOpLn   = na
 var label sfpBearTag    = na
 
-f_sfpClear(line sw, label tag) =>
+f_sfpClear(line sw, line op, label tag) =>
     line.delete(sw)
+    line.delete(op)
     label.delete(tag)
 
 if sfpOn and strOn and barClosed
@@ -4179,12 +4185,15 @@ if sfpOn and strOn and barClosed
         for k = 1 to sfpBullSpan
             sfpBullHi := math.max(sfpBullHi, high[k])
         if sfpBullActive
-            f_sfpClear(sfpBullSwLn, sfpBullTag)
+            f_sfpClear(sfpBullSwLn, sfpBullOpLn, sfpBullTag)
         sfpBullActive := true
         sfpBullOrig   := sLo
         sfpBullOppos  := sfpBullHi
         sfpBullSwLn := line.new(sLoIdx, sLo, bar_index, sLo, xloc=xloc.bar_index,
              color=C_UP, width=1, extend=extend.right, force_overlay=true)
+        sfpBullOpLn := line.new(sLoIdx, sfpBullHi, bar_index, sfpBullHi,
+             xloc=xloc.bar_index, color=C_UP, style=line.style_dotted,
+             width=1, extend=extend.right, force_overlay=true)
         sfpBullTag  := label.new(bar_index, low, "SFP", xloc=xloc.bar_index,
              style=label.style_label_up, textcolor=C_UP, color=color(na),
              size=size.tiny, force_overlay=true)
@@ -4194,12 +4203,15 @@ if sfpOn and strOn and barClosed
         for k = 1 to sfpBearSpan
             sfpBearLo := math.min(sfpBearLo, low[k])
         if sfpBearActive
-            f_sfpClear(sfpBearSwLn, sfpBearTag)
+            f_sfpClear(sfpBearSwLn, sfpBearOpLn, sfpBearTag)
         sfpBearActive := true
         sfpBearOrig   := sHi
         sfpBearOppos  := sfpBearLo
         sfpBearSwLn := line.new(sHiIdx, sHi, bar_index, sHi, xloc=xloc.bar_index,
              color=C_DN, width=1, extend=extend.right, force_overlay=true)
+        sfpBearOpLn := line.new(sHiIdx, sfpBearLo, bar_index, sfpBearLo,
+             xloc=xloc.bar_index, color=C_DN, style=line.style_dotted,
+             width=1, extend=extend.right, force_overlay=true)
         sfpBearTag  := label.new(bar_index, high, "SFP", xloc=xloc.bar_index,
              style=label.style_label_down, textcolor=C_DN, color=color(na),
              size=size.tiny, force_overlay=true)
@@ -4209,23 +4221,27 @@ if sfpOn and strOn and barClosed
             sfpBullActive := false
             line.set_x2(sfpBullSwLn, bar_index)
             line.set_extend(sfpBullSwLn, extend.none)
+            line.set_x2(sfpBullOpLn, bar_index)
+            line.set_extend(sfpBullOpLn, extend.none)
             f_pushStrLabel(label.new(bar_index, low, "▲", xloc=xloc.bar_index,
                  style=label.style_label_up, textcolor=C_UP, color=color(na),
                  size=size.small, force_overlay=true))
         else if close < sfpBullOrig
             sfpBullActive := false
-            f_sfpClear(sfpBullSwLn, sfpBullTag)
+            f_sfpClear(sfpBullSwLn, sfpBullOpLn, sfpBullTag)
     if sfpBearActive
         if close < sfpBearOppos
             sfpBearActive := false
             line.set_x2(sfpBearSwLn, bar_index)
             line.set_extend(sfpBearSwLn, extend.none)
+            line.set_x2(sfpBearOpLn, bar_index)
+            line.set_extend(sfpBearOpLn, extend.none)
             f_pushStrLabel(label.new(bar_index, high, "▼", xloc=xloc.bar_index,
                  style=label.style_label_down, textcolor=C_DN, color=color(na),
                  size=size.small, force_overlay=true))
         else if close > sfpBearOrig
             sfpBearActive := false
-            f_sfpClear(sfpBearSwLn, sfpBearTag)
+            f_sfpClear(sfpBearSwLn, sfpBearOpLn, sfpBearTag)
 
 // Declared here, not up with the divergence block, because it reads the
 // LOCATION gate and Pine needs that to exist first.
