@@ -1756,9 +1756,7 @@ if dnaTape and barstate.islast
 // using deltaRatio (section 3), already computed for DNA/CVD. box.new() -
 // own budget, not plot()'s 64-slot one - draws a real filled rectangle.
 // ============================================================================
-bool  dcOn    = input.bool(false, "Show Delta-Weighted Body", group=G_DNAV)
-color dcUpCol = input.color(color.new(#089981, 30), "Delta Body - Buyers Dominant", group=G_DNAV)
-color dcDnCol = input.color(color.new(#f23645, 30), "Delta Body - Sellers Dominant", group=G_DNAV)
+bool dcOn = input.bool(false, "Show Delta-Weighted Body", group=G_DNAV)
 
 var array<box> dcBoxArr = array.new<box>()
 f_pushDcBox(box b) =>
@@ -1774,7 +1772,7 @@ if dcOn and barClosed
     float dVal  = dNorm >= 0 ? dMin + math.abs(dNorm) * dAbs : dMax - math.abs(dNorm) * dAbs
     float dTop  = math.max(dNorm >= 0 ? dMin : dMax, dVal)
     float dBot  = math.min(dNorm >= 0 ? dMin : dMax, dVal)
-    color dCol  = dNorm >= 0 ? dcUpCol : dcDnCol
+    color dCol  = color.new(dNorm >= 0 ? C_UP : C_DN, 30)
     f_pushDcBox(box.new(bar_index - 1, dTop, bar_index, dBot, border_color=na,
          bgcolor=dCol, force_overlay=true))
 
@@ -4143,6 +4141,10 @@ f_sfpClear(line sw, line op, label tag) =>
     line.delete(op)
     label.delete(tag)
 
+f_sfpFreeze(line ln) =>
+    line.set_x2(ln, bar_index)
+    line.set_extend(ln, extend.none)
+
 if sfpOn and strOn and barClosed
     if f_rejUp(sLo) and not na(sLoIdx)
         int   sfpBullSpan = math.min(480, bar_index - sLoIdx)
@@ -4184,10 +4186,8 @@ if sfpOn and strOn and barClosed
     if sfpBullActive
         if close > sfpBullOppos
             sfpBullActive := false
-            line.set_x2(sfpBullSwLn, bar_index)
-            line.set_extend(sfpBullSwLn, extend.none)
-            line.set_x2(sfpBullOpLn, bar_index)
-            line.set_extend(sfpBullOpLn, extend.none)
+            f_sfpFreeze(sfpBullSwLn)
+            f_sfpFreeze(sfpBullOpLn)
             f_pushStrLabel(label.new(bar_index, low, "▲", xloc=xloc.bar_index,
                  style=label.style_label_up, textcolor=C_UP, color=color(na),
                  size=size.small, force_overlay=true))
@@ -4197,10 +4197,8 @@ if sfpOn and strOn and barClosed
     if sfpBearActive
         if close < sfpBearOppos
             sfpBearActive := false
-            line.set_x2(sfpBearSwLn, bar_index)
-            line.set_extend(sfpBearSwLn, extend.none)
-            line.set_x2(sfpBearOpLn, bar_index)
-            line.set_extend(sfpBearOpLn, extend.none)
+            f_sfpFreeze(sfpBearSwLn)
+            f_sfpFreeze(sfpBearOpLn)
             f_pushStrLabel(label.new(bar_index, high, "▼", xloc=xloc.bar_index,
                  style=label.style_label_down, textcolor=C_DN, color=color(na),
                  size=size.small, force_overlay=true))
