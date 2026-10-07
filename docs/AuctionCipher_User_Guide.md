@@ -1,6 +1,147 @@
-# Auction Cipher — Settings Menu Guide
+# Auction Cipher — User Guide
 
-Oct 7, 2026 · @Zahin Farhat
+Oct 7, 2026
+
+Part 1 explains how to use the indicator. Part 2 is the full settings reference.
+
+# Part 1 — How to use it
+
+## Set up in five minutes
+
+Do these once per chart. After that, the indicator tells you where the trade locations are, when a setup is complete, and what size to trade.
+
+1. **Add it.** Open the Pine Editor, paste the code from `AuctionCipher.pine` in your GitHub repo, click *Add to chart*. It draws on the price chart and opens one lower pane.
+2. **Pick a preset.** Settings → *\* START HERE* → **Chart Preset**. Use **Clean** while trading, **Standard** while studying.
+3. **Check the instrument.** Leave **Instrument Profile** on *Auto-detect* for BTC and gold. For anything else, set it to *Manual* and choose **Period Mode** in group 1.
+4. **Enter your real numbers.** Group *25 - LIVE RISK*: **Account size ($)** and **Risk per trade (%)**. Start at 0.5% or less.
+5. **Create one alert.** TradingView *Alert* → Condition: *Auction Cipher* → **Any alert() function call** → *Once per bar close*. Every BUY/SELL, with its size and stop, arrives through this single alert.
+
+Best timeframes: **1h** for intraday, **4h** for swings. On 15m and below the signals did not hold up in testing (see the last section).
+
+## Reading the chart
+
+Three places carry everything: the **read box** at the top right of price, the **ACTION** row in the dashboard, and the **levels**. The read box and ACTION are the only two that tell you to do something; every other mark is evidence.
+
+**The two you act on**
+
+| Where | What it says | Meaning |
+| --- | --- | --- |
+| Read box, first line | BALANCE / IMBALANCE / TRANSITION + an instruction | Today's playbook (next section). |
+| Read box | >>> BUY SIGNAL + Size …u @ stop … | A complete setup, with your position size and stop. |
+| Dashboard ACTION | WAIT | Nothing to do. |
+| Dashboard ACTION | buy setting up / sell setting up | Three gates open; the fourth is missing. Get ready, don't enter. |
+| Dashboard ACTION | BUY 2.0R / SELL 2.0R | Signal live, with its reward-to-risk. |
+| Dashboard ACTION | CONFLICT | Both sides qualified. Stay out. |
+
+**Levels and marks on the price chart**
+
+| You see | It is | Use it as |
+| --- | --- | --- |
+| Grey lines labelled prior POC / VAH / VAL | Yesterday's value area | The main places to look for a trade. |
+| Amber line (POC), cyan lines (VAH/VAL) | Today's developing value | Targets and context. |
+| Pink line nPOC | An old POC price never went back to | A magnet — likely target. |
+| Green IB lines | Initial balance (opening range) | Breakout reference. |
+| Orange line | VWAP | Fair price now; far from it = stretched. |
+| Yellow/red lines | Weekly POC / VAH / VAL | The bigger picture's edges. |
+| Green BUY / red SELL label | A full four-gate signal | Your entry (next section). |
+| Red and green boxes after a signal | Stop zone and target zone | Where you are wrong, where you get paid. |
+| × marked TP | Target reached | Trade done. |
+| Orange square above a bar | Absorption | Someone is defending this price. |
+| Yellow × | Liquidation cascade | Forced selling/buying; often overshoots, then reverses. |
+| BOS / CHoCH labels | Structure break with / against trend | CHoCH = first warning the trend may turn. |
+| Grey boxes with a small profile | Balance area | Its edges are trade locations; a break out of it can run. |
+
+**The lower pane**
+
+| You see | Meaning |
+| --- | --- |
+| Dark waves crossing | WaveTrend momentum. The cross is the TRIGGER. |
+| Green/red area near zero | Money flow — green = buyers in control. |
+| Yellow dot / white dot | Momentum cross up / down. Big dot = a divergence came with it. |
+| Circle / diamond on the waves | Confirmed WaveTrend / CVD divergence (marked 5 bars back — a delay, not a repaint). |
+| Faint early marker | Divergence still forming. A warning only; it can disappear. |
+| Strip at the bottom | Trend ribbon: green bullish, red bearish structure. |
+
+## Before you trade: pick the playbook
+
+The first line of the read box decides what kind of trade you are allowed to take today. Read it before every session and only take signals that agree with it.
+
+| Read box says | What the market is doing | Your playbook |
+| --- | --- | --- |
+| **BALANCE — Fade the edges back to POC** | Two-way trade inside a range | Sell near VAH, buy near VAL, target the POC. Above value → sells favoured; below value → buys favoured; mid-value → wait for an edge. |
+| **BALANCE by value, but a TREND DAY is running — do NOT fade** | Range on paper, but today keeps extending | No fading. Wait for the range to stop expanding, or trade only with the direction. |
+| **IMBALANCE — Go with it, do not fade** | Value is moving to a new area | Trade with the move only. Targets: the untested POC shown in the read. |
+| **TRANSITION — Stand down** | The auction hasn't decided | No trade. |
+
+The lines under the headline add detail:
+
+- **Price is above value (expensive) / below value (cheap) / inside value** — where price sits against today's value area.
+- **Zoomed out: price is …** — the same against the weekly value area. A buy into weekly value from below is stronger than one into weekly resistance.
+- **High/Low is POOR** — unfinished; price usually comes back to it. Good target, bad place to fade.
+- **High/Low is EXCESS** — finished; the rejection was real. Good place to lean against.
+- **ABSORPTION now / EXHAUSTION now** — a live warning on the current bar.
+
+**Pre-session checklist**
+
+- [ ] Read the headline and note the playbook.
+- [ ] Note where price sits: above, below or inside value.
+- [ ] Mark the two nearest trade locations: prior VAH/VAL, nPOC, weekly edge.
+- [ ] Check for a POOR high or low to use as a target.
+- [ ] Decide which side you are allowed to trade. Ignore signals on the other side.
+
+## Taking a BUY or SELL
+
+A signal is only confirmed when its bar closes, so you enter on the **next bar's open**, never at the signal bar's close. The alert and the read box give you every number you need.
+
+1. **The signal prints.** A green BUY or red SELL label appears, ACTION shows *BUY 2.0R* (or SELL), and the alert arrives: *CHART BUY … Entry at the NEXT bar open, stop X, target Y. Stand down if the open leaves less than 1.5R. LIVE SIZE 0.1u, wide stop Z ($50 risk).*
+2. **Check the playbook.** Does it match the read box? A buy on an IMBALANCE-down day, or any signal on TRANSITION, gets skipped.
+3. **Wait for the next bar to open.** If price opened so far toward the target that less than 1.5R is left (your *Minimum R*), skip it.
+4. **Enter at market** with the size from the **LIVE SIZE** line.
+5. **Put your stop at the wide stop price** (Z). The size was calculated for that stop, so this keeps your loss at exactly your risk amount.
+6. **Put your target at the target price** (Y), the top of the green box. It is capped at 2R by default.
+
+**Worked example (BTC):** account $10,000, risk 0.5% = $50. Entry 60,000, wide stop 59,500 → distance $500 → size $50 ÷ $500 = **0.1 BTC**. If the stop is hit you lose $50, whatever the distance.
+
+Two stops are shown on purpose. The **red box** is the tighter structural stop that the statistics measure. The **wide stop** sits 0.5× ATR beyond it so normal noise doesn't tag you out. Trade the wide stop together with the size printed next to it. For futures, the size is in ounces or coins, so divide by the contract size (GC = 100 oz, MGC = 10 oz).
+
+## Managing and exiting the trade
+
+Once you're in, the plan is fixed: leave the stop and target alone and let one of three things end the trade.
+
+| What happens | On the chart | What you do |
+| --- | --- | --- |
+| Target reached | × marked **TP** | Take the profit at the target. Don't hold for more — in testing, trades that ran past 2R usually gave it back. |
+| Stop reached | Price trades through the stop | Accept the loss. It is the planned risk amount, nothing more. |
+| A full opposite signal appears | SELL while you're long (or BUY while short) | Close at market. The reason for the trade is gone. Go flat; don't flip into the new direction. |
+
+Rules while a trade is open:
+
+- **Don't tighten the stop.** In the backtest, stops tighter than about 1.5× ATR never reduced losses; they only got hit more often.
+- **No new signal will show** while a trade is open (*One Trade At A Time* is on). That is deliberate.
+- **Track it live** in the statistics table: the *Open now (live R)* row shows how far in profit or loss the open trade is, in R.
+- **CHoCH or absorption against you** near the target is a reason to take profit early, not to add to the position.
+
+## Check it works before you risk money
+
+Auction Cipher shows you where a trade makes sense; it does not guarantee the trade wins. Our testing over the past month never proved a reliable edge. On 15m no stop setting was profitable, and on 1h the best result was a thin +$331 over 71 trades. Prove it on your own market first.
+
+**Test it on your symbol and timeframe**
+
+1. Load as much history as TradingView allows on the chart you plan to trade.
+2. Set **Slippage (ticks)** in group 21 to what your exchange really costs you.
+3. Read the statistics table: **Expectancy R/trade** must be above 0, and the trade count should be at least 20 — 100+ is better. Check the *Verdict (drift-controlled)* row too.
+4. Paper trade the steps above for 2–4 weeks, or about 20 trades, before using real money.
+5. Change **one setting at a time**, then re-read the statistics. Never change settings because of one loss.
+
+**Rules that protect the account** (suggested limits — adjust to your situation)
+
+- Risk 0.5% or less per trade. Size always comes from the LIVE SIZE line, never by feel.
+- Stop for the day after 2 losses in a row, or once the day is down 1.5%.
+- One trade at a time. No revenge trades and no adding to a loser.
+- No signal that disagrees with the read box. TRANSITION means no trades.
+- Keep a simple log: date, signal, entry, stop, exit, R. After 20 trades, compare your R to the statistics table.
+
+# Part 2 — Settings reference
 
 ## How to use this guide
 
