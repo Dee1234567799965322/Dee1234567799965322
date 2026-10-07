@@ -353,6 +353,8 @@ string riskFill = input.string("Next bar open (realistic)", "Assumed Fill",
      tooltip="Where the statistics assume you actually got filled.\n\nThe signal is only KNOWN at the close of its bar, so you cannot have bought at that close - the first price available to you is the next bar's open. Measuring from the signal bar's close quietly credits you with a fill nobody could have taken, and overstates expectancy by that distance on every single trade.\n\nLeave this on the realistic setting unless you are comparing against something that measures the optimistic way.")
 float riskSlipT = input.float(0.0, "Slippage (ticks)", minval=0.0, maxval=200.0, group=G_RISK,
      tooltip="Applied against you on entry - buys fill higher, sells fill lower. Set it to what your venue actually costs you and the expectancy row becomes something you can trust.")
+float riskFee = input.float(0.1, "Fees + Spread, round trip (%)", minval=0.0, maxval=2.0, step=0.01, group=G_RISK,
+     tooltip="Exchange fees plus spread for entering AND exiting, as a percent of price. Charged on every trade. 0.1 is typical for crypto taker fees; set your venue's real number.")
 float riskTgtCap = input.float(2.0, "Cap Target at (R)", minval=0.0, maxval=20.0, step=0.5, group=G_RISK,
      tooltip="MEASURED DEFAULT, changed from 0 (off). Across three matched A/B runs on 30m gold, capping at 2R beat no cap on REALISED money every time - by 20.5R, 6.4R and 28.5R. Realised means win plus loss plus flat: outcomes you could actually have banked.\n\nThe headline Total R sometimes went DOWN when the cap went on, which is why this took so long to settle. That fall was the expired bucket: uncapped, trades sat past 2R waiting for a 3R target until the outcome horizon gave up on them and booked the unrealised R as profit. Capped, those same trades hit their target and became wins. The R did not disappear, it moved from paper into the bank.\n\nIt also matches what seven samples had already said: winners land near 2R while targets were being set near 2.9R.\n\n0 = off. The target is otherwise always a STRUCTURAL level - the next place the auction has to visit - and nothing caps how far away that is.\n\nRead your own statistics before setting this. If R from wins minus R from losses is NEGATIVE while R from flat is strongly POSITIVE, the trades are reaching profit and then giving it back before the structural target: the entries work and the target is too far. A cap turns that into realised R.\n\nThe cap can never sit closer than Minimum R, or the setup would fail its own filter the moment it was drawn.\n\nLeave HEADROOM. Setting the cap equal to Minimum R gives the trade none: fills happen at the next bar's open, R is recomputed from the price you actually got, and any adverse open then drops it under the minimum and the signal is dropped as unfilled. If Minimum R is 1.5, cap at 2 - or lower Minimum R first.")
 int   riskExtend= input.int(25, "Box Extend (bars)", minval=5, maxval=200, group=G_RISK)
@@ -750,6 +752,11 @@ f_tablePos(string s) =>
         "Top Left"     => position.top_left
         "Bottom Right" => position.bottom_right
         "Bottom Left"  => position.bottom_left
+        // these three were offered by the Gate Audit menu but missing here,
+        // so "Middle Left" drew at middle right, on top of the DNA tape
+        "Middle Left"  => position.middle_left
+        "Top Center"   => position.top_center
+        "Bottom Center" => position.bottom_center
         => position.middle_right
 
 // Returns [poc, vah, val, rangeHigh, rangeLow, ok, bins, binsUp]
@@ -1348,11 +1355,17 @@ if barstate.islast and aucOn
 // ============================================================================
 // 11. NAKED POC MAINTENANCE
 // ============================================================================
+float npocHitUp = na
+float npocHitDn = na
 if showNpoc and aucOn and barClosed
     if npocs.size() > 0
         for i = npocs.size() - 1 to 0
             Npoc n = npocs.get(i)
             if high >= n.price and low <= n.price
+                if n.price < close
+                    npocHitDn := na(npocHitDn) ? n.price : math.max(npocHitDn, n.price)
+                else
+                    npocHitUp := na(npocHitUp) ? n.price : math.min(npocHitUp, n.price)
                 line.delete(n.ln)
                 npocs.remove(i)
 
@@ -2906,7 +2919,12 @@ if not na(wtPivHi)
     pvHiPx  := high[divLbR]
 
 
-[cvBull, cvBear, cvBullH, cvBearH, cvPLV, cvPLI, cvPHV, cvPHI] = f_divergence(cvdNorm, divLbL, divLbR)
+// BUG FIXED: this ran on cvdNorm, which is rescaled every bar and resets
+// daily, so the two pivots it compared sat on different scales. A running
+// delta total that never resets compares like with like.
+var float cvdCum = 0.0
+cvdCum += nz(barDelta)
+[cvBull, cvBear, cvBullH, cvBearH, cvPLV, cvPLI, cvPHV, cvPHI] = f_divergence(cvdCum, divLbL, divLbR)
 
 // REGULAR and HIDDEN are kept apart from here on.
 //
@@ -2965,13 +2983,13 @@ if divLines and barClosed
     if wtBearHid
         f_pushDivLine(line.new(wtPHI, wtPHV, bar_index - divLbR, wt2[divLbR], color=C_DN, width=1, style=line.style_dotted))
     if cvBullReg
-        f_pushDivLine(line.new(cvPLI, cvPLV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdUp, width=1, style=line.style_dashed))
+        f_pushDivLine(line.new(cvPLI, cvdNorm[bar_index - cvPLI], bar_index - divLbR, cvdNorm[divLbR], color=cCvdUp, width=1, style=line.style_dashed))
     if cvBearReg
-        f_pushDivLine(line.new(cvPHI, cvPHV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdDn, width=1, style=line.style_dashed))
+        f_pushDivLine(line.new(cvPHI, cvdNorm[bar_index - cvPHI], bar_index - divLbR, cvdNorm[divLbR], color=cCvdDn, width=1, style=line.style_dashed))
     if cvBullHid
-        f_pushDivLine(line.new(cvPLI, cvPLV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdUp, width=1, style=line.style_dotted))
+        f_pushDivLine(line.new(cvPLI, cvdNorm[bar_index - cvPLI], bar_index - divLbR, cvdNorm[divLbR], color=cCvdUp, width=1, style=line.style_dotted))
     if cvBearHid
-        f_pushDivLine(line.new(cvPHI, cvPHV, bar_index - divLbR, cvdNorm[divLbR], color=cCvdDn, width=1, style=line.style_dotted))
+        f_pushDivLine(line.new(cvPHI, cvdNorm[bar_index - cvPHI], bar_index - divLbR, cvdNorm[divLbR], color=cCvdDn, width=1, style=line.style_dotted))
 
 // ============================================================================
 // 19. GRADED SIGNALS
@@ -3479,31 +3497,28 @@ bool rkOkS = not na(rkRS) and rkRS >= rMinEps
 // ============================================================================
 // 19h1b. LIVE RISK - position size for the signal pop-up / alert
 // ----------------------------------------------------------------------------
-// The fix for "I keep getting stopped out" is not a TIGHTER stop - a tighter
-// stop sits inside normal noise and guarantees it. The fix is a WIDER stop,
-// placed past the noise where the trade is genuinely wrong, paired with a SIZE
-// small enough that the wider stop still only costs a fixed, small amount.
-// Widen the stop and the size falls; the dollar risk never changes.
+// Size = the dollars you chose to risk / the dollar loss per contract at the
+// stop. ONE stop: the Risk Layer's own (rkStopL/rkStopS), the same one the
+// boxes, the minimum-R filter and the statistics use. It used to size for a
+// stop 0.5 ATR wider, so the trade you were told to take was not the trade the
+// statistics measured. To give trades more room, raise Stop Buffer or Minimum
+// Stop Distance in group 21 - everything then moves together.
 //
-// No panel, no chart lines - this stays a calculation and shows up only inside
-// the existing signal pop-up and alert below, which is where it is needed.
-// Reuses this script's own structural stop (rkStopL/rkStopS) so the numbers
-// line up with the Risk Layer above, just pushed further out.
+// The loss per unit includes the round-trip fee, and is multiplied by the
+// contract point value: without it, gold futures (100 oz a contract) showed a
+// size 100 times too large. On crypto the point value is 1.
 string G_RM     = "25 - LIVE RISK (position size)"
 bool  rmOn       = input.bool(true, "Show size in signal pop-up / alert", group=G_RM)
 float rmAcct     = input.float(10000, "Account size ($)", minval=1, group=G_RM)
 float rmRiskPct  = input.float(0.5, "Risk per trade (% of account)", minval=0.01, maxval=10, step=0.1, group=G_RM,
      tooltip="The one number that keeps you alive. 0.5% means ONE loss costs 0.5% of the account, whatever the stop distance - because size is derived from this, a wider stop just means a smaller size, never a bigger loss.")
-float rmExtraBuf = input.float(0.5, "Widen stop past structure (x ATR)", minval=0, maxval=5, step=0.1, group=G_RM,
-     tooltip="Pushes the stop further beyond the Risk Layer's structural stop so normal noise cannot reach it. Combined with the sizing above, a wider stop costs the same dollars - just a smaller position.")
 
 float rmRiskUsd = rmAcct * rmRiskPct / 100.0
-float rmStopL   = rkStopL - atr14 * rmExtraBuf
-float rmStopS   = rkStopS + atr14 * rmExtraBuf
-float rmDistL   = rkEntry - rmStopL
-float rmDistS   = rmStopS - rkEntry
-float rmSizeL   = rmDistL > 0 ? rmRiskUsd / rmDistL : na
-float rmSizeS   = rmDistS > 0 ? rmRiskUsd / rmDistS : na
+float rmStopL   = rkStopL
+float rmStopS   = rkStopS
+float rmFeeD    = rkEntry * riskFee / 100.0
+float rmSizeL   = rkRiskL > 0 ? rmRiskUsd / ((rkRiskL + rmFeeD) * syminfo.pointvalue) : na
+float rmSizeS   = rkRiskS > 0 ? rmRiskUsd / ((rkRiskS + rmFeeD) * syminfo.pointvalue) : na
 
 // ============================================================================
 // 19h2. THE TRADE LEDGER
@@ -3914,8 +3929,18 @@ f_rejDn(float lvl) =>
 // A rejection now stays valid for csigWindow bars, exactly like the trigger, so
 // the same setup registers on every timeframe.
 // ---------------------------------------------------------------------------
-bool rejLowNow = f_rejUp(priorVal) or f_rejUp(npocDn) or f_rejUp(ibL) or f_rejUp(priorLo)
-bool rejHighNow = f_rejDn(priorVah) or f_rejDn(npocUp) or f_rejDn(ibH) or f_rejDn(priorHi)
+// LOOK-AHEAD FIX: while the IB or a balance box is still forming, its edge IS
+// this bar's own high/low, so every new extreme "rejected itself" and the first
+// bar of every period opened both sides. Only finished levels may gate.
+float ibLz = ibLocked ? ibL : na
+float ibHz = ibLocked ? ibH : na
+bool  balLive = balActive and balArmed
+// A naked POC this bar touched is deleted in section 11 before this test ran,
+// so a real test of it could never count. Test the touched one when there is.
+float npDnT = na(npocHitDn) ? npocDn : npocHitDn
+float npUpT = na(npocHitUp) ? npocUp : npocHitUp
+bool rejLowNow = f_rejUp(priorVal) or f_rejUp(npDnT) or f_rejUp(ibLz) or f_rejUp(priorLo)
+bool rejHighNow = f_rejDn(priorVah) or f_rejDn(npUpT) or f_rejDn(ibHz) or f_rejDn(priorHi)
 if csigVwap
     if f_rejUp(vwapL1)
         rejLowNow := true
@@ -3941,7 +3966,7 @@ if htfOn
         rejLowNow := true
     if f_rejDn(htfVah)
         rejHighNow := true
-if balUseLoc and balActive
+if balUseLoc and balLive
     // balPoc is NOT an entry. The point of control is where the auction found
     // its fairest price - maximum acceptance, minimum edge - so it is a TARGET
     // to rotate toward and a level to count in confluence, never a place to
@@ -3988,57 +4013,48 @@ int alignWin = csigWindow + divLbR
 // location test itself follows. The developing value area is excluded for the
 // same reason: it is built on the last bar only, so counting it would make the
 // live bar score higher than any historical bar ever could.
-f_near(float a, float b, float tol) =>
-    not na(a) and not na(b) and math.abs(a - b) <= tol
+f_in(float a, float lo, float hi) =>
+    not na(a) and a >= lo and a <= hi
 
-f_confluence(float px) =>
-    // SATURATION: this used twice the location tolerance. On BTC at 79,800
-    // with the default 0.12% that is a 190-point band, and roughly half the
-    // tracked level set falls inside it during any ordinary range - the count
-    // sat at 5 or 6 on both sides at once and discriminated nothing.
-    //
-    // It is now exactly locTol, which halves the band AND preserves a
-    // necessary invariant: f_rejUp accepts a level within locTol of the low,
-    // so the level that actually triggered the rejection is always counted.
-    // Any tighter and confluence could read 0 on a genuine rejection, which
-    // would close the gate on the very setup that opened it.
-    //
-    // If the count is still saturated on your instrument, lower Location
-    // Tolerance itself - that tightens the rejection test and this band
-    // together, which is the coherent way to do it.
-    float tol = locTol
+f_confluence(float lo, float hi) =>
+    // BUG FIXED: this used to count levels within locTol of the LOW, while
+    // f_rejUp accepts any level from the low up to the close. A deep wick that
+    // swept a level and closed back above it scored 0 here and closed the gate
+    // on exactly the strongest rejections. The band is now the same range the
+    // rejection test accepts - low (less locTol) up to the close - so the level
+    // that opened the gate is always counted. Mirrored for highs.
     int n = 0
-    n += f_near(px, priorVah, tol) ? 1 : 0
-    n += f_near(px, priorVal, tol) ? 1 : 0
-    n += f_near(px, priorPoc, tol) ? 1 : 0
-    n += f_near(px, priorHi,  tol) ? 1 : 0
-    n += f_near(px, priorLo,  tol) ? 1 : 0
-    n += f_near(px, npocUp,   tol) ? 1 : 0
-    n += f_near(px, npocDn,   tol) ? 1 : 0
-    n += f_near(px, ibH,      tol) ? 1 : 0
-    n += f_near(px, ibL,      tol) ? 1 : 0
-    n += f_near(px, vwapVal,  tol) ? 1 : 0
-    n += f_near(px, vwapU1,   tol) ? 1 : 0
-    n += f_near(px, vwapL1,   tol) ? 1 : 0
-    n += f_near(px, htfVah,   tol) ? 1 : 0
-    n += f_near(px, htfVal,   tol) ? 1 : 0
-    n += f_near(px, htfPoc,   tol) ? 1 : 0
-    if balActive
-        n += f_near(px, balHi,  tol) ? 1 : 0
-        n += f_near(px, balLo,  tol) ? 1 : 0
-        n += f_near(px, balPoc, tol) ? 1 : 0
+    n += f_in(priorVah, lo, hi) ? 1 : 0
+    n += f_in(priorVal, lo, hi) ? 1 : 0
+    n += f_in(priorPoc, lo, hi) ? 1 : 0
+    n += f_in(priorHi,  lo, hi) ? 1 : 0
+    n += f_in(priorLo,  lo, hi) ? 1 : 0
+    n += f_in(npUpT,    lo, hi) ? 1 : 0
+    n += f_in(npDnT,    lo, hi) ? 1 : 0
+    n += f_in(ibHz,     lo, hi) ? 1 : 0
+    n += f_in(ibLz,     lo, hi) ? 1 : 0
+    n += f_in(vwapVal,  lo, hi) ? 1 : 0
+    n += f_in(vwapU1,   lo, hi) ? 1 : 0
+    n += f_in(vwapL1,   lo, hi) ? 1 : 0
+    n += f_in(htfVah,   lo, hi) ? 1 : 0
+    n += f_in(htfVal,   lo, hi) ? 1 : 0
+    n += f_in(htfPoc,   lo, hi) ? 1 : 0
+    if balLive
+        n += f_in(balHi,  lo, hi) ? 1 : 0
+        n += f_in(balLo,  lo, hi) ? 1 : 0
+        n += f_in(balPoc, lo, hi) ? 1 : 0
     // The golden pocket, and only if asked for. These are geometry, not volume,
     // so they are the one entry here that is opt-in - see the input tooltip.
     if gpConf
-        n += f_near(px, gpF618, tol) ? 1 : 0
-        n += f_near(px, gpF786, tol) ? 1 : 0
+        n += f_in(gpF618, lo, hi) ? 1 : 0
+        n += f_in(gpF786, lo, hi) ? 1 : 0
     if ofConf
-        n += f_near(px, ofSupPx, tol) ? 1 : 0
-        n += f_near(px, ofResPx, tol) ? 1 : 0
+        n += f_in(ofSupPx, lo, hi) ? 1 : 0
+        n += f_in(ofResPx, lo, hi) ? 1 : 0
     n
 
-int confLow  = f_confluence(low)
-int confHigh = f_confluence(high)
+int confLow  = f_confluence(low - locTol, close)
+int confHigh = f_confluence(close, high + locTol)
 
 // scored at the REJECTION bar, not now - the cluster that mattered is the one
 // price actually wicked into, which may be several bars back
@@ -4530,17 +4546,11 @@ f_drawTrade(bool isLong, float e, float st, float tg, float rr) =>
 // --- a fully qualified opposite signal invalidates the open thesis. Close it
 // at market and book whatever R it actually made, rather than leaving it to
 // drift to a stop the setup no longer supports.
-// A pending order is a commitment the gate already counts, but it is not in
-// the ledger yet, so the loop below could never reach it. Without this, the
-// system would decide the opposite side had won and then still buy the next
-// open on an order it had already disowned.
-if closeOnReversal and barClosed
-    if pendLong and wantSell
-        pendLong := false
-        sigSkip  += 1
-    if pendShort and wantBuy
-        pendShort := false
-        sigSkip   += 1
+// LOOK-AHEAD REMOVED: a pending order used to be cancelled here using THIS
+// bar's close, though it fills at this bar's OPEN - so a trade that went wrong
+// on its fill bar, even one that hit its stop, never reached the statistics.
+// It now fills, is checked against the stop, and is flat-closed at the close
+// by the normal reversal step below, which is what would really happen.
 
 // Moved into a function to keep the main body under Pine's size cap.
 f_closeReversals() =>
@@ -4583,7 +4593,9 @@ bool fillNextOpen = riskFill == "Next bar open (realistic)"
 // can set one. So this is not fixing an observed bug - it is removing a shared
 // pendStop / pendTgt trap that a single shared block depended on, which would
 // have silently dropped one of the two the moment that upstream guard changed.
-float fillSlip = riskSlipT * syminfo.mintick
+// Fees and spread are charged as a worse entry, the same way slippage is, so
+// every R - stop, target, flat - and the minimum-R filter are net of them.
+float fillSlip = riskSlipT * syminfo.mintick + open * riskFee / 100.0
 
 // returns true if the fill was taken
 f_fillPending(bool isLong, float st, float tg) =>
@@ -4620,7 +4632,8 @@ f_manageTrades() =>
         float en = opEntry.get(i)
         float rk = opRisk.get(i)
         bool done = false
-        // realised R: a stop is exactly -1R by construction, a target is the R
+        // realised R: a stop is -1R, or worse when the bar OPENED past it (a gap
+        // fills at the open, not the stop - this used to book exactly -1R), a target is the R
         // that was drawn on the chart when the trade was taken, and an expiry
         // is marked to market. Every closed trade contributes, so the average
         // is the real one and not a survivor's.
@@ -4629,7 +4642,7 @@ f_manageTrades() =>
         if d == 1
             if low <= st
                 f_ledAdd(LG_LOSS, 1)
-                realR := -1.0
+                realR := rk > 0 ? (math.min(open, st) - en) / rk : -1.0
                 outc  := 2
                 done := true
             else if high >= tg
@@ -4641,7 +4654,7 @@ f_manageTrades() =>
         else
             if high >= st
                 f_ledAdd(LG_LOSS, 1)
-                realR := -1.0
+                realR := rk > 0 ? (en - math.max(open, st)) / rk : -1.0
                 outc  := 2
                 done := true
             else if low <= tg
@@ -5801,14 +5814,13 @@ if chartSell
     alertMsg += "CHART SELL - context, location, trigger and proof all agree. Entry at the NEXT bar open" +
          (na(rkStopS) ? "" : ", stop " + str.tostring(rkStopS, format.mintick)) +
          (na(rkTgtS) ? "" : ", target " + str.tostring(rkTgtS, format.mintick)) + "." + standDown
-// Live size - wide stop, chosen so the dollar risk stays fixed. Same numbers
-// as the signal pop-up, folded into the alert so they travel to the phone too.
+// Live size for the SAME stop quoted above. Same numbers as the signal pop-up,
+// folded into the alert so they travel to the phone too.
 if rmOn and (chartBuy or chartSell)
     float rmS  = chartBuy ? rmSizeL : rmSizeS
-    float rmSt = chartBuy ? rmStopL : rmStopS
     if not na(rmS)
-        alertMsg += "LIVE SIZE " + str.tostring(rmS, "#.###") + "u, wide stop " + str.tostring(rmSt, format.mintick) +
-             " (" + str.tostring(rmRiskPct, "#.##") + "% = $" + str.tostring(rmRiskUsd, "#") + " risk). "
+        alertMsg += "SIZE " + str.tostring(rmS, "#.###") + " (" + str.tostring(rmRiskPct, "#.##") +
+             "% = $" + str.tostring(rmRiskUsd, "#") + " risk, fees included). "
 if chochUp
     alertMsg += "CHoCH up - structure shifted bullish. "
 if chochDn
