@@ -1750,33 +1750,6 @@ if dnaTape and barstate.islast
              text_size=size.tiny, bgcolor=color.new(#1e2735, 55))
 
 // ============================================================================
-// 12c2. DELTA-WEIGHTED CANDLE BODY
-// ----------------------------------------------------------------------------
-// Modelled on Volume Delta Candles [LuxAlgo] (CC BY-NC-SA 4.0), reimplemented
-// using deltaRatio (section 3), already computed for DNA/CVD. box.new() -
-// own budget, not plot()'s 64-slot one - draws a real filled rectangle.
-// ============================================================================
-bool dcOn = input.bool(false, "Show Delta-Weighted Body", group=G_DNAV)
-
-var array<box> dcBoxArr = array.new<box>()
-f_pushDcBox(box b) =>
-    dcBoxArr.push(b)
-    while dcBoxArr.size() > 300
-        box.delete(dcBoxArr.shift())
-
-if dcOn and barClosed
-    float dAbs  = math.abs(open - close)
-    float dMin  = math.min(open, close)
-    float dMax  = math.max(open, close)
-    float dNorm = math.max(-1.0, math.min(1.0, deltaRatio))
-    float dVal  = dNorm >= 0 ? dMin + math.abs(dNorm) * dAbs : dMax - math.abs(dNorm) * dAbs
-    float dTop  = math.max(dNorm >= 0 ? dMin : dMax, dVal)
-    float dBot  = math.min(dNorm >= 0 ? dMin : dMax, dVal)
-    color dCol  = color.new(dNorm >= 0 ? C_UP : C_DN, 30)
-    f_pushDcBox(box.new(bar_index - 1, dTop, bar_index, dBot, border_color=na,
-         bgcolor=dCol, force_overlay=true))
-
-// ============================================================================
 // 12d. VOLUME BUBBLES - percentile volume clusters
 // ----------------------------------------------------------------------------
 // Concept from Volume Bubbles [QuantAlgo] (CC BY-NC-SA 4.0), reimplemented.
@@ -3777,12 +3750,7 @@ float ofSwing = not na(dHiIn) and not na(dLoIn) ? dHiIn - dLoIn : na
 
 // --- absorption candidates from this bar's own rows
 // Moved into a function to keep the main body under Pine's size cap.
-// A function cannot reassign a variable declared outside it - it can only
-// return one for the caller to assign. outPoc is local; ofBarPoc below is
-// the global, set at the call site from the return value, not in here.
-bool  ofShowPoc = input.bool(false, "Show Intrabar Volume POC", group=G_OF)
 f_ofRows() =>
-    float outPoc  = na
     float ofStep = (high - low) / ofRows
     if ofStep > 0
         array<float> ofBuy = array.new<float>(ofRows, 0.0)
@@ -3800,15 +3768,6 @@ f_ofRows() =>
 
         float ofSum = ofBuy.sum() + ofSel.sum()
         if ofSum > 0
-            // single heaviest row this bar - an intrabar POC, unlike bR/bS below
-            int   pocRow = 0
-            float pocV   = 0.0
-            for i = 0 to ofRows - 1
-                float v = ofBuy.get(i) + ofSel.get(i)
-                if v > pocV
-                    pocV := v
-                    pocRow := i
-            outPoc := low + (pocRow + 0.5) * ofStep
             float avgRow = ofSum / ofRows
             int band = math.max(1, math.min(ofRows, int(math.round(ofRows * ofAbsEdge / 100.0))))
 
@@ -3838,21 +3797,9 @@ f_ofRows() =>
             while ofLvls.size() > ofAbsKeep
                 OfLvl gone = ofLvls.shift()
                 line.delete(gone.ln)
-    outPoc
 
-float ofBarPoc = ofOn and barClosed and high > low and ltfOk ? f_ofRows() : na
-
-// label.new(), own budget, not plot()'s - same pattern as the other arrays.
-var array<label> ofPocLblArr = array.new<label>()
-f_pushOfPocLbl(label l) =>
-    ofPocLblArr.push(l)
-    while ofPocLblArr.size() > 300
-        label.delete(ofPocLblArr.shift())
-
-if ofOn and ofShowPoc and barClosed and not na(ofBarPoc)
-    f_pushOfPocLbl(label.new(bar_index, ofBarPoc, "•", xloc=xloc.bar_index,
-         style=label.style_label_center, textcolor=cOfAbs, color=color(na),
-         size=size.tiny, force_overlay=true))
+if ofOn and barClosed and high > low and ltfOk
+    f_ofRows()
 
 // --- confirm what held, delete what broke
 float ofTol = atr14 * 0.15
@@ -4109,102 +4056,6 @@ int barsSinceRejHigh = ta.barssince(rejHighNow)
 
 bool atLowEdge  = barsSinceRejLow  <= alignWin and confAtLowRej  >= csigConfMin
 bool atHighEdge = barsSinceRejHigh <= alignWin and confAtHighRej >= csigConfMin
-
-// ============================================================================
-// 19c2. SWING SWEEP TRIANGLE
-// ----------------------------------------------------------------------------
-// Modelled on Swing Failure Pattern [LuxAlgo] (CC BY-NC-SA 4.0). Reuses
-// f_rejUp/f_rejDn above (wick past a level, close back inside it) against
-// Market Structure's own sHi/sLo, rather than a second pivot calculation.
-// Candidate marked with a tag + swing line + dotted confirm-level line;
-// CONFIRM (triangle) only once price later closes beyond the high/low
-// already reached since that swing - real follow-through, not just the
-// wick. Oppos line anchored at the swing bar itself (sLoIdx/sHiIdx), not
-// its own tracked extreme bar, to stay under the compile-size ceiling.
-// ============================================================================
-bool  sfpOn = input.bool(false, "Show Swing Sweep Triangles", group=G_STR)
-var bool  sfpBullActive = false
-var float sfpBullOrig   = na
-var float sfpBullOppos  = na
-var line  sfpBullSwLn   = na
-var line  sfpBullOpLn   = na
-var label sfpBullTag    = na
-var bool  sfpBearActive = false
-var float sfpBearOrig   = na
-var float sfpBearOppos  = na
-var line  sfpBearSwLn   = na
-var line  sfpBearOpLn   = na
-var label sfpBearTag    = na
-
-f_sfpClear(line sw, line op, label tag) =>
-    line.delete(sw)
-    line.delete(op)
-    label.delete(tag)
-
-f_sfpFreeze(line ln) =>
-    line.set_x2(ln, bar_index)
-    line.set_extend(ln, extend.none)
-
-if sfpOn and strOn and barClosed
-    if f_rejUp(sLo) and not na(sLoIdx)
-        int   sfpBullSpan = math.min(480, bar_index - sLoIdx)
-        float sfpBullHi   = high
-        for k = 1 to sfpBullSpan
-            sfpBullHi := math.max(sfpBullHi, high[k])
-        if sfpBullActive
-            f_sfpClear(sfpBullSwLn, sfpBullOpLn, sfpBullTag)
-        sfpBullActive := true
-        sfpBullOrig   := sLo
-        sfpBullOppos  := sfpBullHi
-        sfpBullSwLn := line.new(sLoIdx, sLo, bar_index, sLo, xloc=xloc.bar_index,
-             color=C_UP, width=1, extend=extend.right, force_overlay=true)
-        sfpBullOpLn := line.new(sLoIdx, sfpBullHi, bar_index, sfpBullHi,
-             xloc=xloc.bar_index, color=C_UP, style=line.style_dotted,
-             width=1, extend=extend.right, force_overlay=true)
-        sfpBullTag  := label.new(bar_index, low, "SFP", xloc=xloc.bar_index,
-             style=label.style_label_up, textcolor=C_UP, color=color(na),
-             size=size.tiny, force_overlay=true)
-    if f_rejDn(sHi) and not na(sHiIdx)
-        int   sfpBearSpan = math.min(480, bar_index - sHiIdx)
-        float sfpBearLo   = low
-        for k = 1 to sfpBearSpan
-            sfpBearLo := math.min(sfpBearLo, low[k])
-        if sfpBearActive
-            f_sfpClear(sfpBearSwLn, sfpBearOpLn, sfpBearTag)
-        sfpBearActive := true
-        sfpBearOrig   := sHi
-        sfpBearOppos  := sfpBearLo
-        sfpBearSwLn := line.new(sHiIdx, sHi, bar_index, sHi, xloc=xloc.bar_index,
-             color=C_DN, width=1, extend=extend.right, force_overlay=true)
-        sfpBearOpLn := line.new(sHiIdx, sfpBearLo, bar_index, sfpBearLo,
-             xloc=xloc.bar_index, color=C_DN, style=line.style_dotted,
-             width=1, extend=extend.right, force_overlay=true)
-        sfpBearTag  := label.new(bar_index, high, "SFP", xloc=xloc.bar_index,
-             style=label.style_label_down, textcolor=C_DN, color=color(na),
-             size=size.tiny, force_overlay=true)
-
-    if sfpBullActive
-        if close > sfpBullOppos
-            sfpBullActive := false
-            f_sfpFreeze(sfpBullSwLn)
-            f_sfpFreeze(sfpBullOpLn)
-            f_pushStrLabel(label.new(bar_index, low, "▲", xloc=xloc.bar_index,
-                 style=label.style_label_up, textcolor=C_UP, color=color(na),
-                 size=size.small, force_overlay=true))
-        else if close < sfpBullOrig
-            sfpBullActive := false
-            f_sfpClear(sfpBullSwLn, sfpBullOpLn, sfpBullTag)
-    if sfpBearActive
-        if close < sfpBearOppos
-            sfpBearActive := false
-            f_sfpFreeze(sfpBearSwLn)
-            f_sfpFreeze(sfpBearOpLn)
-            f_pushStrLabel(label.new(bar_index, high, "▼", xloc=xloc.bar_index,
-                 style=label.style_label_down, textcolor=C_DN, color=color(na),
-                 size=size.small, force_overlay=true))
-        else if close > sfpBearOrig
-            sfpBearActive := false
-            f_sfpClear(sfpBearSwLn, sfpBearOpLn, sfpBearTag)
 
 // Declared here, not up with the divergence block, because it reads the
 // LOCATION gate and Pine needs that to exist first.
