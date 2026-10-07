@@ -3454,8 +3454,13 @@ f_pickDn(float e, float risk) =>
 
 float rkEntry = close
 float rkMinDist = atr14 * riskMinStop
-float rkStopL = math.min(ta.lowest(low, riskSwing) - atr14 * riskBuf, close - rkMinDist)
-float rkStopS = math.max(ta.highest(high, riskSwing) + atr14 * riskBuf, close + rkMinDist)
+// The location gate accepts a rejection up to csigWindow + divLbR bars back,
+// so the stop lookback must reach at least that far - with only riskSwing (5)
+// bars the wick that defended the level could sit outside it, and the stop
+// landed inside the very zone being defended.
+int   rkLook  = math.max(riskSwing, csigWindow + divLbR + 1)
+float rkStopL = math.min(ta.lowest(low, rkLook) - atr14 * riskBuf, close - rkMinDist)
+float rkStopS = math.max(ta.highest(high, rkLook) + atr14 * riskBuf, close + rkMinDist)
 
 float rkRiskL = rkEntry - rkStopL
 float rkRiskS = rkStopS - rkEntry
@@ -5237,9 +5242,9 @@ if audOn and barstate.islast
 plotshape(tpHit ? close : na, "TAKE PROFIT", shape.xcross, location.absolute,
      color=#00e676, size=size.small, text="TP", textcolor=#00e676, force_overlay=true)
 
-plotshape(chartBuy ? low : na, "CHART BUY", shape.labelup, location.belowbar,
+plotshape(chartBuy and barClosed ? low : na, "CHART BUY", shape.labelup, location.belowbar,
      color=cBuySig, text="BUY", textcolor=#000000, size=size.normal, force_overlay=true)
-plotshape(chartSell ? high : na, "CHART SELL", shape.labeldown, location.abovebar,
+plotshape(chartSell and barClosed ? high : na, "CHART SELL", shape.labeldown, location.abovebar,
      color=cSellSig, text="SELL", textcolor=#ffffff, size=size.normal, force_overlay=true)
 
 
