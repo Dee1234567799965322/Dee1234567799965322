@@ -1,6 +1,6 @@
 # Auction Cipher — User Guide
 
-Oct 7, 2026
+Oct 8, 2026 — updated for v3.2b (one stop, Fees, Stop Placement, Break-even, Stop-Loss Lab)
 
 Part 1 explains how to use the indicator. Part 2 is the full settings reference.
 
@@ -15,6 +15,7 @@ Do these once per chart. After that, the indicator tells you where the trade loc
 3. **Check the instrument.** Leave **Instrument Profile** on *Auto-detect* for BTC and gold. For anything else, set it to *Manual* and choose **Period Mode** in group 1.
 4. **Enter your real numbers.** Group *25 - LIVE RISK*: **Account size ($)** and **Risk per trade (%)**. Start at 0.5% or less.
 5. **Create one alert.** TradingView *Alert* → Condition: *Auction Cipher* → **Any alert() function call** → *Once per bar close*. Every BUY/SELL, with its size and stop, arrives through this single alert.
+6. **Set your real cost per round trip.** Group *21 - RISK LAYER*: **Fees + Spread, Round Trip (%)**. This is subtracted from every trade in the statistics and the Lab, so leaving it at 0 flatters every number you read.
 
 Best timeframes: **1h** for intraday, **4h** for swings. On 15m and below the signals did not hold up in testing (see the last section).
 
@@ -93,16 +94,16 @@ The lines under the headline add detail:
 
 A signal is only confirmed when its bar closes, so you enter on the **next bar's open**, never at the signal bar's close. The alert and the read box give you every number you need.
 
-1. **The signal prints.** A green BUY or red SELL label appears, ACTION shows *BUY 2.0R* (or SELL), and the alert arrives: *CHART BUY … Entry at the NEXT bar open, stop X, target Y. Stand down if the open leaves less than 1.5R. LIVE SIZE 0.1u, wide stop Z ($50 risk).*
+1. **The signal prints.** A green BUY or red SELL label appears, ACTION shows *BUY 2.0R* (or SELL), and the alert arrives: *CHART BUY … Entry at the NEXT bar open, stop X, target Y. Stand down if the open leaves less than 1.5R. LIVE SIZE 0.1u at stop X ($50 risk).*
 2. **Check the playbook.** Does it match the read box? A buy on an IMBALANCE-down day, or any signal on TRANSITION, gets skipped.
 3. **Wait for the next bar to open.** If price opened so far toward the target that less than 1.5R is left (your *Minimum R*), skip it.
 4. **Enter at market** with the size from the **LIVE SIZE** line.
-5. **Put your stop at the wide stop price** (Z). The size was calculated for that stop, so this keeps your loss at exactly your risk amount.
+5. **Put your stop at the stop price** (X). The size was calculated for that one stop — the same stop the statistics and the Lab measured — so this keeps your loss at exactly your risk amount (plus the fee you set in Fees + Spread).
 6. **Put your target at the target price** (Y), the top of the green box. It is capped at 2R by default.
 
-**Worked example (BTC):** account $10,000, risk 0.5% = $50. Entry 60,000, wide stop 59,500 → distance $500 → size $50 ÷ $500 = **0.1 BTC**. If the stop is hit you lose $50, whatever the distance.
+**Worked example (BTC):** account $10,000, risk 0.5% = $50. Entry 60,000, stop 59,500 → distance $500 → size $50 ÷ $500 = **0.1 BTC**. If the stop is hit you lose $50 plus your round-trip fee, whatever the distance.
 
-Two stops are shown on purpose. The **red box** is the tighter structural stop that the statistics measure. The **wide stop** sits 0.5× ATR beyond it so normal noise doesn't tag you out. Trade the wide stop together with the size printed next to it. For futures, the size is in ounces or coins, so divide by the contract size (GC = 100 oz, MGC = 10 oz).
+There is now **one stop**, used everywhere — the pop-up, the alert, the box on the chart, the statistics table and the Stop-Loss Lab. Which stop that is comes from **Stop Placement** (group 21); the default is *Structural (swing)*. Trade the size printed next to it. For futures, the size is in ounces or coins, so divide by the contract size (GC = 100 oz, MGC = 10 oz).
 
 ## Managing and exiting the trade
 
@@ -116,7 +117,8 @@ Once you're in, the plan is fixed: leave the stop and target alone and let one o
 
 Rules while a trade is open:
 
-- **Don't tighten the stop.** In the backtest, stops tighter than about 1.5× ATR never reduced losses; they only got hit more often.
+- **Don't tighten the stop**, unless you've turned on **Move Stop to Break-even at (R)** (group 21, off by default). In the backtest, stops tighter than about 1.5× ATR never reduced losses; they only got hit more often.
+- **Break-even is opt-in.** Set it above 0 and, once price has moved that many R in your favour, the stop moves to your entry from the next bar on — never the same bar, since the order of a candle's high and low isn't known. A trade stopped at break-even books as FLAT, not a loss; read Expectancy, not the hit rate, once this is on. Check the Lab's *Struct + BE 1R* row first to see whether it actually helps on your chart.
 - **No new signal will show** while a trade is open (*One Trade At A Time* is on). That is deliberate.
 - **Track it live** in the statistics table: the *Open now (live R)* row shows how far in profit or loss the open trade is, in R.
 - **CHoCH or absorption against you** near the target is a reason to take profit early, not to add to the position.
@@ -251,7 +253,7 @@ Volume DNA labels each bar by effort (volume) versus result (bar size). **Absorp
 | DNA Circles with Volume | off | Circle per DNA bar, sized by how extreme volume was. |
 | Barcode Heatmap Tape / Rows / Position | off / 20 / Middle Right | Strip showing the DNA state of the last N bars. Keep it away from the dashboard position. |
 
-**12 - VOLUME BUBBLES** (off by default; on in the Everything preset) marks unusually large volume clusters as Small/Medium/Big bubbles.
+**12 - VOLUME BUBBLES** (off by defadlt; on in the Everything preset) marks unusually large volume clusters as Small/Medium/Big bubbles.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -420,16 +422,19 @@ A BUY or SELL appears on the price chart only when four layers agree, then survi
 
 ## Risk layer and Live Risk sizing — groups 21 and 25
 
-The risk layer draws a structural stop and a target for every signal; Live Risk turns that stop into a position size in the BUY/SELL pop-up and alert. **Set Account size and Risk per trade to your real numbers before trading off the pop-up.**
+The risk layer draws **one stop** and a target for every signal; that same stop is used for the minimum-R filter, the chart boxes, the statistics, the Stop-Loss Lab, the alert and the position size — so the trade you take is always the trade the table measured. Live Risk turns that stop into a position size in the BUY/SELL pop-up and alert. **Set Account size and Risk per trade to your real numbers before trading off the pop-up.**
 
 **21 - RISK LAYER**
 
 | Setting | Default | What it does / when to change |
 | --- | --- | --- |
 | Draw Stop / Target / R | on | Stop and target boxes. Turning it off hides the boxes only; the filter still works. |
+| Stop Placement | Structural (swing) | Which stop is the ONE stop, everywhere. Structural (swing) — beyond the lowest low / highest high of the last Stop Swing Lookback bars, plus the buffer. Setup low/high (whole signal window) — same idea, but the lookback stretches to cover the whole signal window (Trigger Window + Pivot Right Bars + 1), so the wick that defended the level can't sit outside the stop's own lookback. Wide (structural + extra ATR) — the structural stop pushed out by Widen stop past structure (group 25). Run the Stop-Loss Lab (group 28) before changing this — it measures all three, plus break-even, half-off, trailing and a time stop, on the same entries. |
 | Stop Buffer (× ATR) | 0.3 | Extra room below the swing low (above the swing high for shorts). |
 | Stop Swing Lookback | 5 | Bars searched for the swing the stop sits behind. |
 | Minimum Stop Distance (× ATR) | 0.6 | The stop is never closer than this. See the backtest note below. |
+| Move Stop to Break-even at (R) | 0 ( off) | Once a trade has moved this many R in your favour, the stop moves to entry from the next bar on. A trade stopped at break-even books as FLAT, not a loss — read Expectancy, not hit rate, with this on. Check the Lab's Struct + BE 1R row first. |
+| Fees + Spread, Round Trip (%) | 0.10 | Total cost of getting in AND out, as a % of price — subtracted from every trade in the statistics, the Lab, and the live position size. Binance/Bybit perps, market both ways: ~0.10. Matters most on a tight stop: a 0.4% stop with a 0.10% round trip costs 0.25R on every trade, win or lose. |
 | Minimum R to Show Signal | 1.5 | Signals with target closer than 1.5× the risk are hidden. |
 | Cap Target at (R) | 2.0 | Target capped at 2R. Keep it above Minimum R. 0 = no cap. |
 | Assumed Fill | Next bar open (realistic) | Where the statistics assume you got in. Leave it. |
@@ -442,10 +447,12 @@ The risk layer draws a structural stop and a target for every signal; Live Risk 
 | --- | --- | --- |
 | Show size in signal pop-up / alert | on | Adds a size line to the BUY/SELL pop-up and alert. |
 | Account size ($) | 10,000 | Your account. |
-| Risk per trade (% of account) | 0.5 | Dollars lost if the stop is hit. 0.5% of $10,000 = $50. |
-| Widen stop past structure (× ATR) | 0.5 | Pushes the stop past noise; size shrinks so dollar risk stays the same. |
+| Risk per trade (% of account) | 0.5 | Dollars lost if the stop is hit (plus the fee). 0.5% of $10,000 = $50. |
+| Widen stop past structure (× ATR) | 0.5 | Only used when Stop Placement (group 21) is Wide. Pushes the stop further past the structural stop; size shrinks so dollar risk stays the same. |
 
-Size = risk dollars ÷ distance from entry to the widened stop. Example: $50 risk with a $500 stop distance on BTC = 0.1 BTC. The size is in **units of the underlying** (BTC, ounces), not contracts. For futures, divide by the contract size — GC is 100 oz, MGC is 10 oz.
+Size = risk dollars ÷ (distance from entry to the one stop, plus the fee). Example: $50 risk with a $500 stop distance and a 0.10% round-trip fee on BTC entered at 60,000 ($60 fee) → size = $50 ÷ $560 ≈ **0.089 BTC**. The size is in **units of the underlying** (BTC, ounces), not contracts. For futures, divide by the contract size — GC is 100 oz, MGC is 10 oz.
+
+**28 - STOP-LOSS LAB (backtest)** — **Show Stop-Loss Lab** (on). A table that replays every filled trade under ten stop/exit rules at once — the same entries and targets, net of your Fees + Spread setting — and reports each rule's result side by side: *LIVE (your settings)*, *Structural swing*, *Setup window*, *Wide +N ATR*, *Tight 1 ATR*, *Loose 2 ATR*, *Structural + BE 1R*, *Struct + half off 1R*, *Struct + trail 1.5 ATR*, *Struct + 24-bar time stop*. The LIVE row must match the Expectancy row in the statistics table exactly — if it doesn't, something is broken, trust neither number. Rows under 20 trades are greyed out; under about 100 trades, a 0.1R difference between rows is noise. Use this table, not guesswork, to choose Stop Placement and whether to turn on break-even.
 
 **Stop-loss backtest (BTC, Coinbase data).** Sweeping *Minimum Stop Distance* from 0.25 to 6× ATR at fixed dollar risk:
 
@@ -453,7 +460,7 @@ Size = risk dollars ÷ distance from entry to the widened stop. Example: $50 ris
 - On **1h**, the best result was at **2.5× ATR** (28% win rate, 2.96 payoff, +$331 over 71 trades); 1.5–2× and 3.5×+ were worse.
 - On **15m**, no stop width was profitable.
 
-So a tighter stop does not lower losses here. If you trade 1h, try **2.0–2.5** instead of 0.6. Treat it as a starting point, not proof: 71 trades is a thin sample that only just covers fees.
+So a tighter stop does not lower losses here. If you trade 1h, try **2.0–2.5** instead of 0.6. Treat it as a starting point, not proof: 71 trades is a thin sample that only just covers fees. Re-run this comparison yourself with the Stop-Loss Lab table (group 28), which now does it automatically on your own chart.
 
 ## Open interest and order flow — groups 17 and 24
 
