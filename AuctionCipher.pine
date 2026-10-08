@@ -145,7 +145,7 @@ int   profRows   = input.int(250, "Profile Rows", minval=8, maxval=300, group=G_
 float vaPct      = input.float(70.0, "Value Area %", minval=50.0, maxval=95.0, group=G_AUC) / 100.0
 string profRange = input.string("Auction Period", "Profile Range",
      options=["Auction Period", "Rolling Lookback"], group=G_AUC,
-     tooltip="WHAT THE PROFILE MEASURES, and the answer to 'the profile does not move with price'.\n\nAUCTION PERIOD (default) - everything traded since the period started: the UTC day, the RTH session, whichever Period Mode selects. Its top and bottom only change when the PERIOD makes a new high or low, so once the day has set its range the shape stays put while price wanders around inside it. That is not a fault, it is what a period profile is, and it is why the POC and value area are levels worth trading against - they do not move under you.\n\nROLLING LOOKBACK - the last N bars, recomputed every bar. The window slides with price, so the profile follows it and the POC is always the busiest price of the recent past rather than of the session. Closer to the TradingView visible-range profile.\n\nThis switches the DEVELOPING profile only - the histogram, its value area, and the excess/poor read. Prior period value, naked POCs, initial balance and the higher-timeframe value area stay on the period clock either way, because those are levels from a finished auction and a sliding window has no finished auction to take them from.")
+     tooltip="WHAT THE PROFILE MEASURES, and the answer to 'the profile does not move with price'.\n\nAUCTION PERIOD (default) - everything traded since the period started: the UTC day, the RTH session, whichever Period Mode selects. Its top and bottom only change when the PERIOD makes a new high or low, so once the day has set its range the shape stays put while price wanders around inside it. That is not a fault, it is what a period profile is, and it is why the POC and value area are levels worth trading against - they do not move under you.\n\nROLLING LOOKBACK - the last N bars, recomputed every bar. The window slides with price, so the profile follows it and the POC is always the busiest price of the recent past rather than of the session. Closer to the TradingView visible-range profile.\n\nThis switches the DEVELOPING profile drawing only - the histogram and its value area. The excess/poor read stays on the period clock. Prior period value, naked POCs, initial balance and the higher-timeframe value area stay on the period clock either way, because those are levels from a finished auction and a sliding window has no finished auction to take them from.")
 int    profLook  = input.int(300, "Rolling Lookback (bars)", minval=20, maxval=480, group=G_AUC,
      tooltip="How many bars the rolling profile covers. Capped at 480 because Pine will not reach further back than the script's max_bars_back, and asking for more would fail at runtime rather than simply showing less.")
 bool  showHist_in   = input.bool(true,  "Profile Histogram", group=G_AUC)
@@ -352,7 +352,7 @@ int   gpMinLeg  = input.int(15, "Minimum Leg Length (bars)", minval=3, maxval=50
      tooltip="How far apart the swing high and the swing low have to be before they count as a leg. A high and a low three bars apart is noise.\n\nThis input used to be Pivot Strength, feeding ta.pivothigh/ta.pivotlow. That is why the fibs lagged: a pivot cannot exist until this many bars have printed to its RIGHT, so the leg's endpoint was always that far behind the market - on a daily chart, three weeks. The leg is now taken from the window's own extremes, which cannot lag, and this number filters noise instead of creating it.")
 int   gpExtend  = input.int(20, "Extend Right (bars)", minval=0, maxval=200, group=G_FIB)
 bool  fibTgtOn_in  = input.bool(false, "Custom Target Fibs (extension)", group=G_FIB,
-     tooltip="Your original extension set: 1.47, 1.55, 2.56, 2.60, 2.64 above and -0.20, -0.23, -0.29 below. These are projection targets, not entries.")
+     tooltip="Extension set: 1.47, 1.55, 2.56, 2.60, 2.64 above and -0.20, -0.23, -0.29 below. These are projection targets, not entries.")
 color cGp618    = input.color(#ffd54f, "0.618 Color", group=G_FIB)
 color cGp5      = input.color(#ff00ff, "0.5 Color", group=G_FIB)
 color cGp786    = input.color(#00aaff, "0.786 Color", group=G_FIB)
@@ -534,7 +534,7 @@ int   gateTol    = input.int(4, "Event Tolerance (bars)", minval=0, maxval=6, gr
      tooltip="How far the rejection and the momentum cross may sit from the divergence's own pivot and still count as the same swing. 0 demands they land on the exact pivot bar. Same event mode only.")
 string csigSens  = input.string("Strict (all 4)", "Sensitivity",
      options=["Strict (all 4)", "Standard (3 of 4)", "Loose (location + trigger)", "Wave only (trigger)"], group=G_CSIG,
-     tooltip="How many of the four WINDOW-mode gates must pass. Location and trigger are always required - sensitivity only relaxes context and proof.\n\nONLY APPLIES WHEN GATE MODE ABOVE IS \"Window (legacy)\". On \"Same event (strict)\" - the default - every requirement is mandatory by design and this input is read nowhere, so moving it will not change anything you see. The dials that actually loosen Same event are Event Tolerance, Minimum Level Confluence and Minimum Divergence Quality.\n\nIf you are on Window and seeing no signals at all, this is the dial to turn first.")
+     tooltip="How many of the four WINDOW-mode gates must pass. Location and trigger are always required - sensitivity only relaxes context and proof.\n\nONLY APPLIES WHEN GATE MODE ABOVE IS \"Window (legacy)\". On \"Same event (strict)\" every requirement is mandatory by design and this input is read nowhere, so moving it will not change anything you see. The dials that actually loosen Same event are Event Tolerance, Minimum Level Confluence and Minimum Divergence Quality.\n\nIf you are on Window and seeing no signals at all, this is the dial to turn first.")
 bool  csigZoneOnly = input.bool(false, "Cross Must Be In Extreme Zone", group=G_CSIG,
      tooltip="ON is the purist reading, but on ranging days WaveTrend may never reach +/-53 and you will see nothing for days. OFF accepts any cross that clears the other gates.")
 bool  csigNeedBody = input.bool(false, "Rejection Must Close In Direction", group=G_CSIG,
@@ -798,6 +798,9 @@ string rthTzEff      = acGold ? "America/New_York" : rthTz
 // day needs 240 for the same fraction, which is why spot gold matches BTC here.
 int    ibMinEff      = acGoldFut ? 60 : (acGold or acBtc) ? 240 : ibMinutes
 string cmeSymEff     = acGold ? "COMEX:GC1!" : acBtc ? "CME:BTC1!" : cmeSym
+// AUDIT FIX - on any other instrument the default symbol drew BTC futures gaps
+// at BTC prices. Only a matched instrument or a symbol you typed yourself counts.
+bool cmeOk = cmeOn and (acBtc or acGold or cmeSym != "CME:BTC1!")
 // Gold's daily range is roughly a third of BTC's, so the same percentage
 // threshold would hide most of its weekend gaps.
 float  cmeMinEff     = acGold ? 0.2 : acBtc ? 0.5 : cmeMin
@@ -1055,6 +1058,11 @@ bool feedStale  = barstate.isrealtime and feedAgeMs > chartSec * 1000 + 30000
 var array<float> curH = array.new<float>()
 var array<float> curL = array.new<float>()
 var array<float> curV = array.new<float>()
+// AUDIT FIX - one high and one low per CHART bar. The excess/poor rule is a bar
+// count, but curH holds intrabar samples when the lower timeframe is on, so one
+// bar stalling at the top counted as 15 and "POOR" fired on single spikes.
+var array<float> barHs = array.new<float>()
+var array<float> barLs = array.new<float>()
 // The up-volume half of each sample, kept in lockstep with curV so the profile
 // can be drawn as buying against selling. Anything that touches curV must touch
 // this too or the two fall out of alignment and the split silently lies.
@@ -1124,14 +1132,14 @@ if isNewPeriod and aucOn and barClosed
         // period topped inside the extreme band below the period high. ONE is a
         // single spike that was rejected - a tail, EXCESS. THREE or more all
         // stalling at the same price is an auction that ran out of clock - POOR.
-        if fHi > fLo and curH.size() > 0
+        if fHi > fLo and barHs.size() > 0
             float fStep = (fHi - fLo) / excDiv
             int fTopN = 0
             int fBotN = 0
-            for i = 0 to curH.size() - 1
-                if curH.get(i) >= fHi - fStep
+            for i = 0 to barHs.size() - 1
+                if barHs.get(i) >= fHi - fStep
                     fTopN += 1
-                if curL.get(i) <= fLo + fStep
+                if barLs.get(i) <= fLo + fStep
                     fBotN += 1
             priorHighQual := fTopN <= excBars ? "EXCESS" : fTopN >= poorBars ? "POOR" : "Flat"
             priorLowQual  := fBotN <= excBars ? "EXCESS" : fBotN >= poorBars ? "POOR" : "Flat"
@@ -1157,6 +1165,8 @@ if isNewPeriod and aucOn and barClosed
     curL.clear()
     curV.clear()
     curU.clear()
+    barHs.clear()
+    barLs.clear()
     periodStartBar := bar_index
     ibH := high
     ibL := low
@@ -1168,6 +1178,8 @@ if isNewPeriod and aucOn and barClosed
 // 7. ACCUMULATION
 // ============================================================================
 if inPeriod and aucOn and barClosed
+    barHs.push(high)
+    barLs.push(low)
     if ltfOk
         for i = 0 to lH.size() - 1
             float v = lV.get(i)
@@ -1198,6 +1210,9 @@ while curH.size() > 20000
     curL.shift()
     curV.shift()
     curU.shift()
+while barHs.size() > 20000
+    barHs.shift()
+    barLs.shift()
 
 // ============================================================================
 // 8. DEVELOPING PROFILE  (last bar only - the loop is heavy at 250 rows)
@@ -1341,17 +1356,17 @@ f_extremes() =>
     // Same replacement for the developing period the dashboard reads. oTop and
     // oBot are now BAR COUNTS, not percentages - the display label changes with
     // them, because a count rendered with a % sign is a different lie.
-    if devOk and curH.size() > 0
-        float dHi = curH.max()
-        float dLo = curL.min()
+    if devOk and barHs.size() > 0
+        float dHi = barHs.max()
+        float dLo = barLs.min()
         if dHi > dLo
             float dStep = (dHi - dLo) / excDiv
             int dTopN = 0
             int dBotN = 0
-            for i = 0 to curH.size() - 1
-                if curH.get(i) >= dHi - dStep
+            for i = 0 to barHs.size() - 1
+                if barHs.get(i) >= dHi - dStep
                     dTopN += 1
-                if curL.get(i) <= dLo + dStep
+                if barLs.get(i) <= dLo + dStep
                     dBotN += 1
             oTop := dTopN
             oBot := dBotN
@@ -2026,6 +2041,8 @@ f_htfcState() =>
         if hcNew
             // The bar that opens a new HTF period is the bar AFTER the old one
             // closed, so the candle just finished closed at close[1].
+            // AUDIT FIX - the reset below ran on every live tick of the new
+            // period's first bar too; it now runs once, on the close.
             if barClosed and not na(hcs.get(0))
                 hcO.push(hcs.get(0))
                 hcH.push(hcs.get(1))
@@ -2036,12 +2053,12 @@ f_htfcState() =>
                     hcH.shift()
                     hcL.shift()
                     hcC.shift()
-            hcs.set(0, open)
-            hcs.set(1, high)
-            hcs.set(2, low)
-            hcs.set(3, bar_index)
-            hcs.set(4, bar_index)
-            hcs.set(5, bar_index)
+                hcs.set(0, open)
+                hcs.set(1, high)
+                hcs.set(2, low)
+                hcs.set(3, bar_index)
+                hcs.set(4, bar_index)
+                hcs.set(5, bar_index)
         else
             if high > nz(hcs.get(1), high)
                 hcs.set(1, high)
@@ -3169,13 +3186,17 @@ if (balBreakUp or balBreakDn) and barClosed
 float cmeO = na
 float cmeC = na
 int   cmeT = na
-if cmeOn
+if cmeOk
     // Named cmeQ* rather than q*: qC and qT are the label-queue arrays in the
     // level-labelling section, and reusing those names shadowed them. Pine
     // compiles it, but a local silently masking a global of a DIFFERENT type
     // is a bug waiting for whoever edits this block next.
-    [cmeQO, cmeQC, cmeQT] = request.security(cmeSymEff, "D", [open, close, time],
-         ignore_invalid_symbol=true, lookahead=barmerge.lookahead_off)
+    // AUDIT FIX - lookahead_off hands history the new day's open only on the
+    // LAST intraday bar, so historical gaps were drawn a day late while live ones
+    // were not. open, close[1] and time are all known at the session start, so
+    // lookahead_on is the standard non-repainting form. cmeC is now the PRIOR close.
+    [cmeQO, cmeQC, cmeQT] = request.security(cmeSymEff, "D", [open, close[1], time],
+         ignore_invalid_symbol=true, lookahead=barmerge.lookahead_on)
     cmeO := cmeQO
     cmeC := cmeQC
     cmeT := cmeQT
@@ -3194,9 +3215,9 @@ bool cmeNewDay = not na(cmeO) and cmeO != cmeO[1]
 // futures book was shut for a weekend or a holiday, whichever it was.
 float cmeStepH = na(cmeT) ? na : (cmeT - nz(cmeT[1], cmeT)) / 3600000.0
 bool cmeWeekendGap = not na(cmeStepH) and cmeStepH >= 40
-if cmeOn and cmeNewDay and not na(cmeC[1]) and barClosed and (not cmeWeekOnly or cmeWeekendGap)
-    float gT = math.max(cmeO, cmeC[1])
-    float gB = math.min(cmeO, cmeC[1])
+if cmeOk and cmeNewDay and not na(cmeC) and barClosed and (not cmeWeekOnly or cmeWeekendGap)
+    float gT = math.max(cmeO, cmeC)
+    float gB = math.min(cmeO, cmeC)
     if (gT - gB) / close * 100 >= cmeMinEff
         gapTop.push(gT)
         gapBot.push(gB)
@@ -3392,8 +3413,11 @@ float rmDistS   = rmStopS - rkEntry
 // crypto perp moves $1 per $1 of price, but one GC contract moves $100 and one
 // MGC $10. Without this the size shown on gold futures was 100x (10x on micro)
 // what the risk setting allows.
-float rmSizeL   = rmDistL > 0 ? rmRiskUsd / (rmDistL * syminfo.pointvalue) : na
-float rmSizeS   = rmDistS > 0 ? rmRiskUsd / (rmDistS * syminfo.pointvalue) : na
+// AUDIT FIX - fees + spread are part of the loss at the stop, so they are part
+// of the distance the risk is divided by. A stopped trade now loses the set risk.
+float rmFee     = rkEntry * riskFeePct / 100
+float rmSizeL   = rmDistL > 0 ? rmRiskUsd / ((rmDistL + rmFee) * syminfo.pointvalue) : na
+float rmSizeS   = rmDistS > 0 ? rmRiskUsd / ((rmDistS + rmFee) * syminfo.pointvalue) : na
 
 // ============================================================================
 // 19h2. THE TRADE LEDGER
@@ -3876,18 +3900,20 @@ int alignWin = csigWindow + divLbR
 // location test itself follows. The developing value area is excluded for the
 // same reason: it is built on the last bar only, so counting it would make the
 // live bar score higher than any historical bar ever could.
-f_near(float a, float b, float tol) =>
-    not na(a) and not na(b) and math.abs(a - b) <= tol
+// AUDIT FIX - counts every level inside the swept band, not only within tol of
+// the extreme, so a deep sweep that reclaimed several levels scores all of them.
+f_in(float v, float lo, float hi) =>
+    not na(v) and v >= lo and v <= hi
 
-f_confluence(float px) =>
+f_confluence(float lo, float hi) =>
     int n = 0
     // AUDIT FIX - the IB only once LOCKED, balances only once ARMED, naked
     // POCs from the pre-touch snapshot (see the rejection gate above).
     for v in array.from(priorVah, priorVal, priorPoc, priorHi, priorLo, npocUpPre, npocDnPre,
          ibLocked ? ibH : na, ibLocked ? ibL : na, vwapVal, vwapU1, vwapL1, htfVah, htfVal, htfPoc,
-         balActive and balArmed ? balHi : na, balActive and balArmed ? balLo : na, balActive and balArmed ? balPoc : na,
+         balActive and balArmed ? balHi : na, balActive and balArmed ? balLo : na,
          gpConf ? gpF618 : na, gpConf ? gpF786 : na, ofConf ? ofSupPx : na, ofConf ? ofResPx : na)
-        n += f_near(px, v, locTol) ? 1 : 0
+        n += f_in(v, lo, hi) ? 1 : 0
     n
 
 // AUDIT FIX - the invariant documented in f_confluence ("the level that
@@ -3896,8 +3922,10 @@ f_confluence(float px) =>
 // count only looks within tol of the low - so a deep sweep that reclaimed a
 // level, the strongest kind of rejection, scored 0 and closed the location
 // gate on the very setup that opened it. A real rejection now counts at least 1.
-int confLow  = math.max(f_confluence(low),  rejLowNow  ? 1 : 0)
-int confHigh = math.max(f_confluence(high), rejHighNow ? 1 : 0)
+// The band [low - tol, close] contains every level a rejection can fire on, so
+// the floor of 1 is now built in. balPoc is left out: it exists on the last bar only.
+int confLow  = f_confluence(low - locTol, math.max(close, low + locTol))
+int confHigh = f_confluence(math.min(close, high - locTol), high + locTol)
 
 // scored at the REJECTION bar, not now - the cluster that mattered is the one
 // price actually wicked into, which may be several bars back
@@ -4465,7 +4493,7 @@ f_labStep() =>
                 // stop first, then target - the order inside one candle is unknown
                 bool hitS = d * ((d == 1 ? low : high) - s) <= 0
                 bool hitT = not hitS and d * ((d == 1 ? high : low) - t.tg) >= 0
-                if hitS or hitT or cut or v == 9 and bar_index - t.t0 >= 24 and d * (close - t.en) / r < 0.5
+                if hitS or hitT or cut or v == 9 and bar_index - t.t0 == 24 and d * (close - t.en) / r < 0.5
                     // a stop gapped through fills at the open
                     float px  = hitS ? (d == 1 ? math.min(open, s) : math.max(open, s)) : hitT ? t.tg : close
                     float res = (v == 7 and hitT and pR > 1 ? 0.5 + 0.5 * pR : t.bank.get(v) + f * d * (px - t.en) / r) - t.en * riskFeePct / 100 / r
@@ -4786,10 +4814,10 @@ f_runWatch() =>
             wSd.remove(i)
     wLvl.size()
 
-if isNewPeriod and priorHighQual == "POOR" and not na(priorHiLvl) and priorHiLvl > close
+if isNewPeriod and barClosed and priorHighQual == "POOR" and not na(priorHiLvl) and priorHiLvl > close
     f_watch(priorHiLvl, 1)
     f_watch(2 * close - priorHiLvl, -3)
-if isNewPeriod and priorLowQual == "POOR" and not na(priorLoLvl) and priorLoLvl < close
+if isNewPeriod and barClosed and priorLowQual == "POOR" and not na(priorLoLvl) and priorLoLvl < close
     f_watch(priorLoLvl, -1)
     f_watch(2 * close - priorLoLvl, 3)
 if wLvl.size() > 0
@@ -4920,7 +4948,7 @@ f_drawStats() =>
     // tell which file was loaded was to notice that a count had not moved.
     // A measurement instrument that cannot state its own version makes every
     // number it prints ambiguous the moment the version changes.
-    table.cell(stat, 1, 0, "r18  " + str.tostring(statHorizon) + "b" + (riskFeePct > 0 ? "  fee " + str.tostring(riskFeePct, "0.00") + "%" : "") + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
+    table.cell(stat, 1, 0, "v3.1  " + str.tostring(statHorizon) + "b" + (riskFeePct > 0 ? "  fee " + str.tostring(riskFeePct, "0.00") + "%" : "") + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
          text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
 
     int sigTot = sigWin + sigLoss
