@@ -1,6 +1,6 @@
 //@version=6
 // ============================================================================
-// AUCTION CIPHER  v3.2  (stop-loss audit + bug-fix pass)
+// AUCTION CIPHER  v3.2b  (stop-loss audit + bug-fix pass + confluence band)
 // ----------------------------------------------------------------------------
 // ONE indicator. Two layers.
 //
@@ -55,6 +55,8 @@
 //   Sizing / lab   : position size includes the fee; Lab time stop is a single
 //                    checkpoint at bar 24.
 //   Confluence     : counts every level in the swept wick band, not only near the tip.
+//   v3.2b          : the minimum confluence of 1 on a real rejection is restored,
+//                    and the stats panel stamp reads v3.2b so builds can be told apart.
 //   Smaller        : forming-divergence age limit, structure labels after a BOS,
 //                    audit panel wording, three tooltips that described the wrong thing.
 // ----------------------------------------------------------------------------
@@ -3956,9 +3958,13 @@ f_confluence(float lo, float hi) =>
 // level, the strongest kind of rejection, scored 0 and closed the location
 // gate on the very setup that opened it. A real rejection now counts at least 1.
 // v3.2 FIX - the band [low - tol, close] holds every level a rejection can fire
-// on, so the floor of 1 above is now built in rather than patched on.
-int confLow  = f_confluence(low - locTol, math.max(close, low + locTol))
-int confHigh = f_confluence(math.min(close, high - locTol), high + locTol)
+// on, so most rejections now score at least 1 without help.
+// v3.2b FIX - but not all of them. With "Count Absorption as Signal Location" on
+// and "Count Absorption in Confluence" off, a rejection at an absorption level
+// is not in the confluence list, scored 0 and failed the gate it had just
+// opened. The floor of 1 is back, so a real rejection always counts.
+int confLow  = math.max(f_confluence(low - locTol, math.max(close, low + locTol)), rejLowNow ? 1 : 0)
+int confHigh = math.max(f_confluence(math.min(close, high - locTol), high + locTol), rejHighNow ? 1 : 0)
 
 // scored at the REJECTION bar, not now - the cluster that mattered is the one
 // price actually wicked into, which may be several bars back
@@ -4983,7 +4989,7 @@ f_drawStats() =>
     // tell which file was loaded was to notice that a count had not moved.
     // A measurement instrument that cannot state its own version makes every
     // number it prints ambiguous the moment the version changes.
-    table.cell(stat, 1, 0, "v3.2  " + str.tostring(statHorizon) + "b" + (riskFeePct > 0 ? "  fee " + str.tostring(riskFeePct, "0.00") + "%" : "") + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
+    table.cell(stat, 1, 0, "v3.2b  " + str.tostring(statHorizon) + "b" + (riskFeePct > 0 ? "  fee " + str.tostring(riskFeePct, "0.00") + "%" : "") + (sigSkip > 0 ? "  " + str.tostring(sigSkip) + " unfilled" : ""),
          text_color=color.new(cTxt, 50), text_size=size.tiny, text_halign=text.align_right)
 
     int sigTot = sigWin + sigLoss
